@@ -2,6 +2,7 @@ import numpy as np
 from scipy.special import eval_legendre
 from scipy.linalg import cholesky, svd
 from scipy.interpolate import interp2d
+from scipy.interpolate import griddata
 from scipy.ndimage import rotate, shift, zoom
 
 def rebin(array, new_shape, method='average'):
@@ -113,6 +114,9 @@ def make_xy(sampling, ratio, is_polar=False, is_double=False, is_vector=False,
         if is_polar:
             r, theta = xy_to_polar(x, y)
             return r, theta
+
+    if is_vector:
+        y = x
 
     return x, y
 
@@ -407,7 +411,7 @@ import matplotlib.pyplot as plt
 def extrapolate_edge_pixel_mat_define(mask, doExt2Pix=False):
     # defines the indices to be used to extrapolate the phase
     # out of the edge of the pupil before doing the interpolation
-    # from Guido Agapito ILD function
+    # from Guido Agapito IDL function
     smask = mask.shape
     
     float_mask = mask.astype(float)
@@ -568,7 +572,8 @@ def shiftzoom_from_source_dm_params(source_pol_coo, source_height, dm_height, pi
     
     return shift, zoom
 
-def rotshiftzoom_array(input_array, translation=(0.0, 0.0), rotation=0.0, magnification=(1.0, 1.0), output_size=None):
+def rotshiftzoom_array(input_array, dm_translation=(0.0, 0.0),  dm_rotation=0.0,   dm_magnification=(1.0, 1.0),
+                                    wfs_translation=(0.0, 0.0), wfs_rotation=0.0, wfs_magnification=(1.0, 1.0), output_size=None):
     # This function applies magnification, rotation, shift and resize of a 2D or 3D numpy array
     
     if np.isnan(input_array).any():
@@ -576,58 +581,81 @@ def rotshiftzoom_array(input_array, translation=(0.0, 0.0), rotation=0.0, magnif
     
     # Check if phase is 2D or 3D
     if len(input_array.shape) == 3:
-        translation = translation + (0,)
-        magnification = magnification + (1,)
-        
-    # magnification
-    if all(element == 1 for element in magnification):
-        array_mag = input_array
+        dm_translation_ = dm_translation + (0,)
+        dm_magnification_ = dm_magnification + (1,)
+        wfs_translation_ = wfs_translation + (0,)
+        wfs_magnification_ = wfs_magnification + (1,)
     else:
-        array_mag = zoom(input_array, magnification)
-    
+        dm_translation_ = dm_translation
+        dm_magnification_ = dm_magnification
+        wfs_translation_ = wfs_translation
+        wfs_magnification_ = wfs_magnification
+        
     # resize
     if output_size == None:
-        output_size = array_mag.shape
-    
-    if (array_mag.shape[0] < output_size[0]) | (array_mag.shape[1] < output_size[1]):
-        # large output size
-        if len(input_array.shape) == 3:
-            array_mag_resized = np.zeros((output_size[0],output_size[1],array_mag.shape[2]))
-            array_mag_resized[int(0.5*(output_size[0]-array_mag.shape[0])):int(0.5*(output_size[0]+array_mag.shape[0])), \
-                              int(0.5*(output_size[1]-array_mag.shape[1])):int(0.5*(output_size[1]+array_mag.shape[1])),:] = array_mag
-        else:
-            array_mag_resized = np.zeros((output_size[0],output_size[1]))
-            array_mag_resized[int(0.5*(output_size[0]-array_mag.shape[0])):int(0.5*(output_size[0]+array_mag.shape[0])), \
-                              int(0.5*(output_size[1]-array_mag.shape[1])):int(0.5*(output_size[1]+array_mag.shape[1]))] = array_mag
+        output_size = input_array.shape
+
+    # (1) DM magnification
+    if all(element == 1 for element in dm_magnification_):
+        array_mag = input_array
     else:
-        array_mag_resized = array_mag
+        array_mag = zoom(input_array, dm_magnification_)
+        
     
-    # rotation
-    if rotation == 0:
-        array_rot = array_mag_resized
+    # (2) DM rotation
+    if dm_rotation == 0:
+        array_rot = array_mag
     else:
-        array_rot = rotate(array_mag_resized, rotation, axes=(1, 0), reshape=False)
-    # translation
-    if all(element == 1 for element in translation):
+        array_rot = rotate(array_mag, dm_rotation, axes=(1, 0), reshape=False)
+
+    # (3) DM translation
+    if all(element == 0 for element in dm_translation_):
         array_shi = array_rot
     else:
-        array_shi = shift(array_rot, translation)
+        array_shi = shift(array_rot, dm_translation_)
     
-    if (array_shi.shape[0] > output_size[0]) | (array_shi.shape[1] > output_size[1]):
+    # (4) WFS rotation
+    if wfs_rotation == 0:
+        array_rot = array_shi
+    else:
+        array_rot = rotate(array_shi, wfs_rotation, axes=(1, 0), reshape=False)
+
+    # (5) WFS translation
+    if all(element == 0 for element in wfs_translation_):
+        array_shi = array_rot
+    else:
+        array_shi = shift(array_rot, wfs_translation_)
+
+    # (6) WFS magnification
+    if all(element == 1 for element in wfs_magnification_):
+        output = array_shi
+    else:
+        array_mag = zoom(array_shi, wfs_magnification_)
+
+    if (array_mag.shape[0] > output_size[0]) | (array_mag.shape[1] > output_size[1]):
         # smaller output size
         if len(input_array.shape) == 3:
-            output = array_shi[int(0.5*(array_shi.shape[0]-output_size[0])):int(0.5*(array_shi.shape[0]+output_size[0])), \
-                               int(0.5*(array_shi.shape[1]-output_size[1])):int(0.5*(array_shi.shape[1]+output_size[1])),:]
+            output = array_mag[int(0.5*(array_mag.shape[0]-output_size[0])):int(0.5*(array_mag.shape[0]+output_size[0])), \
+                               int(0.5*(array_mag.shape[1]-output_size[1])):int(0.5*(array_mag.shape[1]+output_size[1])),:]
         else:
-            output = array_shi[int(0.5*(array_shi.shape[0]-output_size[0])):int(0.5*(array_shi.shape[0]+output_size[0])), \
-                               int(0.5*(array_shi.shape[1]-output_size[1])):int(0.5*(array_shi.shape[1]+output_size[1]))]
+            output = array_mag[int(0.5*(array_mag.shape[0]-output_size[0])):int(0.5*(array_mag.shape[0]+output_size[0])), \
+                               int(0.5*(array_mag.shape[1]-output_size[1])):int(0.5*(array_mag.shape[1]+output_size[1]))]
+    elif (array_mag.shape[0] < output_size[0]) | (array_mag.shape[1] < output_size[1]):
+        # bigger output size
+        if len(input_array.shape) == 3:
+            output = np.zeros(output_size+(input_array.shape[2],))
+            output[int(0.5*(output_size[0]-array_mag.shape[0])):int(0.5*(output_size[0]+array_mag.shape[0])), \
+                   int(0.5*(output_size[1]-array_mag.shape[1])):int(0.5*(output_size[1]+array_mag.shape[1])),:] = array_mag
+        else:
+            output[int(0.5*(output_size[0]-array_mag.shape[0])):int(0.5*(output_size[0]+array_mag.shape[0])), \
+                   int(0.5*(output_size[1]-array_mag.shape[1])):int(0.5*(output_size[1]+array_mag.shape[1]))] = array_mag
     else:
-        # same size
-        output = array_shi
-            
+        output = array_mag
+
     return output
 
-def interaction_matrix(pup_diam_m,pup_mask,dm_array,dm_mask,dm_height,dm_rotation,wfs_nsubaps,gs_pol_coo,gs_height,idx_valid_sa=None,verbose=False,display=False):
+def interaction_matrix(pup_diam_m,pup_mask,dm_array,dm_mask,dm_height,dm_rotation,wfs_nsubaps,wfs_rotation,wfs_translation,wfs_magnification,
+                       gs_pol_coo,gs_height,idx_valid_sa=None,verbose=False,display=False):
     """
     Computes a single interaction matrix.
     From Guido Agapito.
@@ -640,6 +668,9 @@ def interaction_matrix(pup_diam_m,pup_mask,dm_array,dm_mask,dm_height,dm_rotatio
     - dm_height: float, conjugation altitude of the Deformable Mirror
     - dm_rotation: float, rotation in deg of the Deformable Mirror with respect to the pupil
     - wfs_nsubaps: int, number of sub-aperture of the wavefront sensor
+    - wfs_rotation
+    - wfs_translation
+    - wfs_magnification
     - gs_pol_coo: tuple, polar coordinates of the gudie star radius in arcsec and angle in deg
     - gs_height: float, altitude of the guide star
     - idx_valid_sa: numpy 1D array, indices of the valid sub-apertures
@@ -658,38 +689,70 @@ def interaction_matrix(pup_diam_m,pup_mask,dm_array,dm_mask,dm_height,dm_rotatio
 
     pixel_pitch = pup_diam_m / pup_diam_pix
 
-    shift, zoom = shiftzoom_from_source_dm_params(gs_pol_coo, gs_height, dm_height, pixel_pitch)
-    angle = dm_rotation
+    dm_translation, dm_magnification = shiftzoom_from_source_dm_params(gs_pol_coo, gs_height, dm_height, pixel_pitch)
     output_size = (pup_diam_pix,pup_diam_pix)
 
     #Extraction of patch seen by GS and application of DM rotation
-    trans_dm_array = rotshiftzoom_array(dm_array, translation=shift, rotation=angle, magnification=zoom, output_size=output_size)
+    trans_dm_array = rotshiftzoom_array(dm_array, dm_translation=dm_translation,   dm_rotation=dm_rotation,   dm_magnification=dm_magnification,
+                                                  wfs_translation=wfs_translation, wfs_rotation=wfs_rotation, wfs_magnification=wfs_magnification,
+                                                  output_size=output_size)
+    trans_dm_mask  = rotshiftzoom_array(dm_mask,  dm_translation=dm_translation,   dm_rotation=dm_rotation,   dm_magnification=dm_magnification,
+                                                  wfs_translation=(0,0), wfs_rotation=0, wfs_magnification=(1,1),
+                                                  output_size=output_size)
+    trans_dm_mask[trans_dm_mask<0.5] = 0
 
     if verbose:
         print('Rotation, shift and zoom done.')
 
-    # TODO add other trasformations:
-    # - rotation of the pupil the WFS lenslet array (above is rotation of the DM)
-    # - magnification of the pupil on the WFS lenslet array (above is magnification between DM and beam patch)
-    # shifts can be accounted for in the previous transformation
-
     # apply mask
-    trans_dm_array = apply_mask(trans_dm_array,pup_mask)
+    trans_dm_array = apply_mask(trans_dm_array,trans_dm_mask)
 
     if verbose:
         print('Mask applied.')
 
     # Derivative od DM modes shape
-    der_dx, der_dy = compute_derivatives_with_extrapolation(trans_dm_array,mask=pup_mask)
+    der_dx, der_dy = compute_derivatives_with_extrapolation(trans_dm_array,mask=trans_dm_mask)
 
     if verbose:
         print('Derivatives done.')
 
-    # estimate an array proportional to flux per sub-aperture from the mask
+    # apply transformation to the mask
+    if wfs_rotation == -1:
+        pup_mask_rot = pup_mask
+    else:
+        pup_mask_rot = rotate(pup_mask, wfs_rotation, axes=(0, 0), reshape=False)
+   
+    if all(element == 0 for element in wfs_magnification):
+        pup_mask_mag2 = pup_mask_rot
+    else:
+        pup_mask_mag = zoom(pup_mask_rot, np.array(wfs_magnification))
+        if (pup_mask_mag.shape[0] > pup_mask.shape[0]) | (pup_mask_mag.shape[1] > pup_mask.shape[1]): # smaller output size
+            pup_mask_mag2 = pup_mask_mag[int(0.5*(pup_mask_mag.shape[0]-pup_mask.shape[0])):int(0.5*(pup_mask_mag.shape[0]+pup_mask.shape[0])), \
+                                    int(0.5*(pup_mask_mag.shape[1]-pup_mask.shape[1])):int(0.5*(pup_mask_mag.shape[1]+pup_mask.shape[1]))]
+        elif (pup_mask_mag.shape[0] < pup_mask.shape[0]) | (pup_mask_mag.shape[1] < pup_mask.shape[1]): # bigger output size
+            pup_mask_mag2 = np.zeros(pup_mask.shape)
+            pup_mask_mag2[int(0.5*(pup_mask.shape[0]-pup_mask_mag.shape[0])):int(0.5*(pup_mask.shape[0]+pup_mask_mag.shape[0])), \
+                     int(0.5*(pup_mask.shape[1]-pup_mask_mag.shape[1])):int(0.5*(pup_mask.shape[1]+pup_mask_mag.shape[1]))] = pup_mask_mag
+        else: # same size
+            pup_mask_mag2 = pup_mask_mag
+
+    if all(element == -1 for element in wfs_translation):
+        pup_mask = pup_mask_mag2
+    else:
+        pup_mask = shift(pup_mask_mag2, wfs_translation)
+
+    # estimate an array proportional to flux per sub-aperture from the mask   
+    if np.isnan(pup_mask_mag).any():
+        np.nan_to_num(pup_mask_mag, copy=False, nan=0.0, posinf=None, neginf=None)
+
     pup_mask_sa = rebin(pup_mask, (wfs_nsubaps,wfs_nsubaps), method='sum')
     pup_mask_sa = pup_mask_sa * 1/np.max(pup_mask_sa)
 
     # rebin the array to get the correct signal size
+    if np.isnan(der_dx).any():
+        np.nan_to_num(der_dx, copy=False, nan=0.0, posinf=None, neginf=None)
+    if np.isnan(der_dy).any():
+        np.nan_to_num(der_dy, copy=False, nan=0.0, posinf=None, neginf=None)
     WFS_signal_x = rebin(der_dx, (wfs_nsubaps,wfs_nsubaps), method='average')
     WFS_signal_y = rebin(der_dy, (wfs_nsubaps,wfs_nsubaps), method='average')
 
@@ -699,6 +762,7 @@ def interaction_matrix(pup_diam_m,pup_mask,dm_array,dm_mask,dm_height,dm_rotatio
     # normalize by pup_mask_sa to get the correct value at the edge of the pupil
     # because at the edge the average of the rebin is done with pixel outside the
     # pupil that have 0 values
+    pup_mask_sa[pup_mask_sa<0.5] = 0
     WFS_signal_x = apply_mask(WFS_signal_x,pup_mask_sa,norm=True)
     WFS_signal_y = apply_mask(WFS_signal_y,pup_mask_sa,norm=True)
 
