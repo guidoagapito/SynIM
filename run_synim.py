@@ -3,6 +3,8 @@ import matplotlib as mpl
 import matplotlib.pyplot as plt
 import synim
 
+plt.ion()  # Enable interactive mode
+
 # pupil parameters
 pup_m = 38.5
 pup_npoints = 480
@@ -19,6 +21,9 @@ dm_rotation = 22.5
 # WFS parameters
 # number of subapertures of the WFS (sub-multiple of pup_npoints)
 nsubaps = 20#68
+wfs_rotation = 0
+wfs_translation = (0,0)
+wfs_magnification = (1,1)
 
 # LGS parameters
 LGS_pol_coo = [45,30] #arcsec, deg
@@ -55,14 +60,19 @@ im2 = axs[0].imshow(dm_array[:,:,0])
 im2 = axs[1].imshow(dm_array[:,:,4])
 axs[0].set_title('DM shapes (idx 0 and 4)')
 fig.colorbar(im2, ax=axs.ravel().tolist(),fraction=0.02)
-plt.show(block=False)
+plt.show()
 
-intmat = synim.interaction_matrix(pup_m,pup_mask,dm_array,dm_mask,dm_height,dm_rotation,nsubaps,LGS_pol_coo,LGS_height,idx_valid_sa=idx_valid_sa,verbose=True,display=True)
+intmat = synim.interaction_matrix(pup_m,pup_mask,dm_array,
+                                  dm_mask,dm_height,dm_rotation,
+                                  nsubaps,wfs_rotation,wfs_translation,
+                                  wfs_magnification,LGS_pol_coo,LGS_height,
+                                  idx_valid_sa=idx_valid_sa,verbose=True,display=True)
 
 fig, _ = plt.subplots()
 plt.imshow(intmat)
 plt.title('Interaction Matrix')
 plt.colorbar()
-plt.show(block=False)
+plt.show()
 
-
+plt.ioff()
+plt.show()  # Show the plots
