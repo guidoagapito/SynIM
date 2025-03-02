@@ -448,7 +448,7 @@ def shiftzoom_from_source_dm_params(source_pol_coo, source_height, dm_height, pi
     
     return shift, zoom
 
-def rotshiftzoom_array(input_array, dm_translation=(0.0, 0.0),  dm_rotation=0.0,   dm_magnification=(1.0, 1.0),
+def rotshiftzoom_array_noaffine(input_array, dm_translation=(0.0, 0.0),  dm_rotation=0.0,   dm_magnification=(1.0, 1.0),
                                     wfs_translation=(0.0, 0.0), wfs_rotation=0.0, wfs_magnification=(1.0, 1.0), output_size=None):
     # This function applies magnification, rotation, shift and resize of a 2D or 3D numpy array
     
@@ -527,6 +527,80 @@ def rotshiftzoom_array(input_array, dm_translation=(0.0, 0.0),  dm_rotation=0.0,
     else:
         output = array_mag
 
+    return output
+
+def rotshiftzoom_array(input_array, dm_translation=(0.0, 0.0), dm_rotation=0.0, dm_magnification=(1.0, 1.0),
+                              wfs_translation=(0.0, 0.0), wfs_rotation=0.0, wfs_magnification=(1.0, 1.0), output_size=None):
+    """
+    This function applies magnification, rotation, shift and resize of a 2D or 3D numpy array using affine transformation.
+    Rotation is applied in the same direction as the first function.
+    """
+    import numpy as np
+    from scipy.ndimage import affine_transform
+    
+    if np.isnan(input_array).any():
+        input_array = np.nan_to_num(input_array, copy=True, nan=0.0, posinf=None, neginf=None)
+    
+    # Check if array is 2D or 3D
+    is_3d = len(input_array.shape) == 3
+    
+    # resize
+    if output_size is None:
+        output_size = input_array.shape[:2]  # Only take the first two dimensions
+    
+    # Center of the input array
+    center = np.array(input_array.shape[:2]) / 2.0
+    
+    # Convert rotations to radians
+    # Note: Inverting the sign of rotation to match the first function's direction
+    dm_rot_rad = np.deg2rad(-dm_rotation)  # Negative sign to reverse direction
+    wfs_rot_rad = np.deg2rad(-wfs_rotation)  # Negative sign to reverse direction
+    
+    # Initialize the output array
+    if is_3d:
+        output = np.zeros((output_size[0], output_size[1], input_array.shape[2]), dtype=input_array.dtype)
+    else:
+        output = np.zeros(output_size, dtype=input_array.dtype)
+    
+    # Create the transformation matrices
+    # For DM transformation
+    dm_scale_matrix = np.array([[1.0/dm_magnification[0], 0], [0, 1.0/dm_magnification[1]]])
+    dm_rot_matrix = np.array([[np.cos(dm_rot_rad), -np.sin(dm_rot_rad)], [np.sin(dm_rot_rad), np.cos(dm_rot_rad)]])
+    dm_matrix = np.dot(dm_rot_matrix, dm_scale_matrix)
+    
+    # For WFS transformation
+    wfs_scale_matrix = np.array([[1.0/wfs_magnification[0], 0], [0, 1.0/wfs_magnification[1]]])
+    wfs_rot_matrix = np.array([[np.cos(wfs_rot_rad), -np.sin(wfs_rot_rad)], [np.sin(wfs_rot_rad), np.cos(wfs_rot_rad)]])
+    wfs_matrix = np.dot(wfs_rot_matrix, wfs_scale_matrix)
+    
+    # Combine transformations (first DM, then WFS)
+    combined_matrix = np.dot(wfs_matrix, dm_matrix)
+    
+    # Calculate offset
+    output_center = np.array(output_size) / 2.0
+    offset = center - np.dot(combined_matrix, output_center) - np.dot(dm_matrix, dm_translation) - wfs_translation
+    
+    # Apply transformation
+    if is_3d:
+        # For 3D arrays, apply transformation to each slice
+        for i in range(input_array.shape[2]):
+            output[:, :, i] = affine_transform(
+                input_array[:, :, i],
+                combined_matrix,
+                offset=offset,
+                output_shape=output_size,
+                order=1
+            )
+    else:
+        # For 2D arrays
+        output = affine_transform(
+            input_array,
+            combined_matrix,
+            offset=offset,
+            output_shape=output_size,
+            order=1
+        )
+    
     return output
 
 def interaction_matrix(pup_diam_m,pup_mask,dm_array,dm_mask,dm_height,dm_rotation,wfs_nsubaps,wfs_rotation,wfs_translation,wfs_magnification,
