@@ -1,11 +1,9 @@
 import numpy as np
 import time
-from numpy.testing import assert_array_equal, assert_almost_equal
 import matplotlib.pyplot as plt
 
 # Import the functions to test
-from synim import extrapolate_edge_pixel, rotshiftzoom_array, rotshiftzoom_array_noaffine, compute_derivatives_with_extrapolation, zern2phi
-
+from synim import rotshiftzoom_array, rotshiftzoom_array_noaffine, zern2phi
 
 def sample_mask(mask_size):
     """Generate a test mask with a central aperture"""
@@ -18,7 +16,7 @@ def sample_phase(mask_size,n_zernikes=16):
     phase_array = zern2phi(mask_size, n_zernikes, mask=sample_mask(mask_size), no_round_mask=False, xsign=1, ysign=1, rot_angle=0, verbose=False)
     return phase_array
 
-def test_rotshiftzoom_array(mask_size=256,n_zernikes=16):
+def compare_rotshiftzoom(mask_size=256,n_zernikes=16):
     """Test the rotshiftzoom_array function"""
     input_array = sample_phase(mask_size,n_zernikes)
     dm_translation = (3, 0)
@@ -71,4 +69,4 @@ def test_rotshiftzoom_array(mask_size=256,n_zernikes=16):
 #run test_rotshiftzoom_array()
 mask_size = 256
 n_zernikes = 64
-test_rotshiftzoom_array(mask_size,n_zernikes)
+compare_rotshiftzoom(mask_size,n_zernikes)
