@@ -3,7 +3,7 @@ from scipy.special import eval_legendre
 from scipy.linalg import cholesky, svd
 from scipy.interpolate import interp2d
 from scipy.interpolate import griddata
-from scipy.ndimage import rotate, shift, zoom
+from scipy.ndimage import rotate, shift, zoom, convolve
 import matplotlib.pyplot as plt
 from scipy.ndimage import affine_transform
 
@@ -374,7 +374,8 @@ def compute_derivatives_with_extrapolation(data,mask=None):
     # if mask is present does an extrapolation to avoid issue at the edges
 
     if mask is not None:
-        data = extrapolate_edge_pixel(data, mask)
+        for i in range(data.shape[2]):
+            data[:,:,i] = extrapolate_phase(mask, data[:,:,i], iterations=2)
         print('Using extrapolation to compute derivatives.')
           
     # Compute x derivative
@@ -405,35 +406,62 @@ def integrate_derivatives(dx, dy):
 
     return integrated_x, integrated_y
 
-def extrapolate_edge_pixel(data, mask):
+def extrapolate_phase(mask, phase, iterations=2):
     """
-    Extrapolate the edge pixels of a 2D array using linear interpolation.
-
+    Linear phase extrapolation outside the mask using SciPy filters
+    
     Parameters:
-    - data: numpy 2D array, input data
-    - mask: numpy 2D array, mask indicating valid data points (1 for valid, 0 for invalid)
-
+    mask (numpy.ndarray): Binary mask (1 in, 0 out)
+    phase (numpy.ndarray): Phase array to be extrapolated
+    iterations (int): Number of iterations for the extrapolation
+    
     Returns:
-    - extrapolated_data: numpy 2D array, data with extrapolated edge pixels
+    numpy.ndarray: Fase estrapolata
     """
-    # Get the coordinates of valid and invalid points
-    valid_points = np.argwhere(mask)
-    invalid_points = np.argwhere(mask == 0)
-
-    # Get the values at the valid points
-    valid_values = data[mask == 1]
-
-    # Perform linear interpolation
-    extrapolated_values = griddata(valid_points, valid_values, invalid_points, method='linear')
-
-    # Create a copy of the data to avoid modifying the original
-    extrapolated_data = data.copy()
-
-    # Fill in the extrapolated values
-    for (i, j), value in zip(invalid_points, extrapolated_values):
-        extrapolated_data[i, j] = value
-
-    return extrapolated_data
+    # Make a copy of the phase
+    result = phase.copy()
+    
+    # Make a edge mask
+    kernel = np.array([[0, 1, 0], 
+                       [1, 0, 1], 
+                       [0, 1, 0]])
+    
+    # Make a copy of the mask because we will expand it
+    current_mask = mask.copy()
+    
+    for i in range(iterations):
+        # Find the pixels at the edge (outside the mask but adjacent to valid pixels)
+        edge = convolve(current_mask, kernel, mode='constant') * (1 - current_mask)
+        edge = edge > 0
+        
+        if not np.any(edge):
+            break
+            
+        # For each edge pixel, calculate the extrapolated value
+        # using a weighted average of the valid neighbors
+        for axis in range(2):  # Extrapolate separately in x and y directions
+            # Create a kernel to take the neighbors in this direction
+            dir_kernel = np.zeros((3, 3))
+            if axis == 0:  # X direction
+                dir_kernel[1, 0] = 1
+                dir_kernel[1, 2] = 1
+            else:  # Y direction
+                dir_kernel[0, 1] = 1
+                dir_kernel[2, 1] = 1
+            
+            # Find the values of the valid neighbors in the direction
+            neighbor_vals = convolve(result * current_mask, dir_kernel, mode='constant')
+            neighbor_count = convolve(current_mask, dir_kernel, mode='constant')
+            
+            # Where we have valid neighbors, update the edge pixels
+            valid_neighbors = (neighbor_count > 0) & edge
+            if np.any(valid_neighbors):
+                result[valid_neighbors] = neighbor_vals[valid_neighbors] / neighbor_count[valid_neighbors]
+        
+        # Expand the mask to include the edge pixels
+        current_mask = current_mask | edge
+    
+    return result
 
 def shiftzoom_from_source_dm_params(source_pol_coo, source_height, dm_height, pixel_pitch):
     arcsec2rad = np.pi/180/3600
@@ -535,9 +563,7 @@ def rotshiftzoom_array(input_array, dm_translation=(0.0, 0.0), dm_rotation=0.0, 
     This function applies magnification, rotation, shift and resize of a 2D or 3D numpy array using affine transformation.
     Rotation is applied in the same direction as the first function.
     """
-    import numpy as np
-    from scipy.ndimage import affine_transform
-    
+   
     if np.isnan(input_array).any():
         input_array = np.nan_to_num(input_array, copy=True, nan=0.0, posinf=None, neginf=None)
     
