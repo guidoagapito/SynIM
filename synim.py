@@ -476,7 +476,6 @@ def rotshiftzoom_array(input_array, dm_translation=(0.0, 0.0),  dm_rotation=0.0,
         array_mag = input_array
     else:
         array_mag = zoom(input_array, dm_magnification_)
-        
     
     # (2) DM rotation
     if dm_rotation == 0:
@@ -489,7 +488,7 @@ def rotshiftzoom_array(input_array, dm_translation=(0.0, 0.0),  dm_rotation=0.0,
         array_shi = array_rot
     else:
         array_shi = shift(array_rot, dm_translation_)
-    
+
     # (4) WFS rotation
     if wfs_rotation == 0:
         array_rot = array_shi
@@ -504,7 +503,7 @@ def rotshiftzoom_array(input_array, dm_translation=(0.0, 0.0),  dm_rotation=0.0,
 
     # (6) WFS magnification
     if all(element == 1 for element in wfs_magnification_):
-        output = array_shi
+        array_mag = array_shi
     else:
         array_mag = zoom(array_shi, wfs_magnification_)
 
