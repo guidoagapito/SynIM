@@ -415,8 +415,7 @@ def extrapolate_edge_indices(mask):
     
     Parameters:
     mask (numpy.ndarray): Binary pupil mask (1 inside, 0 outside)
-    use_cache (bool): Whether to use cached results
-    
+
     Returns:
     tuple: (edge_pixels, reference_points)
     """
