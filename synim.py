@@ -3,7 +3,9 @@ from scipy.special import eval_legendre
 from scipy.linalg import cholesky, svd
 from scipy.interpolate import interp2d
 from scipy.interpolate import griddata
-from scipy.ndimage import rotate, shift, zoom
+from scipy.ndimage import rotate, shift, zoom, convolve
+import matplotlib.pyplot as plt
+from scipy.ndimage import affine_transform
 
 def rebin(array, new_shape, method='average'):
     """
@@ -372,17 +374,15 @@ def compute_derivatives_with_extrapolation(data,mask=None):
     # if mask is present does an extrapolation to avoid issue at the edges
 
     if mask is not None:
-        sum_1pix_extra, sum_2pix_extra = extrapolate_edge_pixel_mat_define(mask, doExt2Pix=True)
-        new_data = extrapolate_edge_pixel(data, sum_1pix_extra, sum_1pix_extra)
+        for i in range(data.shape[2]):
+            data[:,:,i] = extrapolate_phase(mask, data[:,:,i], iterations=2)
         print('Using extrapolation to compute derivatives.')
-    else:
-        new_data = data
           
     # Compute x derivative
-    dx = np.gradient(new_data, axis=(1), edge_order=1)
+    dx = np.gradient(data, axis=(1), edge_order=1)
     
     # Compute y derivative
-    dy = np.gradient(new_data, axis=(0), edge_order=1)
+    dy = np.gradient(data, axis=(0), edge_order=1)
     
     if mask is not None:
         idx = np.ravel(np.array(np.where(mask.flatten() == 0)))
@@ -406,158 +406,62 @@ def integrate_derivatives(dx, dy):
 
     return integrated_x, integrated_y
 
-import matplotlib.pyplot as plt
-
-def extrapolate_edge_pixel_mat_define(mask, doExt2Pix=False):
-    # defines the indices to be used to extrapolate the phase
-    # out of the edge of the pupil before doing the interpolation
-    # from Guido Agapito IDL function
-    smask = mask.shape
+def extrapolate_phase(mask, phase, iterations=2):
+    """
+    Linear phase extrapolation outside the mask using SciPy filters
     
-    float_mask = mask.astype(float)
-    sum_1pix_extra = np.full_like(float_mask, -1, dtype=int)
-    sum_2pix_extra = np.full_like(float_mask, -1, dtype=int)
+    Parameters:
+    mask (numpy.ndarray): Binary mask (1 in, 0 out)
+    phase (numpy.ndarray): Phase array to be extrapolated
+    iterations (int): Number of iterations for the extrapolation
     
-    idx_mask_array_1D = np.where(mask.flatten())
-    idx_mask_array_2D = np.where(mask)
-    idx_mask_array = np.full_like(mask, -1, dtype=int)
-    idx_mask_array[idx_mask_array_2D[0],idx_mask_array_2D[1]] = idx_mask_array_1D
+    Returns:
+    numpy.ndarray: Fase estrapolata
+    """
+    # Make a copy of the phase
+    result = phase.copy()
     
-    # matrix which defines the pixel out of the pupil mask
-    find_1pix_extra = np.roll(float_mask,shift=(1,0),axis=(0, 1)) + np.roll(float_mask,shift=(0,1),axis=(0, 1)) + \
-                      np.roll(float_mask,shift=(-1,0),axis=(0, 1)) + np.roll(float_mask,shift=(0,-1),axis=(0, -1))
-    find_1pix_extra *= (1.0-float_mask)
+    # Make a edge mask
+    kernel = np.array([[0, 1, 0], 
+                       [1, 0, 1], 
+                       [0, 1, 0]])
     
-    # matrix which defines the pixel out of the pupil mask
-    find_2pix_extra = np.roll(float_mask,shift=(2,0),axis=(0, 1)) + np.roll(float_mask,shift=(0,2),axis=(0, 1)) + \
-                      np.roll(float_mask,shift=(-2,0),axis=(0, 1)) + np.roll(float_mask,shift=(0,-2),axis=(0, -1))
-    find_2pix_extra *= (1.0-float_mask)
+    # Make a copy of the mask because we will expand it
+    current_mask = mask.copy()
     
-    idx_1pix_extra = np.ravel(np.array(np.where(find_1pix_extra.flatten() > 0)))
-    idx_2pix_extra = np.ravel(np.array(np.where((find_2pix_extra.flatten() > 0) & (find_1pix_extra.flatten() == 0))) )
-    
-    test1 = float_mask * 0
-    test1.flat[idx_1pix_extra] = 1
-    test2 = float_mask * 0
-    test2.flat[idx_2pix_extra] = 1
-    
-    for idx in idx_1pix_extra:
-        ind = np.unravel_index(idx, float_mask.shape)
-        test = -1
-        if ((ind[0] + 1) < (smask[0] - 1)) and (sum_1pix_extra.flatten()[idx] == -1):
-            if float_mask[ind[0] + 1, ind[1]] > 0:
-                if ((ind[0] + 2) < (smask[0] - 1)) and (float_mask[ind[0] + 2, ind[1]] > 0):
-                    sum_2pix_extra[ind[0], ind[1]] = idx_mask_array[ind[0] + 2, ind[1]]
-                    sum_1pix_extra[ind[0], ind[1]] = idx_mask_array[ind[0] + 1, ind[1]]
-                else:
-                    test = idx_mask_array[ind[0] + 1, ind[1]]
-        if ((ind[0] - 1) > 0) and (sum_1pix_extra.flatten()[idx] == -1):
-            if float_mask[ind[0] - 1, ind[1]] > 0:
-                if ((ind[0] - 2) > 0) and (float_mask[ind[0] - 2, ind[1]] > 0):
-                    sum_2pix_extra[ind[0], ind[1]] = idx_mask_array[ind[0] - 2, ind[1]]
-                    sum_1pix_extra[ind[0], ind[1]] = idx_mask_array[ind[0] - 1, ind[1]]
-                else:
-                    test = idx_mask_array[ind[0] - 1, ind[1]]
-        if ((ind[1] + 1) < (smask[1] - 1)) and (sum_1pix_extra.flatten()[idx] == -1):
-            if float_mask[ind[0], ind[1] + 1] > 0:
-                if ((ind[1] + 2) < (smask[1] - 1)) and (float_mask[ind[0], ind[1] + 2] > 0):
-                    sum_2pix_extra[ind[0], ind[1]] = idx_mask_array[ind[0], ind[1] + 2]
-                    sum_1pix_extra[ind[0], ind[1]] = idx_mask_array[ind[0], ind[1] + 1]
-                else:
-                    test = idx_mask_array[ind[0], ind[1] + 1]
-        if ((ind[1] - 1) > 0) and (sum_1pix_extra.flatten()[idx] == -1):
-            if float_mask[ind[0], ind[1] - 1] > 0:
-                if ((ind[1] - 2) > 0) and (float_mask[ind[0], ind[1] - 2] > 0):
-                    sum_2pix_extra[ind[0], ind[1]] = idx_mask_array[ind[0], ind[1] - 2]
-                    sum_1pix_extra[ind[0], ind[1]] = idx_mask_array[ind[0], ind[1] - 1]
-                else:
-                    test = idx_mask_array[ind[0], ind[1] - 1]
-        if (sum_1pix_extra.flatten()[idx] == -1) and (test >= 0):
-            sum_1pix_extra[ind[0], ind[1]] = test
-
-    if doExt2Pix:
-        for idx in idx_2pix_extra:
-            ind = np.unravel_index(idx, float_mask.shape)
-            test = -1
-            if ((ind[0] + 2) < (smask[0] - 1)) and (sum_2pix_extra.flatten()[idx] == -1):
-                if float_mask[ind[0] + 2, ind[1]] > 0:
-                    if ((ind[0] + 3) < (smask[0] - 1)) and (float_mask[ind[0] + 3, ind[1]] > 0):
-                        sum_2pix_extra[ind[0], ind[1]] = idx_mask_array[ind[0] + 3, ind[1]]
-                        sum_1pix_extra[ind[0], ind[1]] = idx_mask_array[ind[0] + 2, ind[1]]
-                    else:
-                        test = idx_mask_array[ind[0] + 2, ind[1]]
-            if ((ind[0] - 2) > 0) and (sum_2pix_extra.flatten()[idx] == -1):
-                if float_mask[ind[0] - 2, ind[1]] > 0:
-                    if ((ind[0] - 3) > 0) and (float_mask[ind[0] - 3, ind[1]] > 0):
-                        sum_2pix_extra[ind[0], ind[1]] = idx_mask_array[ind[0] - 3, ind[1]]
-                        sum_1pix_extra[ind[0], ind[1]] = idx_mask_array[ind[0] - 2, ind[1]]
-                    else:
-                        test = idx_mask_array[ind[0] - 2, ind[1]]
-            if ((ind[1] + 2) < (smask[1] - 1 and sum_2pix_extra.flatten()[idx] == -1)):
-                if float_mask[ind[0], ind[1] + 2] > 0:
-                    if ((ind[1] + 3) < (smask[1] - 1)) and (float_mask[ind[0], ind[1] + 3] > 0):
-                        sum_2pix_extra[ind[0], ind[1]] = idx_mask_array[ind[0], ind[1] + 3]
-                        sum_1pix_extra[ind[0], ind[1]] = idx_mask_array[ind[0], ind[1] + 2]
-                    else:
-                        test = idx_mask_array[ind[0], ind[1] + 2]
-            if ((ind[1] - 2) > 0) and (sum_2pix_extra.flatten()[idx] == -1):
-                if float_mask[ind[0], ind[1] - 2] > 0:
-                    if ((ind[1] - 3) > 0) and (float_mask[ind[0], ind[1] - 3] > 0):
-                        sum_2pix_extra[ind[0], ind[1]] = idx_mask_array[ind[0], ind[1] - 3]
-                        sum_1pix_extra[ind[0], ind[1]] = idx_mask_array[ind[0], ind[1] - 2]
-                    else:
-                        test = idx_mask_array[ind[0], ind[1] - 2]
-            if (sum_1pix_extra.flatten()[idx] == -1) and (test >= 0):
-                sum_1pix_extra[ind[0], ind[1]] = test
-    
-    return sum_1pix_extra, sum_2pix_extra
-
-def extrapolate_edge_pixel(phase, sum_1pix_extra, sum_2pix_extra):
-    # extrapolate the phase out of the edge of the pupil before doing the interpolation
-    # from Guido Agapito ILD function
-    
-    # Flatten the sum arrays
-    flattened_sum_1pix_extra = sum_1pix_extra.flatten()
-    flattened_sum_2pix_extra = sum_2pix_extra.flatten()
-    
-    # indices of pixel to be extrapolated
-    idx_1pix = np.array(np.where(flattened_sum_1pix_extra >= 0))
+    for i in range(iterations):
+        # Find the pixels at the edge (outside the mask but adjacent to valid pixels)
+        edge = convolve(current_mask, kernel, mode='constant') * (1 - current_mask)
+        edge = edge > 0
         
-    # Check if phase is 2D or 3D
-    if len(phase.shape) == 3:
-        # check size
-        if phase.shape[2] > phase.shape[0] | phase.shape[2] > phase.shape[1]:
-            raise ValueError('Error in input data, the input array third dimension must be smaller than the first two.')
-        # Flatten the phase array
-        flattened_phase = phase.reshape((-1,phase.shape[2]))
-        # extrapolated values
-        # Extract values using indices from sum_1pix_extra and sum_2pix_extra
-        vectExtraPol = flattened_phase[np.ravel(flattened_sum_1pix_extra[idx_1pix]),:]
-        vectExtraPol2 = flattened_phase[np.ravel(flattened_sum_2pix_extra[idx_1pix]),:]
-        # Find indices where sum_2pix_extra is non-negative
-        idxExtraPol2 = np.ravel(np.array(np.where(flattened_sum_2pix_extra[idx_1pix] >= 0)))
-        # Apply the extrapolation formula
-        vectExtraPol[idxExtraPol2,:] = 2 * vectExtraPol[idxExtraPol2,:] - vectExtraPol2[idxExtraPol2,:]
-        # Update the phase array along both dimensions
-        flattened_phase[idx_1pix,:] = vectExtraPol
-    else:
-        # Flatten the phase array
-        flattened_phase = phase.flatten()
-        # extrapolated values
-        # Extract values using indices from sum_1pix_extra and sum_2pix_extra
-        vectExtraPol = np.ravel(flattened_phase[flattened_sum_1pix_extra[idx_1pix]])
-        vectExtraPol2 = np.ravel(flattened_phase[flattened_sum_2pix_extra[idx_1pix]])  
-        # Find indices where sum_2pix_extra is non-negative      
-        idxExtraPol2 = np.array(np.where(flattened_sum_2pix_extra[idx_1pix] >= 0)) 
-        # Apply the extrapolation formula     
-        vectExtraPol[idxExtraPol2] = 2 * vectExtraPol[idxExtraPol2] - vectExtraPol2[idxExtraPol2]
-        # fill phase with extrapolated values
-        flattened_phase[idx_1pix] = vectExtraPol
+        if not np.any(edge):
+            break
+            
+        # For each edge pixel, calculate the extrapolated value
+        # using a weighted average of the valid neighbors
+        for axis in range(2):  # Extrapolate separately in x and y directions
+            # Create a kernel to take the neighbors in this direction
+            dir_kernel = np.zeros((3, 3))
+            if axis == 0:  # X direction
+                dir_kernel[1, 0] = 1
+                dir_kernel[1, 2] = 1
+            else:  # Y direction
+                dir_kernel[0, 1] = 1
+                dir_kernel[2, 1] = 1
+            
+            # Find the values of the valid neighbors in the direction
+            neighbor_vals = convolve(result * current_mask, dir_kernel, mode='constant')
+            neighbor_count = convolve(current_mask, dir_kernel, mode='constant')
+            
+            # Where we have valid neighbors, update the edge pixels
+            valid_neighbors = (neighbor_count > 0) & edge
+            if np.any(valid_neighbors):
+                result[valid_neighbors] = neighbor_vals[valid_neighbors] / neighbor_count[valid_neighbors]
+        
+        # Expand the mask to include the edge pixels
+        current_mask = current_mask | edge
     
-    # Reshape the updated flattened_phase back to the original shape   
-    updated_phase = flattened_phase.reshape(phase.shape)
-
-    return updated_phase
+    return result
 
 def shiftzoom_from_source_dm_params(source_pol_coo, source_height, dm_height, pixel_pitch):
     arcsec2rad = np.pi/180/3600
@@ -572,7 +476,7 @@ def shiftzoom_from_source_dm_params(source_pol_coo, source_height, dm_height, pi
     
     return shift, zoom
 
-def rotshiftzoom_array(input_array, dm_translation=(0.0, 0.0),  dm_rotation=0.0,   dm_magnification=(1.0, 1.0),
+def rotshiftzoom_array_noaffine(input_array, dm_translation=(0.0, 0.0),  dm_rotation=0.0,   dm_magnification=(1.0, 1.0),
                                     wfs_translation=(0.0, 0.0), wfs_rotation=0.0, wfs_magnification=(1.0, 1.0), output_size=None):
     # This function applies magnification, rotation, shift and resize of a 2D or 3D numpy array
     
@@ -600,7 +504,6 @@ def rotshiftzoom_array(input_array, dm_translation=(0.0, 0.0),  dm_rotation=0.0,
         array_mag = input_array
     else:
         array_mag = zoom(input_array, dm_magnification_)
-        
     
     # (2) DM rotation
     if dm_rotation == 0:
@@ -613,7 +516,7 @@ def rotshiftzoom_array(input_array, dm_translation=(0.0, 0.0),  dm_rotation=0.0,
         array_shi = array_rot
     else:
         array_shi = shift(array_rot, dm_translation_)
-    
+
     # (4) WFS rotation
     if wfs_rotation == 0:
         array_rot = array_shi
@@ -628,7 +531,7 @@ def rotshiftzoom_array(input_array, dm_translation=(0.0, 0.0),  dm_rotation=0.0,
 
     # (6) WFS magnification
     if all(element == 1 for element in wfs_magnification_):
-        output = array_shi
+        array_mag = array_shi
     else:
         array_mag = zoom(array_shi, wfs_magnification_)
 
@@ -652,6 +555,83 @@ def rotshiftzoom_array(input_array, dm_translation=(0.0, 0.0),  dm_rotation=0.0,
     else:
         output = array_mag
 
+    return output
+
+def rotshiftzoom_array(input_array, dm_translation=(0.0, 0.0), dm_rotation=0.0, dm_magnification=(1.0, 1.0),
+                       wfs_translation=(0.0, 0.0), wfs_rotation=0.0, wfs_magnification=(1.0, 1.0), output_size=None):
+    """
+    This function applies magnification, rotation, shift and resize of a 2D or 3D numpy array using affine transformation.
+    Rotation is applied in the same direction as the first function.
+    """
+   
+    if len(dm_translation) != 2 or len(wfs_translation) != 2:
+        raise ValueError("Translation vectors must have 2 elements.")
+    if len(dm_magnification) != 2 or len(wfs_magnification) != 2:
+        raise ValueError("Translation vectors must have 2 elements.")
+   
+    if np.isnan(input_array).any():
+        input_array = np.nan_to_num(input_array, copy=True, nan=0.0, posinf=None, neginf=None)
+    
+    # Check if array is 2D or 3D
+    is_3d = len(input_array.shape) == 3
+    
+    # resize
+    if output_size is None:
+        output_size = input_array.shape[:2]  # Only take the first two dimensions
+    
+    # Center of the input array
+    center = np.array(input_array.shape[:2]) / 2.0
+    
+    # Convert rotations to radians
+    # Note: Inverting the sign of rotation to match the first function's direction
+    dm_rot_rad = np.deg2rad(-dm_rotation)  # Negative sign to reverse direction
+    wfs_rot_rad = np.deg2rad(-wfs_rotation)  # Negative sign to reverse direction
+    
+    # Initialize the output array
+    if is_3d:
+        output = np.zeros((output_size[0], output_size[1], input_array.shape[2]), dtype=input_array.dtype)
+    else:
+        output = np.zeros(output_size, dtype=input_array.dtype)
+    
+    # Create the transformation matrices
+    # For DM transformation
+    dm_scale_matrix = np.array([[1.0/dm_magnification[0], 0], [0, 1.0/dm_magnification[1]]])
+    dm_rot_matrix = np.array([[np.cos(dm_rot_rad), -np.sin(dm_rot_rad)], [np.sin(dm_rot_rad), np.cos(dm_rot_rad)]])
+    dm_matrix = np.dot(dm_rot_matrix, dm_scale_matrix)
+    
+    # For WFS transformation
+    wfs_scale_matrix = np.array([[1.0/wfs_magnification[0], 0], [0, 1.0/wfs_magnification[1]]])
+    wfs_rot_matrix = np.array([[np.cos(wfs_rot_rad), -np.sin(wfs_rot_rad)], [np.sin(wfs_rot_rad), np.cos(wfs_rot_rad)]])
+    wfs_matrix = np.dot(wfs_rot_matrix, wfs_scale_matrix)
+    
+    # Combine transformations (first DM, then WFS)
+    combined_matrix = np.dot(wfs_matrix, dm_matrix)
+    
+    # Calculate offset
+    output_center = np.array(output_size) / 2.0
+    offset = center - np.dot(combined_matrix, output_center) - np.dot(dm_matrix, dm_translation) - wfs_translation
+    
+    # Apply transformation
+    if is_3d:
+        # For 3D arrays, apply transformation to each slice
+        for i in range(input_array.shape[2]):
+            output[:, :, i] = affine_transform(
+                input_array[:, :, i],
+                combined_matrix,
+                offset=offset,
+                output_shape=output_size,
+                order=1
+            )
+    else:
+        # For 2D arrays
+        output = affine_transform(
+            input_array,
+            combined_matrix,
+            offset=offset,
+            output_shape=output_size,
+            order=1
+        )
+    
     return output
 
 def interaction_matrix(pup_diam_m,pup_mask,dm_array,dm_mask,dm_height,dm_rotation,wfs_nsubaps,wfs_rotation,wfs_translation,wfs_magnification,
@@ -693,13 +673,19 @@ def interaction_matrix(pup_diam_m,pup_mask,dm_array,dm_mask,dm_height,dm_rotatio
     output_size = (pup_diam_pix,pup_diam_pix)
 
     #Extraction of patch seen by GS and application of DM rotation
-    trans_dm_array = rotshiftzoom_array(dm_array, dm_translation=dm_translation,   dm_rotation=dm_rotation,   dm_magnification=dm_magnification,
-                                                  wfs_translation=wfs_translation, wfs_rotation=wfs_rotation, wfs_magnification=wfs_magnification,
-                                                  output_size=output_size)
-    trans_dm_mask  = rotshiftzoom_array(dm_mask,  dm_translation=dm_translation,   dm_rotation=dm_rotation,   dm_magnification=dm_magnification,
-                                                  wfs_translation=(0,0), wfs_rotation=0, wfs_magnification=(1,1),
-                                                  output_size=output_size)
+    trans_dm_array = rotshiftzoom_array(dm_array, dm_translation=dm_translation, dm_rotation=dm_rotation, dm_magnification=dm_magnification,
+                                        wfs_translation=wfs_translation, wfs_rotation=wfs_rotation, wfs_magnification=wfs_magnification,
+                                        output_size=output_size)
+    # apply transformation to the DM mask
+    trans_dm_mask  = rotshiftzoom_array(dm_mask, dm_translation=dm_translation, dm_rotation=dm_rotation, dm_magnification=dm_magnification,
+                                        wfs_translation=(0,0), wfs_rotation=0, wfs_magnification=(1,1),
+                                        output_size=output_size)
     trans_dm_mask[trans_dm_mask<0.5] = 0
+    # apply transformation to the pupil mask
+    trans_pup_mask  = rotshiftzoom_array(pup_mask, dm_translation=(0,0), dm_rotation=0, dm_magnification=(1,1),
+                                        wfs_translation=wfs_translation, wfs_rotation=wfs_rotation, wfs_magnification=wfs_magnification,
+                                        output_size=output_size)
+    trans_pup_mask[trans_pup_mask<0.5] = 0
 
     if verbose:
         print('Rotation, shift and zoom done.')
@@ -716,37 +702,17 @@ def interaction_matrix(pup_diam_m,pup_mask,dm_array,dm_mask,dm_height,dm_rotatio
     if verbose:
         print('Derivatives done.')
 
-    # apply transformation to the mask
-    if wfs_rotation == -1:
-        pup_mask_rot = pup_mask
-    else:
-        pup_mask_rot = rotate(pup_mask, wfs_rotation, axes=(0, 0), reshape=False)
-   
-    if all(element == 0 for element in wfs_magnification):
-        pup_mask_mag2 = pup_mask_rot
-    else:
-        pup_mask_mag = zoom(pup_mask_rot, np.array(wfs_magnification))
-        if (pup_mask_mag.shape[0] > pup_mask.shape[0]) | (pup_mask_mag.shape[1] > pup_mask.shape[1]): # smaller output size
-            pup_mask_mag2 = pup_mask_mag[int(0.5*(pup_mask_mag.shape[0]-pup_mask.shape[0])):int(0.5*(pup_mask_mag.shape[0]+pup_mask.shape[0])), \
-                                    int(0.5*(pup_mask_mag.shape[1]-pup_mask.shape[1])):int(0.5*(pup_mask_mag.shape[1]+pup_mask.shape[1]))]
-        elif (pup_mask_mag.shape[0] < pup_mask.shape[0]) | (pup_mask_mag.shape[1] < pup_mask.shape[1]): # bigger output size
-            pup_mask_mag2 = np.zeros(pup_mask.shape)
-            pup_mask_mag2[int(0.5*(pup_mask.shape[0]-pup_mask_mag.shape[0])):int(0.5*(pup_mask.shape[0]+pup_mask_mag.shape[0])), \
-                     int(0.5*(pup_mask.shape[1]-pup_mask_mag.shape[1])):int(0.5*(pup_mask.shape[1]+pup_mask_mag.shape[1]))] = pup_mask_mag
-        else: # same size
-            pup_mask_mag2 = pup_mask_mag
-
-    if all(element == -1 for element in wfs_translation):
-        pup_mask = pup_mask_mag2
-    else:
-        pup_mask = shift(pup_mask_mag2, wfs_translation)
-
     # estimate an array proportional to flux per sub-aperture from the mask   
-    if np.isnan(pup_mask_mag).any():
-        np.nan_to_num(pup_mask_mag, copy=False, nan=0.0, posinf=None, neginf=None)
+    if np.isnan(trans_pup_mask).any():
+        np.nan_to_num(trans_pup_mask, copy=False, nan=0.0, posinf=None, neginf=None)
+    if np.isnan(trans_dm_mask).any():
+        np.nan_to_num(trans_dm_mask, copy=False, nan=0.0, posinf=None, neginf=None)
 
-    pup_mask_sa = rebin(pup_mask, (wfs_nsubaps,wfs_nsubaps), method='sum')
+    pup_mask_sa = rebin(trans_pup_mask, (wfs_nsubaps,wfs_nsubaps), method='sum')
     pup_mask_sa = pup_mask_sa * 1/np.max(pup_mask_sa)
+    
+    dm_mask_sa = rebin(trans_dm_mask, (wfs_nsubaps,wfs_nsubaps), method='sum')
+    dm_mask_sa = dm_mask_sa * 1/np.max(dm_mask_sa)
 
     # rebin the array to get the correct signal size
     if np.isnan(der_dx).any():
@@ -759,12 +725,18 @@ def interaction_matrix(pup_diam_m,pup_mask,dm_array,dm_mask,dm_height,dm_rotatio
     if verbose:
         print('Rebin done.')
 
-    # normalize by pup_mask_sa to get the correct value at the edge of the pupil
+    # normalize by dm_mask_sa to get the correct value at the edge of the dm
     # because at the edge the average of the rebin is done with pixel outside the
-    # pupil that have 0 values
+    # dm that have 0 values
+    dm_mask_sa[dm_mask_sa<0.5] = 0
+    WFS_signal_x = apply_mask(WFS_signal_x,dm_mask_sa,norm=True)
+    WFS_signal_y = apply_mask(WFS_signal_y,dm_mask_sa,norm=True)
+    
+    # set to zero the signal outside the pupil
     pup_mask_sa[pup_mask_sa<0.5] = 0
-    WFS_signal_x = apply_mask(WFS_signal_x,pup_mask_sa,norm=True)
-    WFS_signal_y = apply_mask(WFS_signal_y,pup_mask_sa,norm=True)
+    pup_mask_sa[pup_mask_sa>=0.5] = 1
+    WFS_signal_x = apply_mask(WFS_signal_x,pup_mask_sa,norm=False)
+    WFS_signal_y = apply_mask(WFS_signal_y,pup_mask_sa,norm=False)
 
     if verbose:
         print('Mask applied.')
@@ -780,7 +752,7 @@ def interaction_matrix(pup_diam_m,pup_mask,dm_array,dm_mask,dm_height,dm_rotatio
 
     im = np.concatenate((WFS_signal_x_2D, WFS_signal_y_2D))
 
-    # TODO missing normaliaztion!
+    # TODO missing normalization!
 
     if verbose:
         print('WFS signals reformed.')
@@ -814,6 +786,6 @@ def interaction_matrix(pup_diam_m,pup_mask,dm_array,dm_mask,dm_height,dm_rotatio
         im5 = axs[1,1].imshow(WFS_signal_y[:,:,5], cmap='seismic')
         fig.suptitle('X and Y WFS signals')
         fig.colorbar(im5, ax=axs.ravel().tolist(),fraction=0.02)
-        plt.show(block=False)
+        plt.show()
 
     return im
