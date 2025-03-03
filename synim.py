@@ -375,9 +375,10 @@ def compute_derivatives_with_extrapolation(data,mask=None):
     # if mask is present does an extrapolation to avoid issue at the edges
 
     if mask is not None:
+        # Get edge pixels and references
+        edge_pixels, references = extrapolate_edge_indices(mask)
         for i in range(data.shape[2]):
-            data[:,:,i] = extrapolate_phase_linear(data[:,:,i], mask, iterations=1, use_cache=True)
-        clear_extrapolation_cache()
+            data[:,:,i] = extrapolate_phase_linear(data[:,:,i], mask, edge_pixels, references, iterations=1)
         print('Using extrapolation to compute derivatives.')
           
     # Compute x derivative
@@ -408,80 +409,7 @@ def integrate_derivatives(dx, dy):
 
     return integrated_x, integrated_y
 
-# We need a hashable key for the mask, as arrays aren't hashable
-def _make_mask_hashable(mask):
-    """Convert a numpy array to a hashable tuple representation."""
-    return (mask.shape, mask.tobytes())
-
-@lru_cache(maxsize=128)
-def _cached_edge_indices(mask_key):
-    """
-    Cached version that works with hashable input.
-    
-    Parameters:
-    mask_key: Hashable representation of the mask (shape, bytes)
-    
-    Returns:
-    tuple: Edge pixels and reference points
-    """
-    # Convert back to numpy array
-    shape = mask_key[0]
-    mask_bytes = mask_key[1]
-    mask = np.frombuffer(mask_bytes, dtype=bool).reshape(shape)
-    
-    # Create float mask
-    float_mask = mask.astype(float)
-    height, width = mask.shape
-    
-    # Find edge pixels (first layer outside the mask)
-    kernel = np.array([[0, 1, 0], [1, 0, 1], [0, 1, 0]])
-    edge_mask = convolve(float_mask, kernel, mode='constant') * (1.0 - float_mask)
-    edge_pixels = np.where(edge_mask > 0)
-    
-    # Initialize reference points
-    x_first = np.full(mask.shape, -1)
-    x_second = np.full(mask.shape, -1)
-    y_first = np.full(mask.shape, -1)
-    y_second = np.full(mask.shape, -1)
-    
-    # Create flat index array for the mask
-    indices = np.zeros_like(float_mask, dtype=int)
-    indices[mask > 0] = np.flatnonzero(mask > 0)
-    
-    # For each edge pixel, find reference points in x and y directions
-    for i, j in zip(*edge_pixels):
-        # Check x direction (horizontal)
-        if i + 1 < height and float_mask[i + 1, j] > 0:
-            x_first[i, j] = indices[i + 1, j]
-            if i + 2 < height and float_mask[i + 2, j] > 0:
-                x_second[i, j] = indices[i + 2, j]
-        elif i - 1 >= 0 and float_mask[i - 1, j] > 0:
-            x_first[i, j] = indices[i - 1, j]
-            if i - 2 >= 0 and float_mask[i - 2, j] > 0:
-                x_second[i, j] = indices[i - 2, j]
-        
-        # Check y direction (vertical)
-        if j + 1 < width and float_mask[i, j + 1] > 0:
-            y_first[i, j] = indices[i, j + 1]
-            if j + 2 < width and float_mask[i, j + 2] > 0:
-                y_second[i, j] = indices[i, j + 2]
-        elif j - 1 >= 0 and float_mask[i, j - 1] > 0:
-            y_first[i, j] = indices[i, j - 1]
-            if j - 2 >= 0 and float_mask[i, j - 2] > 0:
-                y_second[i, j] = indices[i, j - 2]
-    
-    # Convert references to tuples since we can't return mutable numpy arrays from a cached function
-    return (
-        edge_pixels,
-        {
-            'x_first': x_first.copy(),
-            'x_second': x_second.copy(),
-            'y_first': y_first.copy(),
-            'y_second': y_second.copy()
-        }
-    )
-
-def extrapolate_edge_indices(mask, use_cache=True):
+def extrapolate_edge_indices(mask):
     """
     Defines the indices and reference points for phase extrapolation outside the pupil mask.
     
@@ -492,18 +420,7 @@ def extrapolate_edge_indices(mask, use_cache=True):
     Returns:
     tuple: (edge_pixels, reference_points)
     """
-    if use_cache:
-        # Convert mask to hashable form
-        mask_key = _make_mask_hashable(mask.astype(bool))
-        return _cached_edge_indices(mask_key)
-    else:
-        # Call the calculation function directly without caching
-        return _calculate_edge_indices(mask)
 
-def _calculate_edge_indices(mask):
-    """
-    Non-cached version of the edge indices calculation.
-    """
     # Create float mask
     float_mask = mask.astype(float)
     height, width = mask.shape
@@ -549,15 +466,16 @@ def _calculate_edge_indices(mask):
     
     return edge_pixels, reference_points
 
-def extrapolate_phase_linear(phase, mask, iterations=1, use_cache=True):
+def extrapolate_phase_linear(phase, mask, edge_pixels, references, iterations=1):
     """
     Extrapolates the phase outside the mask using linear extrapolation.
     
     Parameters:
     phase (numpy.ndarray): Phase array to be extrapolated
     mask (numpy.ndarray): Binary mask (1 inside, 0 outside)
+    edge_pixels (tuple): Indices of edge pixels
+    references (dict): Reference points for extrapolation
     iterations (int): Number of iterations for the extrapolation
-    use_cache (bool): Whether to use cached indices and reference points
     
     Returns:
     numpy.ndarray: Extrapolated phase array
@@ -566,8 +484,6 @@ def extrapolate_phase_linear(phase, mask, iterations=1, use_cache=True):
     current_mask = mask.copy()
     
     for _ in range(iterations):
-        edge_pixels, references = extrapolate_edge_indices(current_mask, use_cache=use_cache)
-        
         if len(edge_pixels[0]) == 0:
             break  # No more edge pixels to extrapolate
         
@@ -610,11 +526,6 @@ def extrapolate_phase_linear(phase, mask, iterations=1, use_cache=True):
         current_mask = current_mask | edge_mask
     
     return result
-
-# Function to clear the LRU cache
-def clear_extrapolation_cache():
-    """Clears the cache of extrapolation indices and reference points."""
-    _cached_edge_indices.cache_clear()
 
 def shiftzoom_from_source_dm_params(source_pol_coo, source_height, dm_height, pixel_pitch):
     arcsec2rad = np.pi/180/3600
