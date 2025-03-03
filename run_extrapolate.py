@@ -286,34 +286,53 @@ def extrapolate_phase_convolution(mask, phase, iterations=2):
     return result
 
 mask_size = 64
-n_zernikes = 16
+n_zernikes = 32
 mask = make_mask(mask_size,diaratio=0.8)
 input_array = sample_phase(mask_size,mask,n_zernikes)
 
+idx = 30
+
 t0 = time.time()
-out_array1 = extrapolate_phase_convolution(mask, input_array[:,:,0], iterations=2)
-print('time',time.time()-t0)
+for i in range(1000):
+    out_array1 = extrapolate_phase_convolution(mask, input_array[:,:,idx], iterations=2)
+print('time extrapolate_phase_convolution',time.time()-t0)
 t1= time.time()
-out_array2 = extrapolate_phase_linear(input_array[:,:,0], mask, iterations=2)
-print('time',time.time()-t1)
+for i in range(1000):
+    out_array2 = extrapolate_phase_linear(input_array[:,:,idx], mask, iterations=2, use_cache=True)
+print('time extrapolate_phase_linear',time.time()-t1)
 t2 = time.time()
-out_array3 = extrapolate_phase(mask, input_array[:,:,0], iterations=2)
-print('time',time.time()-t2)
+for i in range(1000):
+    out_array3 = extrapolate_phase(mask, input_array[:,:,idx], iterations=2)
+print('time extrapolate_phase',time.time()-t2)
+
+fig, axs = plt.subplots(1,2)
+axs[0].imshow(input_array[:,:,idx])
+axs[0].set_title('input phase')
+axs[1].imshow(out_array1)
+axs[1].set_title('out phase 1')
+
+fig, axs = plt.subplots(1,2)
+axs[0].imshow(input_array[:,:,idx])
+axs[0].set_title('input phase')
+axs[1].imshow(out_array2)
+axs[1].set_title('out phase 2')
+
+fig, axs = plt.subplots(1,2)
+axs[0].imshow(input_array[:,:,idx])
+axs[0].set_title('input phase')
+axs[1].imshow(out_array3)
+axs[1].set_title('out phase 3')
 
 plt.figure()
-plt.imshow(input_array[:,:,0])
-plt.title('input phase')
-
-plt.figure()
-plt.imshow(out_array1-input_array[:,:,0])
+plt.imshow(out_array1-input_array[:,:,idx])
 plt.title('out phase 1')
 
 plt.figure()
-plt.imshow(out_array2-input_array[:,:,0])
+plt.imshow(out_array2-input_array[:,:,idx])
 plt.title('out phase 2')
 
 plt.figure()
-plt.imshow(out_array3-input_array[:,:,0])
+plt.imshow(out_array3-input_array[:,:,idx])
 plt.title('out phase 3')
 
 plt.show()
