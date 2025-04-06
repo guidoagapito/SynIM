@@ -266,7 +266,7 @@ def generate_im_filenames(config_file, timestamp=False):
                         parts.append(f"dmH{height}_nm{nmodes}")
                         
                         # Add WFS and DM indices to make filename unique
-                        parts.append(f"lgs{idx}_dm{dm['index']}")
+                        #parts.append(f"lgs{idx}_dm{dm['index']}")
                         
                         # Add timestamp if requested
                         if timestamp:
@@ -321,7 +321,7 @@ def generate_im_filenames(config_file, timestamp=False):
                         parts.append(f"dmH{height}_nm{nmodes}")
                         
                         # Add WFS and DM indices to make filename unique
-                        parts.append(f"ngs{idx}_dm{dm['index']}")
+                        #parts.append(f"ngs{idx}_dm{dm['index']}")
                         
                         # Add timestamp if requested
                         if timestamp:
@@ -376,7 +376,7 @@ def generate_im_filenames(config_file, timestamp=False):
                         parts.append(f"dmH{height}_nm{nmodes}")
                         
                         # Add WFS and DM indices to make filename unique
-                        parts.append(f"ref{idx}_dm{dm['index']}")
+                        #parts.append(f"ref{idx}_dm{dm['index']}")
                         
                         # Add timestamp if requested
                         if timestamp:
