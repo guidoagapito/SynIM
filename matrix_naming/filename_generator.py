@@ -106,7 +106,7 @@ def generate_im_filenames(config_file, timestamp=False):
     simple_config = is_simple_config(config)
     
     # Basic system info
-    instrument = os.path.basename(config_file).split('.')[0].split('_')[0].upper()
+    instrument = 'IM'#os.path.basename(config_file).split('.')[0].split('_')[0].upper()
     
     # Pupil parameters
     pupil_params = {}
