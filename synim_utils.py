@@ -77,14 +77,19 @@ def prepare_interaction_matrix_params(yaml_file, wfs_type=None, wfs_index=None, 
         pup_mask = pupilstop.A
     
     # Find DM parameters based on specified index or use the first available one
+    print("DM -- Looking for DM parameters...")
     if dm_index is not None:
+        print(f"     Using specified DM index: {dm_index}")
         dm_key = f'dm{dm_index}'
         if dm_key not in params:
             # Fallback: if specified DM doesn't exist, try 'dm' without number
             if 'dm' in params:
                 dm_key = 'dm'
+                print(f"     DM with index {dm_index} not found. Using 'dm' section instead.")
             else:
                 raise ValueError(f"DM with index {dm_index} not found in YAML file.")
+        else:
+            print(f"     Using specified DM: {dm_key}")
         dm_params = params[dm_key]
     else:
         # Original behavior: find the first available DM
@@ -92,6 +97,7 @@ def prepare_interaction_matrix_params(yaml_file, wfs_type=None, wfs_index=None, 
         if dm_keys:
             dm_key = dm_keys[0]
             dm_params = params[dm_key]
+            print(f"     Using first available DM: {dm_key}")
         else:
             raise ValueError("No DM configuration found in the YAML file.")
     
@@ -103,6 +109,7 @@ def prepare_interaction_matrix_params(yaml_file, wfs_type=None, wfs_index=None, 
     dm_array = None
     dm_mask = None
     if 'ifunc_object' in dm_params:
+        print("     Loading influence function from file, tag:", dm_params['ifunc_object'])
         ifunc_tag = dm_params['ifunc_object']
         ifunc_path = cm.filename('ifunc', ifunc_tag)
         ifunc = IFunc.restore(ifunc_path)
@@ -138,6 +145,7 @@ def prepare_interaction_matrix_params(yaml_file, wfs_type=None, wfs_index=None, 
             raise ValueError("IFunc without mask_inf_func is not supported. Mask is required to reconstruct the 3D array.")
             
     elif 'type_str' in dm_params:
+        print("     Loading influence function from type_str:", dm_params['type_str'])
         # Create influence functions directly using Zernike modes
         from specula.lib.compute_zern_ifunc import compute_zern_ifunc
         nmodes = dm_params.get('nmodes', 100)
@@ -151,11 +159,21 @@ def prepare_interaction_matrix_params(yaml_file, wfs_type=None, wfs_index=None, 
         # Convert to the right format for SynIM
         dm_array = np.zeros((npixels**2, nmodes), dtype=float)
         for i in range(nmodes):
-            dm_array[np.where(z_mask)[0],i] = z_ifunc[i]
+            dm_array[np.where(z_mask.flat),i] = z_ifunc[i]
         dm_array = dm_array.reshape((npixels, npixels, nmodes))
-        
+        print("     DM array shape:", dm_array.shape)
         dm_mask = z_mask
-    
+        print("     DM mask shape:", dm_mask.shape)
+        print("     DM mask sum:", np.sum(dm_mask))
+
+    else:
+        # If no influence function is specified, raise an error
+        raise ValueError("No influence function specified in the YAML file. Please provide a valid influence function.")    
+
+    if dm_array is None:
+        raise ValueError("No influence function data found for the specified DM.")
+
+    print("WFS -- Looking for WFS parameters...")
     # Find WFS parameters based on the specified type and index
     wfs_found = False
     wfs_key = None
@@ -171,13 +189,16 @@ def prepare_interaction_matrix_params(yaml_file, wfs_type=None, wfs_index=None, 
     
     # Look for 'sh' and 'pyramid' sections
     if 'sh' in params:
+        print("      Found 'sh' section in YAML file.")
         wfs_keys.append('sh')
     if 'pyramid' in params:
+        print("      Found 'pyramid' section in YAML file.")
         wfs_keys.append('pyramid')
     
     # Look for sections starting with sh_ or pyramid_
     for key in params:
         if key.startswith('sh_') or key.startswith('pyramid_'):
+            print(f"      Found '{key}' section in YAML file.")
             wfs_keys.append(key)
     
     # Process specific wfs_type if provided
@@ -259,6 +280,10 @@ def prepare_interaction_matrix_params(yaml_file, wfs_type=None, wfs_index=None, 
     wfs_rotation = wfs_params.get('rotation', 0.0)
     wfs_translation = wfs_params.get('translation', [0.0, 0.0])
     wfs_magnification = wfs_params.get('magnification', 1.0)
+    if np.isnan(wfs_magnification):
+        wfs_magnification = 1.0
+    if np.size(wfs_magnification) == 1:
+        wfs_magnification = [wfs_magnification, wfs_magnification]
     
     # Load SubapData for valid subapertures if available
     idx_valid_sa = None
@@ -364,11 +389,47 @@ def compute_interaction_matrix(yaml_file, wfs_type=None, wfs_index=None, dm_inde
     )
     
     if verbose:
-        print(f"Calculating IM for WFS: {params['wfs_key']} with DM: {params['dm_key']}")
-        print(f"WFS type: {params['wfs_type']}, subapertures: {params['wfs_nsubaps']}")
-        print(f"DM height: {params['dm_height']}")
-        print(f"Guide star: {params['gs_pol_coo']} at height {params['gs_height']} m")
+        print("Interaction Matrix Parameters:")
+        print(f"      YAML file: {yaml_file}")
+        print(f"      Calculating IM for WFS: {params['wfs_key']} with DM: {params['dm_key']}")
+        print(f"      WFS type: {params['wfs_type']}, subapertures: {params['wfs_nsubaps']}")
+        print(f"      Valid subapertures shape: {params['idx_valid_sa'].shape}")
+        print(f"      WFS rotation: {params['wfs_rotation']}")
+        print(f"      WFS translation: {params['wfs_translation']}")
+        print(f"      WFS magnification: {params['wfs_magnification']}")
+        print(f"      DM height: {params['dm_height']}")
+        print(f"      DM rotation: {params['dm_rotation']}")
+        print(f"      DM array shape: {params['dm_array'].shape}")
+        print(f"      DM mask shape: {params['dm_mask'].shape}")
+        print(f"      Guide star: {params['gs_pol_coo']} at height {params['gs_height']} m")
+        print(f"      source polar coordinates: {params['gs_pol_coo']}")
+        print(f"      Pupil diameter: {params['pup_diam_m']} m")
+        print(f"      Pupil mask shape: {params['pup_mask'].shape}")
     
+    if display:
+        print("Displaying parameters...")
+        import matplotlib.pyplot as plt
+        
+        plt.figure(figsize=(10, 8))
+        plt.imshow(params['pup_mask'], cmap='gray')
+        plt.colorbar()
+        plt.title("Pupil Mask")
+        plt.figure(figsize=(10, 8))
+        plt.imshow(params['dm_mask'], cmap='gray')
+        plt.colorbar()
+        plt.title("DM Mask")
+        plt.figure(figsize=(10, 8))
+        plt.imshow(params['dm_array'][:, :, 0], cmap='gray')
+        plt.colorbar()
+        plt.title("DM Influence Function (First Mode)")
+        plt.figure(figsize=(10, 8))
+        sa_mask = np.zeros((params['wfs_nsubaps'], params['wfs_nsubaps']))
+        sa_mask[params['idx_valid_sa'][:, 0], params['idx_valid_sa'][:, 1]] = 1
+        plt.imshow(sa_mask, cmap='gray')
+        plt.colorbar()
+        plt.title("Valid Subapertures")
+        plt.show()
+
     im = synim.interaction_matrix(
         pup_diam_m=params['pup_diam_m'],
         pup_mask=params['pup_mask'],
