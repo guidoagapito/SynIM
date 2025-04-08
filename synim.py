@@ -480,7 +480,7 @@ def extrapolate_phase_linear(phase, mask, edge_pixels, references, iterations=1)
     numpy.ndarray: Extrapolated phase array
     """
     result = phase.copy()
-    current_mask = mask.copy()
+    current_mask = mask.copy().astype(bool)  # Convert to boolean
     
     for _ in range(iterations):
         if len(edge_pixels[0]) == 0:
@@ -522,14 +522,17 @@ def extrapolate_phase_linear(phase, mask, edge_pixels, references, iterations=1)
                 result[i, j] = sum(extrapolated_values) / len(extrapolated_values)
         
         # Update the mask to include the newly extrapolated pixels
-        current_mask = current_mask | edge_mask
+        current_mask = current_mask | edge_mask  # Now both are boolean arrays
     
     return result
 
 def shiftzoom_from_source_dm_params(source_pol_coo, source_height, dm_height, pixel_pitch):
     arcsec2rad = np.pi/180/3600
     
-    mag_factor = source_height/(source_height-dm_height)
+    if np.isinf(source_height):
+        mag_factor = 1.0
+    else:
+        mag_factor = source_height/(source_height-dm_height)
     source_rec_coo_asec = polar_to_xy(source_pol_coo[0],source_pol_coo[1]*np.pi/180)
     source_rec_coo_m = source_rec_coo_asec*dm_height*arcsec2rad
     source_rec_coo_pix = source_rec_coo_m / pixel_pitch
@@ -744,17 +747,23 @@ def interaction_matrix(pup_diam_m,pup_mask,dm_array,dm_mask,dm_height,dm_rotatio
                                         wfs_translation=(0,0), wfs_rotation=0, wfs_magnification=(1,1),
                                         output_size=output_size)
     trans_dm_mask[trans_dm_mask<0.5] = 0
+    if np.max(trans_dm_mask) <= 0:
+        raise ValueError('Error in input data, the rotated dm mask is empty.')
     # apply transformation to the pupil mask
     trans_pup_mask  = rotshiftzoom_array(pup_mask, dm_translation=(0,0), dm_rotation=0, dm_magnification=(1,1),
                                         wfs_translation=wfs_translation, wfs_rotation=wfs_rotation, wfs_magnification=wfs_magnification,
                                         output_size=output_size)
     trans_pup_mask[trans_pup_mask<0.5] = 0
+    if np.max(trans_pup_mask) <= 0:
+        raise ValueError('Error in input data, the rotated pup mask is empty.')
 
     if verbose:
         print('Rotation, shift and zoom done.')
 
     # apply mask
     trans_dm_array = apply_mask(trans_dm_array,trans_dm_mask)
+    if np.max(trans_dm_array) <= 0:
+        raise ValueError('Error in input data, the rotated dm array is empty.')
 
     if verbose:
         print('Mask applied.')
@@ -775,6 +784,8 @@ def interaction_matrix(pup_diam_m,pup_mask,dm_array,dm_mask,dm_height,dm_rotatio
     pup_mask_sa = pup_mask_sa * 1/np.max(pup_mask_sa)
     
     dm_mask_sa = rebin(trans_dm_mask, (wfs_nsubaps,wfs_nsubaps), method='sum')
+    if np.max(dm_mask_sa) <= 0:
+        raise ValueError('Error in input data, the dm mask is empty.')
     dm_mask_sa = dm_mask_sa * 1/np.max(dm_mask_sa)
 
     # rebin the array to get the correct signal size
@@ -807,9 +818,23 @@ def interaction_matrix(pup_diam_m,pup_mask,dm_array,dm_mask,dm_height,dm_rotatio
     WFS_signal_x_2D = WFS_signal_x.reshape((-1,WFS_signal_x.shape[2]))
     WFS_signal_y_2D = WFS_signal_y.reshape((-1,WFS_signal_y.shape[2]))
 
+    print('WFS signal x shape:', WFS_signal_x_2D.shape)
+    print('WFS signal y shape:', WFS_signal_y_2D.shape)
+
     if idx_valid_sa is not None:
-        WFS_signal_x_2D = WFS_signal_x_2D[idx_valid_sa,:]
-        WFS_signal_y_2D = WFS_signal_y_2D[idx_valid_sa,:]
+        if len(idx_valid_sa.shape) > 1 and idx_valid_sa.shape[1] == 2:
+            # Convert 2D coordinates [y,x] to linear indices
+            # Formula: linear_index = y * width + x
+            width = wfs_nsubaps  # Width of the original 2D array
+            linear_indices = idx_valid_sa[:,0] * width + idx_valid_sa[:,1]
+            
+            # Use these linear indices to select elements from flattened arrays
+            WFS_signal_x_2D = WFS_signal_x_2D[linear_indices,:]
+            WFS_signal_y_2D = WFS_signal_y_2D[linear_indices,:]
+        else:
+            # Use 1D array directly
+            WFS_signal_x_2D = WFS_signal_x_2D[idx_valid_sa,:]
+            WFS_signal_y_2D = WFS_signal_y_2D[idx_valid_sa,:]
         if verbose:
             print('Indices selected.')
 
