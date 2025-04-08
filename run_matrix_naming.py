@@ -6,9 +6,17 @@ from matrix_naming.filename_generator import generate_im_filenames
 
 def main():
     # Percorso del file di configurazione YAML
-    #yaml_file = input("Inserisci il percorso del file YAML: ")
-   #yaml_file = "C:\\Users\\guido\\OneDrive\\Documenti\\GitHub\\SPECULA\\main\\scao\\params_scao_sh.yml"
-    yaml_file = "C:\\Users\\guido\\OneDrive\\Documenti\\GitHub\\SPECULA\\main\\scao\\params_morfeo_full.yml"
+    import specula
+    specula.init(device_idx=-1, precision=1)
+    # Get the path to the specula package's __init__.py file
+    specula_init_path = specula.__file__
+    # Navigate up to repository root
+    specula_package_dir = os.path.dirname(specula_init_path)
+    specula_repo_path = os.path.dirname(specula_package_dir)
+
+    # Path to the YAML configuration file and output directory
+    # The path to the YAML file is detemrined by the specula module
+    yaml_file = os.path.join(specula_repo_path, "main", "scao", "params_morfeo_full.yml")
     
     # Genera i nomi dei file
     try:
