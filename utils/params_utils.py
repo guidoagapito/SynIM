@@ -290,7 +290,10 @@ def prepare_interaction_matrix_params(params_file, wfs_type=None, wfs_index=None
     wfs_rotation = wfs_params.get('rotation', 0.0)
     wfs_translation = wfs_params.get('translation', [0.0, 0.0])
     wfs_magnification = wfs_params.get('magnification', 1.0)
-    wfs_fov_arcsec = wfs_params.get('fov', 0)
+    if wfs_params.get('sensor_fov') is None:
+        wfs_fov_arcsec = wfs_params['fov']
+    else:
+        wfs_fov_arcsec = wfs_params['sensor_fov']
     if np.isnan(wfs_magnification):
         wfs_magnification = 1.0
     if np.size(wfs_magnification) == 1:
@@ -492,6 +495,7 @@ def compute_interaction_matrix(params, wfs_type=None, wfs_index=None, dm_index=N
         print(f"      WFS rotation: {params['wfs_rotation']}")
         print(f"      WFS translation: {params['wfs_translation']}")
         print(f"      WFS magnification: {params['wfs_magnification']}")
+        print(f"      WFS field of view: {params['wfs_fov_arcsec']} arcsec")
         print(f"      DM height: {params['dm_height']}")
         print(f"      DM rotation: {params['dm_rotation']}")
         print(f"      DM array shape: {params['dm_array'].shape}")
