@@ -29,7 +29,8 @@ os.makedirs(output_im_dir, exist_ok=True)
 os.makedirs(output_rec_dir, exist_ok=True)
 
 # Calculate the interaction matrix
-im, params = compute_interaction_matrix(yaml_file, verbose=True, display=True)
+params = prepare_interaction_matrix_params(yaml_file)
+im = compute_interaction_matrix(params, verbose=True, display=True)
 
 # Generate an appropriate filename for the matrix
 filenames_by_type = generate_im_filenames(yaml_file)
