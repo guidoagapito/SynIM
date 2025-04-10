@@ -295,8 +295,6 @@ def prepare_interaction_matrix_params(params_file, wfs_type=None, wfs_index=None
     if np.size(wfs_magnification) == 1:
         wfs_magnification = [wfs_magnification, wfs_magnification]
     
-    print('wfs_params',wfs_params)
-    
     # Load SubapData for valid subapertures if available
     idx_valid_sa = None
     if 'subap_object' in wfs_params or 'subapdata_tag' in wfs_params:
@@ -309,7 +307,7 @@ def prepare_interaction_matrix_params(params_file, wfs_type=None, wfs_index=None
         subap_path = cm.filename('subap_data', subap_tag)
         if os.path.exists(subap_path):
             subap_data = SubapData.restore(subap_path)
-            idx_valid_sa = subap_data.idx_valid_sa
+            idx_valid_sa = np.transpose(np.asarray(np.where(subap_data.single_mask())))
     
     # If we don't have idx_valid_sa from the file, calculate an estimate
     if idx_valid_sa is None:
