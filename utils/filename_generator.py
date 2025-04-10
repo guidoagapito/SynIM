@@ -106,7 +106,7 @@ def generate_im_filenames(config_file, timestamp=False):
     simple_config = is_simple_config(config)
     
     # Basic system info
-    instrument = 'IM'#os.path.basename(config_file).split('.')[0].split('_')[0].upper()
+    base_name = 'IM_syn'
     
     # Pupil parameters
     pupil_params = {}
@@ -173,7 +173,7 @@ def generate_im_filenames(config_file, timestamp=False):
         
         # Build filename parts
         parts = []
-        parts.append(instrument)
+        parts.append(base_name)
         
         if source_info:
             if 'pol_coords' in source_info:
@@ -231,7 +231,7 @@ def generate_im_filenames(config_file, timestamp=False):
                     # Process each DM with this WFS
                     for dm in dm_list:
                         parts = []
-                        parts.append(instrument)
+                        parts.append(base_name)
                         
                         # Source parameters
                         source = config[source_key]
@@ -289,7 +289,7 @@ def generate_im_filenames(config_file, timestamp=False):
                     # Process each DM with this WFS
                     for dm in dm_list:
                         parts = []
-                        parts.append(instrument)
+                        parts.append(base_name)
                         
                         # Source parameters
                         source = config[source_key]
@@ -344,7 +344,7 @@ def generate_im_filenames(config_file, timestamp=False):
                     # Process each DM with this WFS
                     for dm in dm_list:
                         parts = []
-                        parts.append(instrument)
+                        parts.append(base_name)
                         
                         # Source parameters
                         source = config[source_key]
