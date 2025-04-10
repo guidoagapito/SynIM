@@ -190,11 +190,7 @@ def prepare_interaction_matrix_params(params_file, wfs_type=None, wfs_index=None
     # Try to find the specified WFS - ora cerca anche 'sh' o 'pyramid'
     # Expanded WFS search to include standard SPECULA sections
     wfs_keys = []
-    
-    # First, look for sections starting with 'wfs'
-    wfs_sections = [key for key in params if key.startswith('wfs')]
-    wfs_keys.extend(wfs_sections)
-    
+      
     # Look for 'sh' and 'pyramid' sections
     if 'sh' in params:
         print("      Found 'sh' section in YAML file.")
@@ -207,6 +203,12 @@ def prepare_interaction_matrix_params(params_file, wfs_type=None, wfs_index=None
     for key in params:
         if key.startswith('sh_') or key.startswith('pyramid_'):
             print(f"      Found '{key}' section in YAML file.")
+            wfs_keys.append(key)
+
+    # Look for sections starting with wfs
+    for key in params:
+        if key.startswith('wfs'):
+            print(f"      Found '{key}' section in the configuration file.")
             wfs_keys.append(key)
     
     # Process specific wfs_type if provided
@@ -292,6 +294,8 @@ def prepare_interaction_matrix_params(params_file, wfs_type=None, wfs_index=None
         wfs_magnification = 1.0
     if np.size(wfs_magnification) == 1:
         wfs_magnification = [wfs_magnification, wfs_magnification]
+    
+    print('wfs_params',wfs_params)
     
     # Load SubapData for valid subapertures if available
     idx_valid_sa = None
