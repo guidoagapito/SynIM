@@ -465,12 +465,12 @@ def parse_params_file(file_path):
     else:
         raise ValueError(f"Unsupported file format: {file_path}")
 
-def compute_interaction_matrix(yaml_file, wfs_type=None, wfs_index=None, dm_index=None, verbose=False, display=False):
+def compute_interaction_matrix(params, wfs_type=None, wfs_index=None, dm_index=None, verbose=False, display=False):
     """
     Calculates the interaction matrix for SynIM directly from a SPECULA YAML configuration file.
     
     Args:
-        yaml_file (str): Path to the YAML configuration file
+        params (obj): dictionary with configuration
         wfs_type (str, optional): Type of WFS ('lgs', 'ngs', or 'ref')
         wfs_index (int, optional): Index of the WFS to use (1-based)
         dm_index (int, optional): Index of the DM to use (1-based)
@@ -480,16 +480,10 @@ def compute_interaction_matrix(yaml_file, wfs_type=None, wfs_index=None, dm_inde
     Returns:
         tuple: (interaction matrix, parameters used)
     """
-    params = prepare_interaction_matrix_params(
-        yaml_file, 
-        wfs_type=wfs_type, 
-        wfs_index=wfs_index, 
-        dm_index=dm_index
-    )
+
     
     if verbose:
         print("Interaction Matrix Parameters:")
-        print(f"      YAML file: {yaml_file}")
         print(f"      Calculating IM for WFS: {params['wfs_key']} with DM: {params['dm_key']}")
         print(f"      WFS type: {params['wfs_type']}, subapertures: {params['wfs_nsubaps']}")
         print(f"      Valid subapertures shape: {params['idx_valid_sa'].shape}")
@@ -547,4 +541,4 @@ def compute_interaction_matrix(yaml_file, wfs_type=None, wfs_index=None, dm_inde
         display=display
     )
     
-    return im, params
+    return im
