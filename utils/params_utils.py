@@ -43,9 +43,12 @@ def prepare_interaction_matrix_params(params_file, wfs_type=None, wfs_index=None
     pup_mask = None
     if 'pupilstop' in params:
         pupilstop_params = params['pupilstop']
-        if 'object' in pupilstop_params:
+        if 'object' in pupilstop_params or 'pupil_mask_tag' in pupilstop_params:
             # Load pupilstop from file
-            pupilstop_tag = pupilstop_params['object']
+            if 'pupil_mask_tag' in pupilstop_params:
+                pupilstop_tag = pupilstop_params['pupil_mask_tag']
+            else:
+                pupilstop_tag = pupilstop_params['object']
             pupilstop_path = cm.filename('pupilstop', pupilstop_tag)
             pupilstop = Pupilstop.restore(pupilstop_path)
             pup_mask = pupilstop.A  # Use the amplitude attribute of Pupilstop
@@ -110,10 +113,11 @@ def prepare_interaction_matrix_params(params_file, wfs_type=None, wfs_index=None
     dm_array = None
     dm_mask = None
     if 'ifunc_object' in dm_params or 'ifunc_tag' in dm_params:
-        print("     Loading influence function from file, tag:", dm_params['ifunc_object'])
         if 'ifunc_tag' in dm_params:
+            print("     Loading influence function from file, tag:", dm_params['ifunc_tag'])
             ifunc_tag = dm_params['ifunc_tag']
         else:
+            print("     Loading influence function from file, tag:", dm_params['ifunc_object'])
             ifunc_tag = dm_params['ifunc_object']
         ifunc_path = cm.filename('ifunc', ifunc_tag)
         ifunc = IFunc.restore(ifunc_path)
@@ -292,9 +296,11 @@ def prepare_interaction_matrix_params(params_file, wfs_type=None, wfs_index=None
     # Load SubapData for valid subapertures if available
     idx_valid_sa = None
     if 'subap_object' in wfs_params or 'subapdata_tag' in wfs_params:
-        if 'su bapdata_tag' in wfs_params:
+        if 'subapdata_tag' in wfs_params:
+            print("     Loading subapdata from file, tag:", wfs_params['subapdata_tag'])
             subap_tag = wfs_params['subapdata_tag']
         else:
+            print("     Loading subapdata from file, tag:", wfs_params['subap_object'])
             subap_tag = wfs_params['subap_object']
         subap_path = cm.filename('subap_data', subap_tag)
         if os.path.exists(subap_path):
