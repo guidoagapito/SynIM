@@ -1,4 +1,5 @@
 import os
+import re
 import yaml
 import numpy as np
 import synim
@@ -12,12 +13,12 @@ from specula.data_objects.ifunc import IFunc
 from specula.data_objects.pupilstop import Pupilstop
 from specula.data_objects.subap_data import SubapData
 
-def prepare_interaction_matrix_params(yaml_file, wfs_type=None, wfs_index=None, dm_index=None):
+def prepare_interaction_matrix_params(params_file, wfs_type=None, wfs_index=None, dm_index=None):
     """
     Prepares parameters for synim.interaction_matrix from a SPECULA YAML configuration file.
     
     Args:
-        yaml_file (str): Path to the YAML configuration file
+        params_file (str): Path to the YAML or PRO configuration file
         wfs_type (str, optional): Type of WFS ('lgs', 'ngs', or 'ref')
         wfs_index (int, optional): Index of the WFS to use (1-based)
         dm_index (int, optional): Index of the DM to use (1-based)
@@ -25,9 +26,9 @@ def prepare_interaction_matrix_params(yaml_file, wfs_type=None, wfs_index=None, 
     Returns:
         dict: Parameters ready to be passed to synim.interaction_matrix
     """
-    # Load the YAML file
-    with open(yaml_file, 'r') as stream:
-        params = yaml.safe_load(stream)
+    # Load the YAML or PRO file
+    
+    params = parse_params_file(params_file)
     
     # Prepare the CalibManager
     main_params = params['main']
@@ -365,6 +366,72 @@ def prepare_interaction_matrix_params(yaml_file, wfs_type=None, wfs_index=None, 
         'idx_valid_sa': idx_valid_sa,
         'dm_key': dm_key
     }
+
+def parse_pro_file(pro_file_path):
+    """
+    Parse a .pro file and extract its structure into a Python dictionary.
+
+    Args:
+        pro_file_path (str): Path to the .pro file.
+
+    Returns:
+        dict: Parsed data as a dictionary.
+    """
+    data = {}
+    current_section = None
+
+    with open(pro_file_path, 'r') as file:
+        for line in file:
+            # Ignore comments and empty lines
+            line = line.strip()
+            if not line or line.startswith(';'):
+                continue
+
+            # Match section headers (e.g., {main}, {DM})
+            section_match = re.match(r'^\{(\w+)\}', line)
+            if section_match:
+                current_section = section_match.group(1).lower()
+                data[current_section] = {}
+                continue
+
+            # Match key-value pairs (e.g., key: value or key = value)
+            if current_section:
+                key_value_match = re.match(r'(\w+)\s*[:=]\s*(.+)', line)
+                if key_value_match:
+                    key = key_value_match.group(1).strip()
+                    value = key_value_match.group(2).strip()
+
+                    # Convert value to the appropriate type
+                    if value.lower() in ['true', 'false']:
+                        value = value.lower() == 'true'
+                    elif re.match(r'^-?\d+(\.\d+)?$', value):  # Integer or float
+                        value = float(value) if '.' in value else int(value)
+                    elif re.match(r'^\[.*\]$', value):  # List
+                        value = eval(value)  # Use eval to parse the list
+                    elif value.lower() == '!values.f_infinity':  # Handle special cases
+                        value = float('inf')
+
+                    data[current_section][key] = value
+
+    return data
+
+def parse_params_file(file_path):
+    """
+    Parse a parameters file (YAML or .pro) and return its contents as a dictionary.
+
+    Args:
+        file_path (str): Path to the parameters file.
+
+    Returns:
+        dict: Parsed data as a dictionary.
+    """
+    if file_path.endswith('.yml') or file_path.endswith('.yaml'):
+        with open(file_path, 'r') as file:
+            return yaml.safe_load(file)
+    elif file_path.endswith('.pro'):
+        return parse_pro_file(file_path)
+    else:
+        raise ValueError(f"Unsupported file format: {file_path}")
 
 def compute_interaction_matrix(yaml_file, wfs_type=None, wfs_index=None, dm_index=None, verbose=False, display=False):
     """
