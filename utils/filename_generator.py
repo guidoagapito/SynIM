@@ -201,13 +201,24 @@ def generate_im_filenames(config_file, timestamp=False):
             mod_amp = wfs_params.get('mod_amp', 0)
             fov = wfs_params.get('fov', 0)
             parts.append(f"pyr{pup_diam:.1f}_wl{wl}_fv{fov:.1f}_ma{mod_amp:.1f}")
-        
+
         if dm_params:
             height = dm_params.get('height', 0)
-            nmodes = dm_params.get('nmodes', 0)
-            dm_type = dm_params.get('type', 'zernike')
-            parts.append(f"dmH{height}_nm{nmodes}_{dm_type}")
-        
+            parts.append(f"dmH{height}")
+            
+            # Check for custom influence functions
+            if 'ifunc_tag' in config['dm']:
+                parts.append(f"ifunc_{config['dm']['ifunc_tag']}")
+            elif 'ifunc_object' in config['dm']:
+                parts.append(f"ifunc_{config['dm']['ifunc_object']}")
+            elif 'type_str' in config['dm']:
+                nmodes = dm_params.get('nmodes', 0)
+                parts.append(f"nm{nmodes}_{dm_params['type']}")
+            else:
+                # Default case
+                nmodes = dm_params.get('nmodes', 0)
+                parts.append(f"nm{nmodes}")
+
         # Add timestamp if requested
         if timestamp:
             ts = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
@@ -258,13 +269,25 @@ def generate_im_filenames(config_file, timestamp=False):
                         fov = wfs_config.get('subap_wanted_fov', 0)
                         npx = wfs_config.get('subap_npx', 0)
                         parts.append(f"sh{nsubaps}x{nsubaps}_wl{wl}_fv{fov:.1f}_np{npx}")
-                        
+
                         # DM parameters
                         dm_config = dm['config']
                         height = dm_config.get('height', 0)
-                        nmodes = dm_config.get('nmodes', 0)
-                        parts.append(f"dmH{height}_nm{nmodes}")
-                        
+                        parts.append(f"dmH{height}")
+
+                        # Check for custom influence functions
+                        if 'ifunc_tag' in dm_config:
+                            parts.append(f"ifunc_{dm_config['ifunc_tag']}")
+                        elif 'ifunc_object' in dm_config:
+                            parts.append(f"ifunc_{dm_config['ifunc_object']}")
+                        elif 'type_str' in dm_config:
+                            nmodes = dm_config.get('nmodes', 0)
+                            parts.append(f"nm{nmodes}_{dm_config['type_str']}")
+                        else:
+                            # Default case
+                            nmodes = dm_config.get('nmodes', 0)
+                            parts.append(f"nm{nmodes}")
+
                         # Add WFS and DM indices to make filename unique
                         #parts.append(f"lgs{idx}_dm{dm['index']}")
                         
