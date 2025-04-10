@@ -6,7 +6,7 @@ from scipy.interpolate import griddata
 from scipy.ndimage import rotate, shift, zoom, convolve
 from functools import lru_cache
 import matplotlib.pyplot as plt
-from scipy.ndimage import affine_transform
+from scipy.ndimage import affine_transform, binary_dilation
 
 def rebin(array, new_shape, method='average'):
     """
@@ -376,14 +376,22 @@ def compute_derivatives_with_extrapolation(data,mask=None):
 
     if mask is not None:
         # Get edge pixels and references
-        #edge_pixels, references = extrapolate_edge_indices(mask)
-        #for i in range(data.shape[2]):
-        #    data[:,:,i] = extrapolate_phase_linear(data[:,:,i], mask, edge_pixels, references, iterations=1)   
-        (sum_1pix_extra,sum_2pix_extra,idx_1pix,idxExtraPol2) = extrapolate_edge_pixel_mat_define(mask, do_ext_2_pix=True)
+        # #edge_pixels, references = extrapolate_edge_indices(mask)
+        # #for i in range(data.shape[2]):
+        # #    data[:,:,i] = extrapolate_phase_linear(data[:,:,i], mask, edge_pixels, references, iterations=1)
+        # #(sum_1pix_extra,sum_2pix_extra,idx_1pix,idxExtraPol2) = extrapolate_edge_pixel_mat_define(mask, do_ext_2_pix=True)
+        # for i in range(data.shape[2]):
+        #     #data[:,:,i] = extrapolate_edge_pixel(data[:,:,i], sum_1pix_extra, sum_2pix_extra, idx_1pix, idxExtraPol2, out=None, xp=np)
+        #     data[:,:,i] = extrapolate_with_distance_transform(data[:,:,i], mask, debug=True)
+        # Calculate indices and coefficients for extrapolation
+        edge_pixels, reference_indices, coefficients = calculate_extrapolation_indices_coeffs(
+            mask, debug=True, debug_pixels=None)
         for i in range(data.shape[2]):
-            data[:,:,i] = extrapolate_edge_pixel(data[:,:,i], sum_1pix_extra, sum_2pix_extra, idx_1pix, idxExtraPol2, out=None, xp=np)
+            # Apply extrapolation
+            data[:,:,i] = apply_extrapolation(data[:,:,i], edge_pixels, reference_indices, coefficients, 
+                                              debug=True, problem_indices=None)
         print('Using extrapolation to compute derivatives.')
-          
+
     # Compute x derivative
     dx = np.gradient(data, axis=(1), edge_order=1)
     
@@ -411,6 +419,215 @@ def integrate_derivatives(dx, dy):
     integrated_y = np.cumsum(dy, axis=0)
 
     return integrated_x, integrated_y
+
+# Labels for the extrapolation directions
+directions_labels = ['Down (y+1)', 'Up (y-1)', 'Right (x+1)', 'Left (x-1)']
+
+def calculate_extrapolation_indices_coeffs(mask, debug=False, debug_pixels=None):
+    """
+    Calculates indices and coefficients for extrapolating edge pixels of a mask.
+
+    Parameters:
+        mask (ndarray): Binary mask (True/1 inside, False/0 outside).
+        debug (bool): If True, displays debug information and plots.
+        debug_pixels (list): List of [y, x] coordinates for detailed debug output.
+
+    Returns:
+        tuple: (edge_pixels, reference_indices, coefficients)
+            - edge_pixels: Linear indices of the edge pixels to extrapolate.
+            - reference_indices: Array of reference pixel indices for extrapolation.
+            - coefficients: Coefficients for linear extrapolation.
+    """
+    
+    # Convert the mask to boolean
+    binary_mask = mask.astype(bool)
+    
+    # Identify edge pixels (outside but adjacent to the mask) using binary dilation
+    dilated_mask = binary_dilation(binary_mask)
+    edge_pixels = np.where(dilated_mask & ~binary_mask)
+    edge_pixels_linear = np.ravel_multi_index(edge_pixels, mask.shape)
+    
+    if debug:
+        print(f"Found {len(edge_pixels[0])} edge pixels to extrapolate.")
+        
+        # Plot the original mask and the edge pixels
+        plt.figure(figsize=(10, 4))
+        plt.subplot(121)
+        plt.imshow(binary_mask, cmap='gray', interpolation='nearest')
+        plt.title('Original Mask')
+        
+        plt.subplot(122)
+        edge_mask = np.zeros_like(binary_mask)
+        edge_mask[edge_pixels] = 1
+        plt.imshow(binary_mask, cmap='gray', alpha=0.5, interpolation='nearest')
+        plt.imshow(edge_mask, cmap='hot', alpha=0.5, interpolation='nearest')
+        plt.title('Edge Pixels to Extrapolate (red)')
+        plt.tight_layout()
+        plt.show()
+    
+    # Preallocate arrays for reference indices and coefficients
+    reference_indices = np.full((len(edge_pixels[0]), 8), -1, dtype=np.int32)
+    coefficients = np.zeros((len(edge_pixels[0]), 8), dtype=np.float32)
+    
+    # Directions for extrapolation (y+1, y-1, x+1, x-1)
+    directions = [
+        (1, 0),  # y+1 (down)
+        (-1, 0), # y-1 (up)
+        (0, 1),  # x+1 (right)
+        (0, -1)  # x-1 (left)
+    ]
+    
+    # Iterate over each edge pixel
+    problem_indices = []
+    for i, (y, x) in enumerate(zip(*edge_pixels)):
+        # Check if this pixel is in the debug list
+        is_debug_pixel = False
+        if debug_pixels is not None:
+            for p in debug_pixels:
+                if p[0] == y and p[1] == x:
+                    is_debug_pixel = True
+                    break
+        
+        valid_directions = 0
+        
+        if is_debug_pixel:
+            print(f"\n[DEBUG] Detailed analysis for pixel [{y},{x}]:")
+        
+        # Examine the 4 directions
+        for dir_idx, (dy, dx) in enumerate(directions):
+            # Coordinates of reference points at distance 1 and 2
+            y1, x1 = y + dy, x + dx
+            y2, x2 = y + 2*dy, x + 2*dx
+
+            # Check if the points are valid (inside the image and inside the mask)
+            valid_ref1 = (0 <= y1 < mask.shape[0] and 
+                          0 <= x1 < mask.shape[1] and 
+                          binary_mask[y1, x1])
+                          
+            valid_ref2 = (0 <= y2 < mask.shape[0] and 
+                          0 <= x2 < mask.shape[1] and 
+                          binary_mask[y2, x2])
+
+            if is_debug_pixel:
+                print(f"  Direction {directions_labels[dir_idx]}: ")
+                print(f"    Ref1 [{y1},{x1}] valid: {valid_ref1}")
+                print(f"    Ref2 [{y2},{x2}] valid: {valid_ref2}")
+
+            if valid_ref1:
+                # Index of the first reference point (linear index)
+                ref_idx1 = y1 * mask.shape[1] + x1
+                reference_indices[i, 2*dir_idx] = ref_idx1
+
+                if valid_ref2:
+                    # Index of the second reference point (linear index)
+                    ref_idx2 = y2 * mask.shape[1] + x2
+                    reference_indices[i, 2*dir_idx + 1] = ref_idx2
+
+                    # Coefficients for linear extrapolation: 2*P₁ - P₂
+                    coefficients[i, 2*dir_idx] = 2.0
+                    coefficients[i, 2*dir_idx + 1] = -1.0
+                    valid_directions += 1
+
+                    if is_debug_pixel:
+                        print(f"    Using extrapolation: 2*{ref_idx1} - {ref_idx2}")
+                else:
+                    # If the second point is invalid, check if it's the only valid pixel
+                    if valid_directions == 0:
+                        coefficients[i, 2*dir_idx] = 1.0
+                        valid_directions += 1
+                        if is_debug_pixel:
+                            print(f"    Using first ref value: {ref_idx1} (only valid pixel)")
+                    else:
+                        # Set coefficients to 0
+                        coefficients[i, 2*dir_idx] = 0.0
+                        coefficients[i, 2*dir_idx + 1] = 0.0
+            else:
+                # Set coefficients to 0 if the first reference is invalid
+                coefficients[i, 2*dir_idx] = 0.0
+                coefficients[i, 2*dir_idx + 1] = 0.0
+        
+        # Normalize coefficients based on the number of valid directions
+        if valid_directions > 1:
+            factor = 1.0 / valid_directions
+            
+            if is_debug_pixel:
+                print(f"  Valid directions: {valid_directions}, factor: {factor}")
+                print("  Coefficients before normalization:", coefficients[i])
+            
+            for dir_idx in range(4):
+                if coefficients[i, 2*dir_idx] != 0:
+                    coefficients[i, 2*dir_idx] *= factor
+                    if coefficients[i, 2*dir_idx + 1] != 0:
+                        coefficients[i, 2*dir_idx + 1] *= factor
+            
+            if is_debug_pixel:
+                print("  Coefficients after normalization:", coefficients[i])
+                problem_indices.append(i)
+
+    if debug:
+        print(f"Average valid directions per pixel: {np.sum(coefficients != 0) / (len(edge_pixels[0]) * 2):.2f}")
+        
+        # Display coefficient matrix for the first 10 pixels
+        if len(edge_pixels[0]) >= 10:
+            print("\nCoefficients for the first 10 pixels:")
+            for i in range(min(10, len(edge_pixels[0]))):
+                print(f"Pixel {i} ({edge_pixels[0][i]}, {edge_pixels[1][i]}): {coefficients[i]}")
+                print(f"Indices: {reference_indices[i]}")
+    
+    return edge_pixels_linear, reference_indices, coefficients
+
+def apply_extrapolation(data, edge_pixels, reference_indices, coefficients, debug=False, problem_indices=None):
+    """
+    Applies linear extrapolation to edge pixels using precalculated indices and coefficients.
+
+    Parameters:
+        data (ndarray): Input array to extrapolate.
+        edge_pixels (ndarray): Linear indices of edge pixels to extrapolate.
+        reference_indices (ndarray): Indices of reference pixels.
+        coefficients (ndarray): Coefficients for linear extrapolation.
+        debug (bool): If True, displays debug information.
+        problem_indices (list): Indices of problematic pixels to analyze.
+
+    Returns:
+        ndarray: Array with extrapolated pixels.
+    """
+    # Create a copy of the input array
+    result = data.copy()
+    flat_result = result.ravel()
+    flat_data = data.ravel()
+    
+    # Iterate over each edge pixel
+    for i, edge_idx in enumerate(edge_pixels):
+        is_problem_pixel = problem_indices is not None and i in problem_indices
+        
+        # Compute the 2D coordinates of the pixel
+        edge_y = edge_idx // data.shape[1]
+        edge_x = edge_idx % data.shape[1]
+        
+        if is_problem_pixel:
+            print(f"\n[DEBUG] Calculating extrapolated value for pixel [{edge_y},{edge_x}]:")
+            print(f"  Original value: {flat_data[edge_idx]}")
+        
+        # Initialize the extrapolated value
+        extrap_value = 0.0
+        
+        # Sum contributions from all references
+        for j in range(reference_indices.shape[1]):
+            ref_idx = reference_indices[i, j]
+            if ref_idx >= 0:  # If the index is valid
+                ref_y = ref_idx // data.shape[1]
+                ref_x = ref_idx % data.shape[1]
+                contrib = coefficients[i, j] * flat_data[ref_idx]
+                extrap_value += contrib
+                
+                if is_problem_pixel:
+                    print(f"  Ref [{ref_y},{ref_x}] = {flat_data[ref_idx]} × {coefficients[i, j]:.4f} = {contrib:.4f}")
+        
+        # Assign the extrapolated value
+        flat_result[edge_idx] = extrap_value
+
+    
+    return result
 
 def extrapolate_edge_pixel_mat_define(mask, do_ext_2_pix=False):
     '''Python version of the equivalent oaa_lib routine,
