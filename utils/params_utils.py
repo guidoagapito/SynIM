@@ -422,6 +422,10 @@ def parse_pro_file(pro_file_path):
                     if value.endswith(','):
                         value = value[:-1].strip()
 
+                    # Rimuovi apici singoli attorno alle stringhe
+                    if value.startswith("'") and value.endswith("'"):
+                        value = value[1:-1]
+
                     # Interpreta i tipi di valore
                     if value.lower() in ['true', 'false']:
                         value = value.lower() == 'true'
