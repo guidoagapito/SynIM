@@ -797,7 +797,7 @@ def rotshiftzoom_array(input_array, dm_translation=(0.0, 0.0), dm_rotation=0.0, 
     return output
 
 def interaction_matrix(pup_diam_m,pup_mask,dm_array,dm_mask,dm_height,dm_rotation,wfs_nsubaps,wfs_rotation,wfs_translation,wfs_magnification,
-                       gs_pol_coo,gs_height,idx_valid_sa=None,verbose=False,display=False):
+                       wfs_fov_arcsec,gs_pol_coo,gs_height,idx_valid_sa=None,verbose=False,display=False):
     """
     Computes a single interaction matrix.
     From Guido Agapito.
@@ -813,6 +813,7 @@ def interaction_matrix(pup_diam_m,pup_mask,dm_array,dm_mask,dm_height,dm_rotatio
     - wfs_rotation
     - wfs_translation
     - wfs_magnification
+    - wfs_fov_arcsec: float, field of view of the wavefront sensor in arcsec
     - gs_pol_coo: tuple, polar coordinates of the gudie star radius in arcsec and angle in deg
     - gs_height: float, altitude of the guide star
     - idx_valid_sa: numpy 1D array, indices of the valid sub-apertures
