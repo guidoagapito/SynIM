@@ -290,6 +290,7 @@ def prepare_interaction_matrix_params(params_file, wfs_type=None, wfs_index=None
     wfs_rotation = wfs_params.get('rotation', 0.0)
     wfs_translation = wfs_params.get('translation', [0.0, 0.0])
     wfs_magnification = wfs_params.get('magnification', 1.0)
+    wfs_fov_arcsec = wfs_params.get('fov', 0)
     if np.isnan(wfs_magnification):
         wfs_magnification = 1.0
     if np.size(wfs_magnification) == 1:
@@ -375,6 +376,7 @@ def prepare_interaction_matrix_params(params_file, wfs_type=None, wfs_index=None
         'wfs_rotation': wfs_rotation,
         'wfs_translation': wfs_translation,
         'wfs_magnification': wfs_magnification,
+        'wfs_fov_arcsec': wfs_fov_arcsec,
         'gs_pol_coo': gs_pol_coo,
         'gs_height': gs_height,
         'idx_valid_sa': idx_valid_sa,
@@ -534,6 +536,7 @@ def compute_interaction_matrix(params, wfs_type=None, wfs_index=None, dm_index=N
         wfs_rotation=params['wfs_rotation'],
         wfs_translation=params['wfs_translation'],
         wfs_magnification=params['wfs_magnification'],
+        wfs_fov_arcsec=params['wfs_fov_arcsec'],
         gs_pol_coo=params['gs_pol_coo'],
         gs_height=params['gs_height'],
         idx_valid_sa=params['idx_valid_sa'],

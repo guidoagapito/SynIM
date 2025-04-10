@@ -936,7 +936,12 @@ def interaction_matrix(pup_diam_m,pup_mask,dm_array,dm_mask,dm_height,dm_rotatio
 
     im = np.concatenate((WFS_signal_x_2D, WFS_signal_y_2D))
 
-    # TODO missing normalization!
+    # Here we consider the DM RMS normalized to 1 nm
+    # Conversion from nm to arcsec
+    coeff = 4e-9/(pup_diam_m/wfs_nsubaps) * 206265
+    # Conversion from srcsec to slope
+    coeff *= 1/(0.5 * wfs_fov_arcsec)
+    im = im * coeff
 
     if verbose:
         print('WFS signals reformed.')
