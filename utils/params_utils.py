@@ -109,9 +109,12 @@ def prepare_interaction_matrix_params(params_file, wfs_type=None, wfs_index=None
     # Load influence functions
     dm_array = None
     dm_mask = None
-    if 'ifunc_object' in dm_params:
+    if 'ifunc_object' in dm_params or 'ifunc_tag' in dm_params:
         print("     Loading influence function from file, tag:", dm_params['ifunc_object'])
-        ifunc_tag = dm_params['ifunc_object']
+        if 'ifunc_tag' in dm_params:
+            ifunc_tag = dm_params['ifunc_tag']
+        else:
+            ifunc_tag = dm_params['ifunc_object']
         ifunc_path = cm.filename('ifunc', ifunc_tag)
         ifunc = IFunc.restore(ifunc_path)
         
@@ -288,8 +291,11 @@ def prepare_interaction_matrix_params(params_file, wfs_type=None, wfs_index=None
     
     # Load SubapData for valid subapertures if available
     idx_valid_sa = None
-    if 'subap_object' in wfs_params:
-        subap_tag = wfs_params['subap_object']
+    if 'subap_object' in wfs_params or 'subapdata_tag' in wfs_params:
+        if 'su bapdata_tag' in wfs_params:
+            subap_tag = wfs_params['subapdata_tag']
+        else:
+            subap_tag = wfs_params['subap_object']
         subap_path = cm.filename('subap_data', subap_tag)
         if os.path.exists(subap_path):
             subap_data = SubapData.restore(subap_path)
@@ -382,33 +388,47 @@ def parse_pro_file(pro_file_path):
 
     with open(pro_file_path, 'r') as file:
         for line in file:
-            # Ignore comments and empty lines
-            line = line.strip()
-            if not line or line.startswith(';'):
+            # Rimuovi commenti e spazi bianchi
+            line = line.split(';')[0].strip()
+            if not line:
                 continue
 
-            # Match section headers (e.g., {main}, {DM})
-            section_match = re.match(r'^\{(\w+)\}', line)
+            # Riconosci l'inizio di una nuova sezione (e.g., {main, {DM, etc.)
+            section_match = re.match(r'^\{(\w+),', line)
             if section_match:
                 current_section = section_match.group(1).lower()
                 data[current_section] = {}
                 continue
 
-            # Match key-value pairs (e.g., key: value or key = value)
+            # Riconosci la fine di una sezione
+            if line == '}':
+                current_section = None
+                continue
+
+            # Se siamo in una sezione, processa le coppie chiave-valore
             if current_section:
                 key_value_match = re.match(r'(\w+)\s*[:=]\s*(.+)', line)
                 if key_value_match:
                     key = key_value_match.group(1).strip()
                     value = key_value_match.group(2).strip()
 
-                    # Convert value to the appropriate type
+                    # Rimuovi eventuali virgole finali
+                    if value.endswith(','):
+                        value = value[:-1].strip()
+
+                    # Interpreta i tipi di valore
                     if value.lower() in ['true', 'false']:
                         value = value.lower() == 'true'
-                    elif re.match(r'^-?\d+(\.\d+)?$', value):  # Integer or float
+                    elif re.match(r'^-?\d+(\.\d+)?$', value):  # Intero o float
                         value = float(value) if '.' in value else int(value)
-                    elif re.match(r'^\[.*\]$', value):  # List
-                        value = eval(value)  # Use eval to parse the list
-                    elif value.lower() == '!values.f_infinity':  # Handle special cases
+                    elif re.match(r'^\[.*\]$', value):  # Lista
+                        value = eval(value)  # Usa eval per interpretare la lista
+                    elif re.match(r'^[\d\.]+/[^\s]+$', value):  # Espressione matematica (e.g., 8.118/160)
+                        try:
+                            value = eval(value)
+                        except Exception:
+                            pass
+                    elif value.lower() == '!values.f_infinity':  # Caso speciale per infinito
                         value = float('inf')
 
                     data[current_section][key] = value
