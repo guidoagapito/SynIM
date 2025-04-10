@@ -2,6 +2,7 @@ import os
 import yaml
 import datetime
 import re
+from utils.params_utils import parse_params_file
 
 def extract_wfs_list(config):
     """Extract all WFS configurations from config"""
@@ -98,9 +99,8 @@ def is_simple_config(config):
 def generate_im_filenames(config_file, timestamp=False):
     """Generate interaction matrix filenames for all WFS-DM combinations, grouped by star type"""
     
-    # Load YAML configuration
-    with open(config_file, 'r') as f:
-        config = yaml.safe_load(f)
+    # Load YAML or PRO configuration
+    config = parse_params_file(config_file)
     
     # Detect if simple or complex configuration
     simple_config = is_simple_config(config)
