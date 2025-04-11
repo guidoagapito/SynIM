@@ -9,11 +9,13 @@ specula.init(device_idx=-1, precision=1)
 
 from specula.data_objects.intmat import Intmat
 
+# -------------------------------------------------------------------
 # Get the path to the specula package's __init__.py file
 specula_init_path = specula.__file__
 # Navigate up to repository root
 specula_package_dir = os.path.dirname(specula_init_path)
 specula_repo_path = os.path.dirname(specula_package_dir)
+
 
 # Path to the YAML configuration file and output directory
 # The path to the YAML file is determined by the specula module
@@ -24,14 +26,12 @@ output_im_dir = os.path.join(specula_repo_path, "main", "scao", "calib", "SCAO",
 output_rec_dir = os.path.join(specula_repo_path, "main", "scao", "calib", "SCAO", "rec")
 print(f"Output directory: {output_im_dir}")
 
+# -------------------------------------------------------------------
 # Make sure the output directory exists
 os.makedirs(output_im_dir, exist_ok=True)
 os.makedirs(output_rec_dir, exist_ok=True)
 
-# Calculate the interaction matrix
-params = prepare_interaction_matrix_params(yaml_file)
-im = compute_interaction_matrix(params, verbose=True, display=True)
-
+# -------------------------------------------------------------------
 # Generate an appropriate filename for the matrix
 filenames_by_type = generate_im_filenames(yaml_file)
 
@@ -53,6 +53,20 @@ rec_path = os.path.join(output_rec_dir, rec_filename)
 
 print(f"Generated IM filename: {im_filename}")
 print(f"Generated REC filename: {rec_filename}")
+# -------------------------------------------------------------------
+
+# Calculate the interaction matrix
+params = prepare_interaction_matrix_params(yaml_file)
+im = compute_interaction_matrix(params, verbose=True, display=True)
+
+# transpose to be coherent with the specula convention
+im = im.transpose()
+# change x and y to be coherent with the specula convention
+print('im.shape',im.shape)
+right_half = im[:, int(im.shape[1] / 2):]
+left_half = im[:, :int(im.shape[1] / 2)]
+im = np.concatenate((right_half, left_half), axis=1)
+print('im.shape',im.shape)
 
 # Create the Intmat object
 # Extract WFS type info for pupdata_tag
@@ -71,6 +85,7 @@ intmat_obj = Intmat(
 # Save the interaction matrix
 intmat_obj.save(im_path)
 print(f"Interaction matrix saved as: {im_path}")
+# -------------------------------------------------------------------
 
 # Generate and save the reconstruction matrix
 n_modes = params['dm_array'].shape[2] if len(params['dm_array'].shape) > 2 else 1
@@ -84,6 +99,7 @@ print(f"Interaction matrix dtype: {im.dtype}")
 print(f"Interaction matrix min: {im.min()}")
 print(f"Interaction matrix max: {im.max()}")
 print(f"Interaction matrix mean: {im.mean()}")
+# -------------------------------------------------------------------
 
 # Visualize the matrix
 plt.figure(figsize=(10, 8))
