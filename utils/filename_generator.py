@@ -4,6 +4,17 @@ import datetime
 import re
 from utils.params_utils import parse_params_file
 
+def wfs_fov_from_config(wfs_params):
+    if wfs_params.get('sensor_fov') is not None:
+        wfs_fov_arcsec = wfs_params['sensor_fov']
+    elif wfs_params.get('fov') is not None:
+        wfs_fov_arcsec = wfs_params['fov']
+    elif wfs_params.get('subap_wanted_fov') is not None:
+        wfs_fov_arcsec = wfs_params['subap_wanted_fov']
+    else:
+        wfs_fov_arcsec = 0
+    return wfs_fov_arcsec
+
 def extract_wfs_list(config):
     """Extract all WFS configurations from config"""
     wfs_list = []
@@ -138,14 +149,7 @@ def generate_im_filenames(config_file, timestamp=False):
         
         if 'pyramid' in config:
             wfs_type = 'pyr'
-            if wfs_params.get('sensor_fov') is not None:
-                wfs_fov_arcsec = wfs_params['sensor_fov']
-            elif wfs_params.get('fov') is not None:
-                wfs_fov_arcsec = wfs_params['fov']
-            elif wfs_params.get('subap_wanted_fov') is not None:
-                wfs_fov_arcsec = wfs_params['subap_wanted_fov']
-            else:
-                wfs_fov_arcsec = 0
+            wfs_fov_arcsec = wfs_fov_from_config(wfs_params)
             wfs_params = {
                 'pup_diam': config['pyramid'].get('pup_diam', 0),
                 'mod_amp': config['pyramid'].get('mod_amp', 0),
@@ -154,14 +158,7 @@ def generate_im_filenames(config_file, timestamp=False):
             }
         elif 'sh' in config:
             wfs_type = 'sh'
-            if wfs_params.get('sensor_fov') is not None:
-                wfs_fov_arcsec = wfs_params['sensor_fov']
-            elif wfs_params.get('fov') is not None:
-                wfs_fov_arcsec = wfs_params['fov']
-            elif wfs_params.get('subap_wanted_fov') is not None:
-                wfs_fov_arcsec = wfs_params['subap_wanted_fov']
-            else:
-                wfs_fov_arcsec = 0
+            wfs_fov_arcsec = wfs_fov_from_config(wfs_params)
             wfs_params = {
                 'nsubaps': config['sh'].get('subap_on_diameter', 0),
                 'wavelength': config['sh'].get('wavelengthInNm', 0),
@@ -206,14 +203,7 @@ def generate_im_filenames(config_file, timestamp=False):
         if wfs_type == 'sh':
             nsubaps = wfs_params.get('nsubaps', 0)
             wl = wfs_params.get('wavelength', 0)
-            if wfs_params.get('sensor_fov') is not None:
-                wfs_fov_arcsec = wfs_params['sensor_fov']
-            elif wfs_params.get('fov') is not None:
-                wfs_fov_arcsec = wfs_params['fov']
-            elif wfs_params.get('subap_wanted_fov') is not None:
-                wfs_fov_arcsec = wfs_params['subap_wanted_fov']
-            else:
-                wfs_fov_arcsec = 0            
+            wfs_fov_arcsec = wfs_fov_from_config(wfs_params)           
             npx = wfs_params.get('npx', 0)
             parts.append(f"sh{nsubaps}x{nsubaps}_wl{wl}_fv{wfs_fov_arcsec:.1f}_np{npx}")
         
@@ -295,7 +285,7 @@ def generate_im_filenames(config_file, timestamp=False):
                         wfs_config = config[wfs_key]
                         nsubaps = wfs_config.get('subap_on_diameter', 0)
                         wl = wfs_config.get('wavelengthInNm', 0)
-                        fov = wfs_config.get('subap_wanted_fov', 0)
+                        fov = wfs_fov_from_config(wfs_config)
                         npx = wfs_config.get('subap_npx', 0)
                         parts.append(f"sh{nsubaps}x{nsubaps}_wl{wl}_fv{fov:.1f}_np{npx}")
 
@@ -362,7 +352,7 @@ def generate_im_filenames(config_file, timestamp=False):
                         wfs_config = config[wfs_key]
                         nsubaps = wfs_config.get('subap_on_diameter', 0)
                         wl = wfs_config.get('wavelengthInNm', 0)
-                        fov = wfs_config.get('subap_wanted_fov', 0)
+                        fov = wfs_fov_from_config(wfs_config)
                         npx = wfs_config.get('subap_npx', 0)
                         parts.append(f"sh{nsubaps}x{nsubaps}_wl{wl}_fv{fov:.1f}_np{npx}")
                         
@@ -417,7 +407,7 @@ def generate_im_filenames(config_file, timestamp=False):
                         wfs_config = config[wfs_key]
                         nsubaps = wfs_config.get('subap_on_diameter', 0)
                         wl = wfs_config.get('wavelengthInNm', 0)
-                        fov = wfs_config.get('subap_wanted_fov', 0)
+                        fov = wfs_fov_from_config(wfs_config)
                         npx = wfs_config.get('subap_npx', 0)
                         parts.append(f"sh{nsubaps}x{nsubaps}_wl{wl}_fv{fov:.1f}_np{npx}")
                         
