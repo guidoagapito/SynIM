@@ -140,7 +140,7 @@ def generate_im_filenames(config_file, timestamp=False):
     
     # Extract all DM configurations
     dm_list = extract_dm_list(config)
-    
+
     # For simple configurations with on-axis source
     if simple_config:
         # Simple SCAO configuration
@@ -149,7 +149,7 @@ def generate_im_filenames(config_file, timestamp=False):
         
         if 'pyramid' in config:
             wfs_type = 'pyr'
-            wfs_fov_arcsec = wfs_fov_from_config(wfs_params)
+            wfs_fov_arcsec = wfs_fov_from_config(config['pyramid'])
             wfs_params = {
                 'pup_diam': config['pyramid'].get('pup_diam', 0),
                 'mod_amp': config['pyramid'].get('mod_amp', 0),
@@ -158,7 +158,7 @@ def generate_im_filenames(config_file, timestamp=False):
             }
         elif 'sh' in config:
             wfs_type = 'sh'
-            wfs_fov_arcsec = wfs_fov_from_config(wfs_params)
+            wfs_fov_arcsec = wfs_fov_from_config(config['sh'])
             wfs_params = {
                 'nsubaps': config['sh'].get('subap_on_diameter', 0),
                 'wavelength': config['sh'].get('wavelengthInNm', 0),
