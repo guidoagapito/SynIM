@@ -206,16 +206,30 @@ def generate_im_filenames(config_file, timestamp=False):
         if wfs_type == 'sh':
             nsubaps = wfs_params.get('nsubaps', 0)
             wl = wfs_params.get('wavelength', 0)
-            fov = wfs_params.get('fov', 0)
+            if wfs_params.get('sensor_fov') is not None:
+                wfs_fov_arcsec = wfs_params['sensor_fov']
+            elif wfs_params.get('fov') is not None:
+                wfs_fov_arcsec = wfs_params['fov']
+            elif wfs_params.get('subap_wanted_fov') is not None:
+                wfs_fov_arcsec = wfs_params['subap_wanted_fov']
+            else:
+                wfs_fov_arcsec = 0            
             npx = wfs_params.get('npx', 0)
-            parts.append(f"sh{nsubaps}x{nsubaps}_wl{wl}_fv{fov:.1f}_np{npx}")
+            parts.append(f"sh{nsubaps}x{nsubaps}_wl{wl}_fv{wfs_fov_arcsec:.1f}_np{npx}")
         
         elif wfs_type == 'pyr':
             pup_diam = wfs_params.get('pup_diam', 0)
             wl = wfs_params.get('wavelength', 0)
             mod_amp = wfs_params.get('mod_amp', 0)
-            fov = wfs_params.get('fov', 0)
-            parts.append(f"pyr{pup_diam:.1f}_wl{wl}_fv{fov:.1f}_ma{mod_amp:.1f}")
+            if wfs_params.get('sensor_fov') is not None:
+                wfs_fov_arcsec = wfs_params['sensor_fov']
+            elif wfs_params.get('fov') is not None:
+                wfs_fov_arcsec = wfs_params['fov']
+            elif wfs_params.get('subap_wanted_fov') is not None:
+                wfs_fov_arcsec = wfs_params['subap_wanted_fov']
+            else:
+                wfs_fov_arcsec = 0   
+            parts.append(f"pyr{pup_diam:.1f}_wl{wl}_fv{wfs_fov_arcsec:.1f}_ma{mod_amp:.1f}")
 
         if dm_params:
             height = dm_params.get('height', 0)
