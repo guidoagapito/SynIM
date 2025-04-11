@@ -138,21 +138,36 @@ def generate_im_filenames(config_file, timestamp=False):
         
         if 'pyramid' in config:
             wfs_type = 'pyr'
+            if wfs_params.get('sensor_fov') is not None:
+                wfs_fov_arcsec = wfs_params['sensor_fov']
+            elif wfs_params.get('fov') is not None:
+                wfs_fov_arcsec = wfs_params['fov']
+            elif wfs_params.get('subap_wanted_fov') is not None:
+                wfs_fov_arcsec = wfs_params['subap_wanted_fov']
+            else:
+                wfs_fov_arcsec = 0
             wfs_params = {
                 'pup_diam': config['pyramid'].get('pup_diam', 0),
                 'mod_amp': config['pyramid'].get('mod_amp', 0),
                 'wavelength': config['pyramid'].get('wavelengthInNm', 0),
-                'fov': config['pyramid'].get('fov', 0)
+                'fov': wfs_fov_arcsec
             }
         elif 'sh' in config:
             wfs_type = 'sh'
+            if wfs_params.get('sensor_fov') is not None:
+                wfs_fov_arcsec = wfs_params['sensor_fov']
+            elif wfs_params.get('fov') is not None:
+                wfs_fov_arcsec = wfs_params['fov']
+            elif wfs_params.get('subap_wanted_fov') is not None:
+                wfs_fov_arcsec = wfs_params['subap_wanted_fov']
+            else:
+                wfs_fov_arcsec = 0
             wfs_params = {
                 'nsubaps': config['sh'].get('subap_on_diameter', 0),
                 'wavelength': config['sh'].get('wavelengthInNm', 0),
-                'fov': config['sh'].get('subap_wanted_fov', 0),
+                'fov': wfs_fov_arcsec,
                 'npx': config['sh'].get('subap_npx', 0)
             }
-        
         # Source info
         source_info = {}
         if 'on_axis_source' in config:
