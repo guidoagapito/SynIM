@@ -24,6 +24,7 @@ nsubaps = 20#68
 wfs_rotation = 0
 wfs_translation = (0,0)
 wfs_magnification = (1,1)
+wfs_fov_arcsec = 2.4
 
 # LGS parameters
 LGS_pol_coo = [45,30] #arcsec, deg
@@ -65,7 +66,7 @@ plt.show()
 intmat = synim.interaction_matrix(pup_m,pup_mask,dm_array,
                                   dm_mask,dm_height,dm_rotation,
                                   nsubaps,wfs_rotation,wfs_translation,
-                                  wfs_magnification,LGS_pol_coo,LGS_height,
+                                  wfs_magnification,wfs_fov_arcsec,LGS_pol_coo,LGS_height,
                                   idx_valid_sa=idx_valid_sa,verbose=True,display=True)
 
 fig, _ = plt.subplots()

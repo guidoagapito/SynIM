@@ -6,7 +6,7 @@ from scipy.interpolate import griddata
 from scipy.ndimage import rotate, shift, zoom, convolve
 from functools import lru_cache
 import matplotlib.pyplot as plt
-from scipy.ndimage import affine_transform
+from scipy.ndimage import affine_transform, binary_dilation
 
 def rebin(array, new_shape, method='average'):
     """
@@ -375,12 +375,15 @@ def compute_derivatives_with_extrapolation(data,mask=None):
     # if mask is present does an extrapolation to avoid issue at the edges
 
     if mask is not None:
-        # Get edge pixels and references
-        edge_pixels, references = extrapolate_edge_indices(mask)
+        # Calculate indices and coefficients for extrapolation
+        edge_pixels, reference_indices, coefficients = calculate_extrapolation_indices_coeffs(
+            mask, debug=False, debug_pixels=None)
         for i in range(data.shape[2]):
-            data[:,:,i] = extrapolate_phase_linear(data[:,:,i], mask, edge_pixels, references, iterations=1)
+            # Apply extrapolation
+            data[:,:,i] = apply_extrapolation(data[:,:,i], edge_pixels, reference_indices, coefficients, 
+                                              debug=True, problem_indices=None)
         print('Using extrapolation to compute derivatives.')
-          
+
     # Compute x derivative
     dx = np.gradient(data, axis=(1), edge_order=1)
     
@@ -409,127 +412,223 @@ def integrate_derivatives(dx, dy):
 
     return integrated_x, integrated_y
 
-def extrapolate_edge_indices(mask):
+# Labels for the extrapolation directions
+directions_labels = ['Down (y+1)', 'Up (y-1)', 'Right (x+1)', 'Left (x-1)']
+
+def calculate_extrapolation_indices_coeffs(mask, debug=False, debug_pixels=None):
     """
-    Defines the indices and reference points for phase extrapolation outside the pupil mask.
-    
+    Calculates indices and coefficients for extrapolating edge pixels of a mask.
+
     Parameters:
-    mask (numpy.ndarray): Binary pupil mask (1 inside, 0 outside)
+        mask (ndarray): Binary mask (True/1 inside, False/0 outside).
+        debug (bool): If True, displays debug information and plots.
+        debug_pixels (list): List of [y, x] coordinates for detailed debug output.
 
     Returns:
-    tuple: (edge_pixels, reference_points)
+        tuple: (edge_pixels, reference_indices, coefficients)
+            - edge_pixels: Linear indices of the edge pixels to extrapolate.
+            - reference_indices: Array of reference pixel indices for extrapolation.
+            - coefficients: Coefficients for linear extrapolation.
     """
-
-    # Create float mask
-    float_mask = mask.astype(float)
-    height, width = mask.shape
     
-    # Find edge pixels (first layer outside the mask)
-    kernel = np.array([[0, 1, 0], [1, 0, 1], [0, 1, 0]])
-    edge_mask = convolve(float_mask, kernel, mode='constant') * (1.0 - float_mask)
-    edge_pixels = np.where(edge_mask > 0)
+    # Convert the mask to boolean
+    binary_mask = mask.astype(bool)
     
-    # Initialize reference points
-    reference_points = {
-        'x_first': np.full(mask.shape, -1),
-        'x_second': np.full(mask.shape, -1),
-        'y_first': np.full(mask.shape, -1),
-        'y_second': np.full(mask.shape, -1)
-    }
+    # Identify edge pixels (outside but adjacent to the mask) using binary dilation
+    dilated_mask = binary_dilation(binary_mask)
+    edge_pixels = np.where(dilated_mask & ~binary_mask)
+    edge_pixels_linear = np.ravel_multi_index(edge_pixels, mask.shape)
     
-    # Create flat index array for the mask
-    indices = np.zeros_like(float_mask, dtype=int)
-    indices[mask > 0] = np.flatnonzero(mask > 0)
-    
-    # For each edge pixel, find reference points in x and y directions
-    for i, j in zip(*edge_pixels):
-        # Check x direction (horizontal)
-        if i + 1 < height and float_mask[i + 1, j] > 0:
-            reference_points['x_first'][i, j] = indices[i + 1, j]
-            if i + 2 < height and float_mask[i + 2, j] > 0:
-                reference_points['x_second'][i, j] = indices[i + 2, j]
-        elif i - 1 >= 0 and float_mask[i - 1, j] > 0:
-            reference_points['x_first'][i, j] = indices[i - 1, j]
-            if i - 2 >= 0 and float_mask[i - 2, j] > 0:
-                reference_points['x_second'][i, j] = indices[i - 2, j]
+    if debug:
+        print(f"Found {len(edge_pixels[0])} edge pixels to extrapolate.")
         
-        # Check y direction (vertical)
-        if j + 1 < width and float_mask[i, j + 1] > 0:
-            reference_points['y_first'][i, j] = indices[i, j + 1]
-            if j + 2 < width and float_mask[i, j + 2] > 0:
-                reference_points['y_second'][i, j] = indices[i, j + 2]
-        elif j - 1 >= 0 and float_mask[i, j - 1] > 0:
-            reference_points['y_first'][i, j] = indices[i, j - 1]
-            if j - 2 >= 0 and float_mask[i, j - 2] > 0:
-                reference_points['y_second'][i, j] = indices[i, j - 2]
+        # Plot the original mask and the edge pixels
+        plt.figure(figsize=(10, 4))
+        plt.subplot(121)
+        plt.imshow(binary_mask, cmap='gray', interpolation='nearest')
+        plt.title('Original Mask')
+        
+        plt.subplot(122)
+        edge_mask = np.zeros_like(binary_mask)
+        edge_mask[edge_pixels] = 1
+        plt.imshow(binary_mask, cmap='gray', alpha=0.5, interpolation='nearest')
+        plt.imshow(edge_mask, cmap='hot', alpha=0.5, interpolation='nearest')
+        plt.title('Edge Pixels to Extrapolate (red)')
+        plt.tight_layout()
+        plt.show()
     
-    return edge_pixels, reference_points
+    # Preallocate arrays for reference indices and coefficients
+    reference_indices = np.full((len(edge_pixels[0]), 8), -1, dtype=np.int32)
+    coefficients = np.zeros((len(edge_pixels[0]), 8), dtype=np.float32)
+    
+    # Directions for extrapolation (y+1, y-1, x+1, x-1)
+    directions = [
+        (1, 0),  # y+1 (down)
+        (-1, 0), # y-1 (up)
+        (0, 1),  # x+1 (right)
+        (0, -1)  # x-1 (left)
+    ]
+    
+    # Iterate over each edge pixel
+    problem_indices = []
+    for i, (y, x) in enumerate(zip(*edge_pixels)):
+        # Check if this pixel is in the debug list
+        is_debug_pixel = False
+        if debug_pixels is not None:
+            for p in debug_pixels:
+                if p[0] == y and p[1] == x:
+                    is_debug_pixel = True
+                    break
+        
+        valid_directions = 0
+        
+        if is_debug_pixel:
+            print(f"\n[DEBUG] Detailed analysis for pixel [{y},{x}]:")
+        
+        # Examine the 4 directions
+        for dir_idx, (dy, dx) in enumerate(directions):
+            # Coordinates of reference points at distance 1 and 2
+            y1, x1 = y + dy, x + dx
+            y2, x2 = y + 2*dy, x + 2*dx
 
-def extrapolate_phase_linear(phase, mask, edge_pixels, references, iterations=1):
-    """
-    Extrapolates the phase outside the mask using linear extrapolation.
+            # Check if the points are valid (inside the image and inside the mask)
+            valid_ref1 = (0 <= y1 < mask.shape[0] and 
+                          0 <= x1 < mask.shape[1] and 
+                          binary_mask[y1, x1])
+                          
+            valid_ref2 = (0 <= y2 < mask.shape[0] and 
+                          0 <= x2 < mask.shape[1] and 
+                          binary_mask[y2, x2])
+
+            if is_debug_pixel:
+                print(f"  Direction {directions_labels[dir_idx]}: ")
+                print(f"    Ref1 [{y1},{x1}] valid: {valid_ref1}")
+                print(f"    Ref2 [{y2},{x2}] valid: {valid_ref2}")
+
+            if valid_ref1:
+                # Index of the first reference point (linear index)
+                ref_idx1 = y1 * mask.shape[1] + x1
+                reference_indices[i, 2*dir_idx] = ref_idx1
+
+                if valid_ref2:
+                    # Index of the second reference point (linear index)
+                    ref_idx2 = y2 * mask.shape[1] + x2
+                    reference_indices[i, 2*dir_idx + 1] = ref_idx2
+
+                    # Coefficients for linear extrapolation: 2*P₁ - P₂
+                    coefficients[i, 2*dir_idx] = 2.0
+                    coefficients[i, 2*dir_idx + 1] = -1.0
+                    valid_directions += 1
+
+                    if is_debug_pixel:
+                        print(f"    Using extrapolation: 2*{ref_idx1} - {ref_idx2}")
+                else:
+                    # If the second point is invalid, check if it's the only valid pixel
+                    if valid_directions == 0:
+                        coefficients[i, 2*dir_idx] = 1.0
+                        valid_directions += 1
+                        if is_debug_pixel:
+                            print(f"    Using first ref value: {ref_idx1} (only valid pixel)")
+                    else:
+                        # Set coefficients to 0
+                        coefficients[i, 2*dir_idx] = 0.0
+                        coefficients[i, 2*dir_idx + 1] = 0.0
+            else:
+                # Set coefficients to 0 if the first reference is invalid
+                coefficients[i, 2*dir_idx] = 0.0
+                coefficients[i, 2*dir_idx + 1] = 0.0
+        
+        # Normalize coefficients based on the number of valid directions
+        if valid_directions > 1:
+            factor = 1.0 / valid_directions
+            
+            if is_debug_pixel:
+                print(f"  Valid directions: {valid_directions}, factor: {factor}")
+                print("  Coefficients before normalization:", coefficients[i])
+            
+            for dir_idx in range(4):
+                if coefficients[i, 2*dir_idx] != 0:
+                    coefficients[i, 2*dir_idx] *= factor
+                    if coefficients[i, 2*dir_idx + 1] != 0:
+                        coefficients[i, 2*dir_idx + 1] *= factor
+            
+            if is_debug_pixel:
+                print("  Coefficients after normalization:", coefficients[i])
+                problem_indices.append(i)
+
+    if debug:
+        print(f"Average valid directions per pixel: {np.sum(coefficients != 0) / (len(edge_pixels[0]) * 2):.2f}")
+        
+        # Display coefficient matrix for the first 10 pixels
+        if len(edge_pixels[0]) >= 10:
+            print("\nCoefficients for the first 10 pixels:")
+            for i in range(min(10, len(edge_pixels[0]))):
+                print(f"Pixel {i} ({edge_pixels[0][i]}, {edge_pixels[1][i]}): {coefficients[i]}")
+                print(f"Indices: {reference_indices[i]}")
     
+    return edge_pixels_linear, reference_indices, coefficients
+
+def apply_extrapolation(data, edge_pixels, reference_indices, coefficients, debug=False, problem_indices=None):
+    """
+    Applies linear extrapolation to edge pixels using precalculated indices and coefficients.
+
     Parameters:
-    phase (numpy.ndarray): Phase array to be extrapolated
-    mask (numpy.ndarray): Binary mask (1 inside, 0 outside)
-    edge_pixels (tuple): Indices of edge pixels
-    references (dict): Reference points for extrapolation
-    iterations (int): Number of iterations for the extrapolation
-    
+        data (ndarray): Input array to extrapolate.
+        edge_pixels (ndarray): Linear indices of edge pixels to extrapolate.
+        reference_indices (ndarray): Indices of reference pixels.
+        coefficients (ndarray): Coefficients for linear extrapolation.
+        debug (bool): If True, displays debug information.
+        problem_indices (list): Indices of problematic pixels to analyze.
+
     Returns:
-    numpy.ndarray: Extrapolated phase array
+        ndarray: Array with extrapolated pixels.
     """
-    result = phase.copy()
-    current_mask = mask.copy()
+    # Create a copy of the input array
+    result = data.copy()
+    flat_result = result.ravel()
+    flat_data = data.ravel()
     
-    for _ in range(iterations):
-        if len(edge_pixels[0]) == 0:
-            break  # No more edge pixels to extrapolate
+    # Iterate over each edge pixel
+    for i, edge_idx in enumerate(edge_pixels):
+        is_problem_pixel = problem_indices is not None and i in problem_indices
         
-        # Create a mask for the current edge pixels
-        edge_mask = np.zeros_like(mask, dtype=bool)
-        edge_mask[edge_pixels] = True
+        # Compute the 2D coordinates of the pixel
+        edge_y = edge_idx // data.shape[1]
+        edge_x = edge_idx % data.shape[1]
         
-        # Extrapolate values at edge pixels
-        for i, j in zip(*edge_pixels):
-            # Get valid references for x and y directions
-            x_first = references['x_first'][i, j]
-            x_second = references['x_second'][i, j]
-            y_first = references['y_first'][i, j]
-            y_second = references['y_second'][i, j]
-            
-            extrapolated_values = []
-            
-            # Linear extrapolation in x direction if we have both references
-            if x_first >= 0 and x_second >= 0:
-                x_value = 2 * result.flat[x_first] - result.flat[x_second]
-                extrapolated_values.append(x_value)
-            
-            # Linear extrapolation in y direction if we have both references
-            if y_first >= 0 and y_second >= 0:
-                y_value = 2 * result.flat[y_first] - result.flat[y_second]
-                extrapolated_values.append(y_value)
-            
-            # Use first reference as a fallback if we can't do linear extrapolation
-            if not extrapolated_values:
-                if x_first >= 0:
-                    extrapolated_values.append(result.flat[x_first])
-                if y_first >= 0:
-                    extrapolated_values.append(result.flat[y_first])
-            
-            # Combine values from different directions
-            if extrapolated_values:
-                result[i, j] = sum(extrapolated_values) / len(extrapolated_values)
+        if is_problem_pixel:
+            print(f"\n[DEBUG] Calculating extrapolated value for pixel [{edge_y},{edge_x}]:")
+            print(f"  Original value: {flat_data[edge_idx]}")
         
-        # Update the mask to include the newly extrapolated pixels
-        current_mask = current_mask | edge_mask
+        # Initialize the extrapolated value
+        extrap_value = 0.0
+        
+        # Sum contributions from all references
+        for j in range(reference_indices.shape[1]):
+            ref_idx = reference_indices[i, j]
+            if ref_idx >= 0:  # If the index is valid
+                ref_y = ref_idx // data.shape[1]
+                ref_x = ref_idx % data.shape[1]
+                contrib = coefficients[i, j] * flat_data[ref_idx]
+                extrap_value += contrib
+                
+                if is_problem_pixel:
+                    print(f"  Ref [{ref_y},{ref_x}] = {flat_data[ref_idx]} × {coefficients[i, j]:.4f} = {contrib:.4f}")
+        
+        # Assign the extrapolated value
+        flat_result[edge_idx] = extrap_value
+
     
     return result
+
 
 def shiftzoom_from_source_dm_params(source_pol_coo, source_height, dm_height, pixel_pitch):
     arcsec2rad = np.pi/180/3600
     
-    mag_factor = source_height/(source_height-dm_height)
+    if np.isinf(source_height):
+        mag_factor = 1.0
+    else:
+        mag_factor = source_height/(source_height-dm_height)
     source_rec_coo_asec = polar_to_xy(source_pol_coo[0],source_pol_coo[1]*np.pi/180)
     source_rec_coo_m = source_rec_coo_asec*dm_height*arcsec2rad
     source_rec_coo_pix = source_rec_coo_m / pixel_pitch
@@ -698,7 +797,7 @@ def rotshiftzoom_array(input_array, dm_translation=(0.0, 0.0), dm_rotation=0.0, 
     return output
 
 def interaction_matrix(pup_diam_m,pup_mask,dm_array,dm_mask,dm_height,dm_rotation,wfs_nsubaps,wfs_rotation,wfs_translation,wfs_magnification,
-                       gs_pol_coo,gs_height,idx_valid_sa=None,verbose=False,display=False):
+                       wfs_fov_arcsec,gs_pol_coo,gs_height,idx_valid_sa=None,verbose=False,display=False):
     """
     Computes a single interaction matrix.
     From Guido Agapito.
@@ -714,6 +813,7 @@ def interaction_matrix(pup_diam_m,pup_mask,dm_array,dm_mask,dm_height,dm_rotatio
     - wfs_rotation
     - wfs_translation
     - wfs_magnification
+    - wfs_fov_arcsec: float, field of view of the wavefront sensor in arcsec
     - gs_pol_coo: tuple, polar coordinates of the gudie star radius in arcsec and angle in deg
     - gs_height: float, altitude of the guide star
     - idx_valid_sa: numpy 1D array, indices of the valid sub-apertures
@@ -744,17 +844,23 @@ def interaction_matrix(pup_diam_m,pup_mask,dm_array,dm_mask,dm_height,dm_rotatio
                                         wfs_translation=(0,0), wfs_rotation=0, wfs_magnification=(1,1),
                                         output_size=output_size)
     trans_dm_mask[trans_dm_mask<0.5] = 0
+    if np.max(trans_dm_mask) <= 0:
+        raise ValueError('Error in input data, the rotated dm mask is empty.')
     # apply transformation to the pupil mask
     trans_pup_mask  = rotshiftzoom_array(pup_mask, dm_translation=(0,0), dm_rotation=0, dm_magnification=(1,1),
                                         wfs_translation=wfs_translation, wfs_rotation=wfs_rotation, wfs_magnification=wfs_magnification,
                                         output_size=output_size)
     trans_pup_mask[trans_pup_mask<0.5] = 0
+    if np.max(trans_pup_mask) <= 0:
+        raise ValueError('Error in input data, the rotated pup mask is empty.')
 
     if verbose:
         print('Rotation, shift and zoom done.')
 
     # apply mask
     trans_dm_array = apply_mask(trans_dm_array,trans_dm_mask)
+    if np.max(trans_dm_array) <= 0:
+        raise ValueError('Error in input data, the rotated dm array is empty.')
 
     if verbose:
         print('Mask applied.')
@@ -775,6 +881,8 @@ def interaction_matrix(pup_diam_m,pup_mask,dm_array,dm_mask,dm_height,dm_rotatio
     pup_mask_sa = pup_mask_sa * 1/np.max(pup_mask_sa)
     
     dm_mask_sa = rebin(trans_dm_mask, (wfs_nsubaps,wfs_nsubaps), method='sum')
+    if np.max(dm_mask_sa) <= 0:
+        raise ValueError('Error in input data, the dm mask is empty.')
     dm_mask_sa = dm_mask_sa * 1/np.max(dm_mask_sa)
 
     # rebin the array to get the correct signal size
@@ -807,15 +915,34 @@ def interaction_matrix(pup_diam_m,pup_mask,dm_array,dm_mask,dm_height,dm_rotatio
     WFS_signal_x_2D = WFS_signal_x.reshape((-1,WFS_signal_x.shape[2]))
     WFS_signal_y_2D = WFS_signal_y.reshape((-1,WFS_signal_y.shape[2]))
 
+    print('WFS signal x shape:', WFS_signal_x_2D.shape)
+    print('WFS signal y shape:', WFS_signal_y_2D.shape)
+
     if idx_valid_sa is not None:
-        WFS_signal_x_2D = WFS_signal_x_2D[idx_valid_sa,:]
-        WFS_signal_y_2D = WFS_signal_y_2D[idx_valid_sa,:]
+        if len(idx_valid_sa.shape) > 1 and idx_valid_sa.shape[1] == 2:
+            # Convert 2D coordinates [y,x] to linear indices
+            # Formula: linear_index = y * width + x
+            width = wfs_nsubaps  # Width of the original 2D array
+            linear_indices = idx_valid_sa[:,0] * width + idx_valid_sa[:,1]
+            
+            # Use these linear indices to select elements from flattened arrays
+            WFS_signal_x_2D = WFS_signal_x_2D[linear_indices,:]
+            WFS_signal_y_2D = WFS_signal_y_2D[linear_indices,:]
+        else:
+            # Use 1D array directly
+            WFS_signal_x_2D = WFS_signal_x_2D[idx_valid_sa,:]
+            WFS_signal_y_2D = WFS_signal_y_2D[idx_valid_sa,:]
         if verbose:
             print('Indices selected.')
 
     im = np.concatenate((WFS_signal_x_2D, WFS_signal_y_2D))
 
-    # TODO missing normalization!
+    # Here we consider the DM RMS normalized to 1 nm
+    # Conversion from nm to arcsec
+    coeff = 4e-9/(pup_diam_m/wfs_nsubaps) * 206265
+    # Conversion from srcsec to slope
+    coeff *= 1/(0.5 * wfs_fov_arcsec)
+    im = im * coeff
 
     if verbose:
         print('WFS signals reformed.')
