@@ -1,7 +1,7 @@
 import os
 import numpy as np
 import matplotlib.pyplot as plt
-from utils.params_utils import compute_interaction_matrix, prepare_interaction_matrix_params
+from utils.params_utils import parse_params_file, compute_interaction_matrix, prepare_interaction_matrix_params
 from utils.filename_generator import generate_im_filenames
 
 import specula
@@ -55,8 +55,14 @@ print(f"Generated IM filename: {im_filename}")
 print(f"Generated REC filename: {rec_filename}")
 # -------------------------------------------------------------------
 
+# Load the YAML or PRO file
+params = parse_params_file(yaml_file)
+# Set the root directory to the absolute path of the specula repository
+params['main']['root_dir'] = os.path.join(specula_repo_path, "main", "scao","calib","SCAO")
+print(f"Absolute path of root directory: {params['main']['root_dir']}")
+params = prepare_interaction_matrix_params(params)
+params['dm_array'] = params['dm_array'].transpose(1, 0, 2)
 # Calculate the interaction matrix
-params = prepare_interaction_matrix_params(yaml_file)
 im = compute_interaction_matrix(params, verbose=True, display=True)
 
 # transpose to be coherent with the specula convention
