@@ -112,9 +112,9 @@ plt.figure(figsize=(8, 12))
 imBig = None
 for i in range(4):
     im2Dx = np.zeros((params['wfs_nsubaps'],params['wfs_nsubaps']), dtype=im.dtype)
-    im2Dx[params['idx_valid_sa'][:,0], params['idx_valid_sa'][:,1]] = im[:params['idx_valid_sa'].shape[0],i]
+    im2Dx[params['idx_valid_sa'][:,0], params['idx_valid_sa'][:,1]] = im[i,:params['idx_valid_sa'].shape[0]]
     im2Dy = np.zeros((params['wfs_nsubaps'],params['wfs_nsubaps']), dtype=im.dtype)
-    im2Dy[params['idx_valid_sa'][:,0], params['idx_valid_sa'][:,1]] = im[params['idx_valid_sa'].shape[0]:,i]
+    im2Dy[params['idx_valid_sa'][:,0], params['idx_valid_sa'][:,1]] = im[i,params['idx_valid_sa'].shape[0]:]
     im2D = np.concatenate((im2Dx, im2Dy), axis=1)
     if imBig is None:
         imBig = im2D
