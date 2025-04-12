@@ -24,23 +24,20 @@ def wfs_fov_from_config(wfs_params):
         wfs_fov_arcsec = 0
     return wfs_fov_arcsec
 
-def prepare_interaction_matrix_params(params_file, wfs_type=None, wfs_index=None, dm_index=None):
+def prepare_interaction_matrix_params(params, wfs_type=None, wfs_index=None, dm_index=None):
     """
     Prepares parameters for synim.interaction_matrix from a SPECULA YAML configuration file.
     
     Args:
-        params_file (str): Path to the YAML or PRO configuration file
+        params (dict): Dictionary with configuration parameters.
         wfs_type (str, optional): Type of WFS ('lgs', 'ngs', or 'ref')
         wfs_index (int, optional): Index of the WFS to use (1-based)
         dm_index (int, optional): Index of the DM to use (1-based)
         
     Returns:
         dict: Parameters ready to be passed to synim.interaction_matrix
-    """
-    # Load the YAML or PRO file
-    
-    params = parse_params_file(params_file)
-    
+    """  
+        
     # Prepare the CalibManager
     main_params = params['main']
     cm = CalibManager(main_params['root_dir'])
@@ -313,6 +310,10 @@ def prepare_interaction_matrix_params(params_file, wfs_type=None, wfs_index=None
     
     # Load SubapData for valid subapertures if available
     idx_valid_sa = None
+    subap_path = None
+    subap_tag = None
+
+    # First check - Try to get subapdata from WFS params
     if 'subapdata_object' in wfs_params or 'subapdata_tag' in wfs_params:
         if 'subapdata_tag' in wfs_params:
             print("     Loading subapdata from file, tag:", wfs_params['subapdata_tag'])
@@ -322,26 +323,65 @@ def prepare_interaction_matrix_params(params_file, wfs_type=None, wfs_index=None
             print("     Loading subapdata from file, tag:", wfs_params['subapdata_object'])
             subap_tag = wfs_params['subapdata_object']
             subap_path = cm.filename('subapdata', subap_tag)
-    elif 'subapdata_object' in slopec_params or 'subapdata_tag' in slopec_params: 
+
+    # Second check - Try to find corresponding slopec section based on WFS name
+    elif wfs_key is not None:
+        # Determine potential slopec key based on WFS key (e.g., sh_lgs1 -> slopec_lgs1)
+        slopec_key = None
+        if wfs_key.startswith('sh_'):
+            potential_slopec = 'slopec_' + wfs_key[3:]
+            if potential_slopec in params:
+                slopec_key = potential_slopec
+        elif wfs_key.startswith('pyramid_'):
+            potential_slopec = 'slopec_' + wfs_key[8:]
+            if potential_slopec in params:
+                slopec_key = potential_slopec
+        # Handle numeric indices (e.g., sh1 -> slopec1)
+        elif any(char.isdigit() for char in wfs_key):
+            # Extract numeric portion
+            numeric_part = ''.join(char for char in wfs_key if char.isdigit())
+            if numeric_part:
+                potential_slopec = f'slopec{numeric_part}'
+                if potential_slopec in params:
+                    slopec_key = potential_slopec
+        
+        # Check standard slopec key
+        if slopec_key is None and 'slopec' in params:
+            slopec_key = 'slopec'
+        
+        if slopec_key:
+            slopec_params = params[slopec_key]
+            if 'subapdata_tag' in slopec_params:
+                print(f"     Loading subapdata from {slopec_key}, tag:", slopec_params['subapdata_tag'])
+                subap_tag = slopec_params['subapdata_tag']
+                subap_path = cm.filename('subap_data', subap_tag)
+            elif 'subapdata_object' in slopec_params:
+                print(f"     Loading subapdata from {slopec_key}, tag:", slopec_params['subapdata_object'])
+                subap_tag = slopec_params['subapdata_object']
+                subap_path = cm.filename('subapdata', subap_tag)
+
+    # Third check - Try generic slopec section
+    elif 'slopec' in params:
+        slopec_params = params['slopec']
         if 'subapdata_tag' in slopec_params:
-            print("     Loading subapdata from file, tag:", slopec_params['subapdata_tag'])
+            print("     Loading subapdata from slopec, tag:", slopec_params['subapdata_tag'])
             subap_tag = slopec_params['subapdata_tag']
             subap_path = cm.filename('subap_data', subap_tag)
-        else:
-            print("     Loading subapdata from file, tag:", slopec_params['subapdata_object'])
+        elif 'subapdata_object' in slopec_params:
+            print("     Loading subapdata from slopec, tag:", slopec_params['subapdata_object'])
             subap_tag = slopec_params['subapdata_object']
             subap_path = cm.filename('subapdata', subap_tag)
 
-    if os.path.exists(subap_path):
+    # Try to load the subapdata if a path was found
+    if subap_path and os.path.exists(subap_path):
         print("     Loading subapdata from file:", subap_path)
         subap_data = SubapData.restore(subap_path)
         idx_valid_sa = np.transpose(np.asarray(np.where(subap_data.single_mask())))
     else:
-        print("     Subapdata file not found. Using default subaperture grid.")
-
-    print('idx_valid_sa',idx_valid_sa)
-    print('subap_path',subap_path)
-    print('wfs_params',wfs_params)
+        if subap_path:
+            print(f"     Subapdata file not found at {subap_path}. Using default subaperture grid.")
+        else:
+            print("     No subapdata information found. Using default subaperture grid.")
     
     # If we don't have idx_valid_sa from the file, calculate an estimate
     if idx_valid_sa is None:
