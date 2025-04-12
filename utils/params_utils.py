@@ -13,6 +13,17 @@ from specula.data_objects.ifunc import IFunc
 from specula.data_objects.pupilstop import Pupilstop
 from specula.data_objects.subap_data import SubapData
 
+def wfs_fov_from_config(wfs_params):
+    if wfs_params.get('sensor_fov') is not None:
+        wfs_fov_arcsec = wfs_params['sensor_fov']
+    elif wfs_params.get('fov') is not None:
+        wfs_fov_arcsec = wfs_params['fov']
+    elif wfs_params.get('subap_wanted_fov') is not None:
+        wfs_fov_arcsec = wfs_params['subap_wanted_fov']
+    else:
+        wfs_fov_arcsec = 0
+    return wfs_fov_arcsec
+
 def prepare_interaction_matrix_params(params_file, wfs_type=None, wfs_index=None, dm_index=None):
     """
     Prepares parameters for synim.interaction_matrix from a SPECULA YAML configuration file.
@@ -257,6 +268,10 @@ def prepare_interaction_matrix_params(params_file, wfs_type=None, wfs_index=None
                 wfs_params = params[wfs_key]
                 wfs_found = True
     
+    #slopec
+    if 'slopec' in params:
+        slopec_params = params['slopec']
+
     # If no specific search criteria, use the first available WFS
     if not wfs_found and wfs_keys:
         wfs_key = wfs_keys[0]
@@ -290,10 +305,7 @@ def prepare_interaction_matrix_params(params_file, wfs_type=None, wfs_index=None
     wfs_rotation = wfs_params.get('rotation', 0.0)
     wfs_translation = wfs_params.get('translation', [0.0, 0.0])
     wfs_magnification = wfs_params.get('magnification', 1.0)
-    if wfs_params.get('sensor_fov') is None:
-        wfs_fov_arcsec = wfs_params['fov']
-    else:
-        wfs_fov_arcsec = wfs_params['sensor_fov']
+    wfs_fov_arcsec = wfs_fov_from_config(wfs_params)
     if np.isnan(wfs_magnification):
         wfs_magnification = 1.0
     if np.size(wfs_magnification) == 1:
@@ -301,17 +313,35 @@ def prepare_interaction_matrix_params(params_file, wfs_type=None, wfs_index=None
     
     # Load SubapData for valid subapertures if available
     idx_valid_sa = None
-    if 'subap_object' in wfs_params or 'subapdata_tag' in wfs_params:
+    if 'subapdata_object' in wfs_params or 'subapdata_tag' in wfs_params:
         if 'subapdata_tag' in wfs_params:
             print("     Loading subapdata from file, tag:", wfs_params['subapdata_tag'])
             subap_tag = wfs_params['subapdata_tag']
+            subap_path = cm.filename('subap_data', subap_tag)
         else:
-            print("     Loading subapdata from file, tag:", wfs_params['subap_object'])
-            subap_tag = wfs_params['subap_object']
-        subap_path = cm.filename('subap_data', subap_tag)
-        if os.path.exists(subap_path):
-            subap_data = SubapData.restore(subap_path)
-            idx_valid_sa = np.transpose(np.asarray(np.where(subap_data.single_mask())))
+            print("     Loading subapdata from file, tag:", wfs_params['subapdata_object'])
+            subap_tag = wfs_params['subapdata_object']
+            subap_path = cm.filename('subapdata', subap_tag)
+    elif 'subapdata_object' in slopec_params or 'subapdata_tag' in slopec_params: 
+        if 'subapdata_tag' in slopec_params:
+            print("     Loading subapdata from file, tag:", slopec_params['subapdata_tag'])
+            subap_tag = slopec_params['subapdata_tag']
+            subap_path = cm.filename('subap_data', subap_tag)
+        else:
+            print("     Loading subapdata from file, tag:", slopec_params['subapdata_object'])
+            subap_tag = slopec_params['subapdata_object']
+            subap_path = cm.filename('subapdata', subap_tag)
+
+    if os.path.exists(subap_path):
+        print("     Loading subapdata from file:", subap_path)
+        subap_data = SubapData.restore(subap_path)
+        idx_valid_sa = np.transpose(np.asarray(np.where(subap_data.single_mask())))
+    else:
+        print("     Subapdata file not found. Using default subaperture grid.")
+
+    print('idx_valid_sa',idx_valid_sa)
+    print('subap_path',subap_path)
+    print('wfs_params',wfs_params)
     
     # If we don't have idx_valid_sa from the file, calculate an estimate
     if idx_valid_sa is None:
