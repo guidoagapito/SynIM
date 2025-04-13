@@ -61,12 +61,28 @@ params = parse_params_file(yaml_file)
 params['main']['root_dir'] = os.path.join(specula_repo_path, "main", "scao","calib","SCAO")
 print(f"Absolute path of root directory: {params['main']['root_dir']}")
 params = prepare_interaction_matrix_params(params)
+
+# -------------------------------------------------------------------
+# rotate the DM array and mask to be coherent with the specula convention
 params['dm_array'] = params['dm_array'].transpose(1, 0, 2)
+params['dm_mask'] = np.transpose(params['dm_mask'])
+params['pup_mask'] = np.transpose(params['pup_mask'])
+# rotate the list of valid subapertures to be coherent with the specula convention
+sa2D = np.zeros((params['wfs_nsubaps'],params['wfs_nsubaps']))
+sa2D[params['idx_valid_sa'][:,0], params['idx_valid_sa'][:,1]] = 1
+sa2D = np.transpose(sa2D)
+idx_valid_sa_new = np.where(sa2D>0)
+idx_valid_sa = params['idx_valid_sa']
+idx_valid_sa[:,0] = idx_valid_sa_new[0]
+idx_valid_sa[:,1] = idx_valid_sa_new[1]
+params['idx_valid_sa'] = idx_valid_sa
+# -------------------------------------------------------------------
+
 # Calculate the interaction matrix
 im = compute_interaction_matrix(params, verbose=True, display=True)
 
 # transpose to be coherent with the specula convention
-im = im.transpose()
+im = im.transpose()*2*np.pi
 # change x and y to be coherent with the specula convention
 print('im.shape',im.shape)
 right_half = im[:, int(im.shape[1] / 2):]
