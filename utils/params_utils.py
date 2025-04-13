@@ -145,7 +145,10 @@ def prepare_interaction_matrix_params(params, wfs_type=None, wfs_index=None, dm_
                 for i in range(n_modes):
                     temp = np.zeros(mask_shape, dtype=float)
                     idx = np.where(ifunc.mask_inf_func > 0)
-                    temp[idx] = ifunc.influence_function[i, :]
+                    ifunc_i = ifunc.influence_function[i, :]
+                    # normalize by the RMS
+                    ifunc_i /= np.sqrt(np.mean(ifunc_i**2))
+                    temp[idx] = ifunc_i
                     dm_array[:, :, i] = temp
             else:
                 # For a single mode
