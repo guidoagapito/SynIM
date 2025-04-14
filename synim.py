@@ -726,11 +726,39 @@ def rotshiftzoom_array(input_array, dm_translation=(0.0, 0.0), dm_rotation=0.0, 
     Rotation is applied in the same direction as the first function.
     """
    
-    if len(dm_translation) != 2 or len(wfs_translation) != 2:
-        raise ValueError("Translation vectors must have 2 elements.")
-    if len(dm_magnification) != 2 or len(wfs_magnification) != 2:
-        raise ValueError("Translation vectors must have 2 elements.")
-   
+    # Parameter handling: conversion of single values to tuples
+    try:
+        if not hasattr(dm_translation, '__len__') or len(dm_translation) != 2:
+            dm_translation = (float(dm_translation), float(dm_translation))
+    except (TypeError, ValueError):
+        dm_translation = (0.0, 0.0)
+        
+    try:
+        if not hasattr(wfs_translation, '__len__') or len(wfs_translation) != 2:
+            wfs_translation = (float(wfs_translation), float(wfs_translation))
+    except (TypeError, ValueError):
+        wfs_translation = (0.0, 0.0)
+        
+    try:
+        if not hasattr(dm_magnification, '__len__'):
+            # If it is a single value, we create a tuple with two identical elements
+            dm_magnification = (float(dm_magnification), float(dm_magnification))
+        elif len(dm_magnification) != 2:
+            # if it is a sequence but not of length 2
+            dm_magnification = (float(dm_magnification[0]), float(dm_magnification[0]))
+    except (TypeError, ValueError):
+        dm_magnification = (1.0, 1.0)
+        
+    try:
+        if not hasattr(wfs_magnification, '__len__'):
+            # If it is a single value, we create a tuple with two identical elements
+            wfs_magnification = (float(wfs_magnification), float(wfs_magnification))
+        elif len(wfs_magnification) != 2:
+            # if it is a sequence but not of length 2
+            wfs_magnification = (float(wfs_magnification[0]), float(wfs_magnification[0]))
+    except (TypeError, ValueError):
+        wfs_magnification = (1.0, 1.0)
+
     if np.isnan(input_array).any():
         input_array = np.nan_to_num(input_array, copy=True, nan=0.0, posinf=None, neginf=None)
     
