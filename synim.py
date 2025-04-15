@@ -963,7 +963,7 @@ def interaction_matrix(pup_diam_m,pup_mask,dm_array,dm_mask,dm_height,dm_rotatio
 
         if specula_convention:
             # transpose idx_valid_sa to match the specula convention
-            sa2D = np.zeros(wfs_nsubaps,wfs_nsubaps)
+            sa2D = np.zeros((wfs_nsubaps,wfs_nsubaps))
             sa2D[idx_valid_sa[:,0], idx_valid_sa[:,1]] = 1
             sa2D = np.transpose(sa2D, (1, 0))
             idx_temp = np.where(sa2D>0)
