@@ -966,12 +966,12 @@ def interaction_matrix(pup_diam_m,pup_mask,dm_array,dm_mask,dm_height,dm_rotatio
             sa2D = np.transpose(sa2D)
             idx_temp = np.where(sa2D>0)
             idx_valid_sa_new = idx_valid_sa*0.
-            idx_valid_sa_new[:,0] = idx_temp[0]
-            idx_valid_sa_new[:,1] = idx_temp[1]
+            idx_valid_sa_new[:,0] = idx_temp[0].astype(int)
+            idx_valid_sa_new[:,1] = idx_temp[1].astype(int)
         else:
             idx_valid_sa_new = idx_valid_sa
         
-        if len(idx_valid_sa.shape) > 1 and idx_valid_sa.shape[1] == 2:
+        if len(idx_valid_sa_new.shape) > 1 and idx_valid_sa_new.shape[1] == 2:
             # Convert 2D coordinates [y,x] to linear indices
             # Formula: linear_index = y * width + x
             width = wfs_nsubaps  # Width of the original 2D array
