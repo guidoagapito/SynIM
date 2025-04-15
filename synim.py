@@ -966,8 +966,8 @@ def interaction_matrix(pup_diam_m,pup_mask,dm_array,dm_mask,dm_height,dm_rotatio
             sa2D = np.transpose(sa2D)
             idx_temp = np.where(sa2D>0)
             idx_valid_sa_new = idx_valid_sa*0.
-            idx_valid_sa_new[:,0] = idx_temp[0].astype(int)
-            idx_valid_sa_new[:,1] = idx_temp[1].astype(int)
+            idx_valid_sa_new[:,0] = idx_temp[0]
+            idx_valid_sa_new[:,1] = idx_temp[1]
         else:
             idx_valid_sa_new = idx_valid_sa
         
@@ -978,12 +978,12 @@ def interaction_matrix(pup_diam_m,pup_mask,dm_array,dm_mask,dm_height,dm_rotatio
             linear_indices = idx_valid_sa_new[:,0] * width + idx_valid_sa_new[:,1]
             
             # Use these linear indices to select elements from flattened arrays
-            WFS_signal_x_2D = WFS_signal_x_2D[linear_indices,:]
-            WFS_signal_y_2D = WFS_signal_y_2D[linear_indices,:]
+            WFS_signal_x_2D = WFS_signal_x_2D[linear_indices.astype(int),:]
+            WFS_signal_y_2D = WFS_signal_y_2D[linear_indices.astype(int),:]
         else:
             # Use 1D array directly
-            WFS_signal_x_2D = WFS_signal_x_2D[idx_valid_sa_new,:]
-            WFS_signal_y_2D = WFS_signal_y_2D[idx_valid_sa_new,:]
+            WFS_signal_x_2D = WFS_signal_x_2D[idx_valid_sa_new.astype(int),:]
+            WFS_signal_y_2D = WFS_signal_y_2D[idx_valid_sa_new.astype(int),:]
         if verbose:
             print('Indices selected.')
 
