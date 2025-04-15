@@ -825,7 +825,7 @@ def rotshiftzoom_array(input_array, dm_translation=(0.0, 0.0), dm_rotation=0.0, 
     return output
 
 def interaction_matrix(pup_diam_m,pup_mask,dm_array,dm_mask,dm_height,dm_rotation,wfs_nsubaps,wfs_rotation,wfs_translation,wfs_magnification,
-                       wfs_fov_arcsec,gs_pol_coo,gs_height,idx_valid_sa=None,verbose=False,display=False,specula_convention=True):
+                       wfs_fov_arcsec,gs_pol_coo,gs_height,idx_valid_sa=None,verbose=False,display=False,specula_convention=False):
     """
     Computes a single interaction matrix.
     From Guido Agapito.
@@ -899,12 +899,10 @@ def interaction_matrix(pup_diam_m,pup_mask,dm_array,dm_mask,dm_height,dm_rotatio
         print('Mask applied.')
 
     if specula_convention:
-        # transpose the DM array to match the specula convention
+        # transpose the DM array, mask and pupil mask to match the specula convention
         trans_dm_array = np.transpose(trans_dm_array, (1, 0, 2))
-        # transpose the DM mask to match the specula convention
-        trans_dm_mask = np.transpose(trans_dm_mask, (1, 0))
-        # transpose the pupil mask to match the specula convention
-        trans_pup_mask = np.transpose(trans_pup_mask, (1, 0))
+        trans_dm_mask = np.transpose(trans_dm_mask)
+        trans_pup_mask = np.transpose(trans_pup_mask)
 
     # Derivative od DM modes shape
     der_dx, der_dy = compute_derivatives_with_extrapolation(trans_dm_array,mask=trans_dm_mask)
@@ -965,7 +963,7 @@ def interaction_matrix(pup_diam_m,pup_mask,dm_array,dm_mask,dm_height,dm_rotatio
             # transpose idx_valid_sa to match the specula convention
             sa2D = np.zeros((wfs_nsubaps,wfs_nsubaps))
             sa2D[idx_valid_sa[:,0], idx_valid_sa[:,1]] = 1
-            sa2D = np.transpose(sa2D, (1, 0))
+            sa2D = np.transpose(sa2D)
             idx_temp = np.where(sa2D>0)
             idx_valid_sa_new = idx_valid_sa*0.
             idx_valid_sa_new[:,0] = idx_temp[0]
@@ -977,20 +975,20 @@ def interaction_matrix(pup_diam_m,pup_mask,dm_array,dm_mask,dm_height,dm_rotatio
             # Convert 2D coordinates [y,x] to linear indices
             # Formula: linear_index = y * width + x
             width = wfs_nsubaps  # Width of the original 2D array
-            linear_indices = idx_valid_sa[:,0] * width + idx_valid_sa[:,1]
+            linear_indices = idx_valid_sa_new[:,0] * width + idx_valid_sa_new[:,1]
             
             # Use these linear indices to select elements from flattened arrays
             WFS_signal_x_2D = WFS_signal_x_2D[linear_indices,:]
             WFS_signal_y_2D = WFS_signal_y_2D[linear_indices,:]
         else:
             # Use 1D array directly
-            WFS_signal_x_2D = WFS_signal_x_2D[idx_valid_sa,:]
-            WFS_signal_y_2D = WFS_signal_y_2D[idx_valid_sa,:]
+            WFS_signal_x_2D = WFS_signal_x_2D[idx_valid_sa_new,:]
+            WFS_signal_y_2D = WFS_signal_y_2D[idx_valid_sa_new,:]
         if verbose:
             print('Indices selected.')
 
     if specula_convention:
-        im = np.concatenate((WFS_signal_y_2D, WFS_signal_x_2D), axis=0)
+        im = np.concatenate((WFS_signal_y_2D, WFS_signal_x_2D))
     else:
         im = np.concatenate((WFS_signal_x_2D, WFS_signal_y_2D))
 
