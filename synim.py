@@ -825,7 +825,7 @@ def rotshiftzoom_array(input_array, dm_translation=(0.0, 0.0), dm_rotation=0.0, 
     return output
 
 def interaction_matrix(pup_diam_m,pup_mask,dm_array,dm_mask,dm_height,dm_rotation,wfs_nsubaps,wfs_rotation,wfs_translation,wfs_magnification,
-                       wfs_fov_arcsec,gs_pol_coo,gs_height,idx_valid_sa=None,verbose=False,display=False,specula_convention=False):
+                       wfs_fov_arcsec,gs_pol_coo,gs_height,idx_valid_sa=None,verbose=False,display=False,specula_convention=True):
     """
     Computes a single interaction matrix.
     From Guido Agapito.
