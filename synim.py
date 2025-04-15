@@ -825,7 +825,7 @@ def rotshiftzoom_array(input_array, dm_translation=(0.0, 0.0), dm_rotation=0.0, 
     return output
 
 def interaction_matrix(pup_diam_m,pup_mask,dm_array,dm_mask,dm_height,dm_rotation,wfs_nsubaps,wfs_rotation,wfs_translation,wfs_magnification,
-                       wfs_fov_arcsec,gs_pol_coo,gs_height,idx_valid_sa=None,verbose=False,display=False):
+                       wfs_fov_arcsec,gs_pol_coo,gs_height,idx_valid_sa=None,verbose=False,display=False,specula_convention=True):
     """
     Computes a single interaction matrix.
     From Guido Agapito.
@@ -847,6 +847,7 @@ def interaction_matrix(pup_diam_m,pup_mask,dm_array,dm_mask,dm_height,dm_rotatio
     - idx_valid_sa: numpy 1D array, indices of the valid sub-apertures
     - verbose, optional
     - display, optional
+    - specula_convention, optional
 
     Returns:
     - im: numpy 2D array, set of signals
@@ -874,16 +875,20 @@ def interaction_matrix(pup_diam_m,pup_mask,dm_array,dm_mask,dm_height,dm_rotatio
     trans_dm_mask[trans_dm_mask<0.5] = 0
     if np.max(trans_dm_mask) <= 0:
         raise ValueError('Error in input data, the rotated dm mask is empty.')
+
     # apply transformation to the pupil mask
     trans_pup_mask  = rotshiftzoom_array(pup_mask, dm_translation=(0,0), dm_rotation=0, dm_magnification=(1,1),
                                         wfs_translation=wfs_translation, wfs_rotation=wfs_rotation, wfs_magnification=wfs_magnification,
                                         output_size=output_size)
     trans_pup_mask[trans_pup_mask<0.5] = 0
+
     if np.max(trans_pup_mask) <= 0:
         raise ValueError('Error in input data, the rotated pup mask is empty.')
 
     if verbose:
-        print('Rotation, shift and zoom done.')
+        print(f'DM rotation ({dm_rotation} deg), translation ({dm_translation} pixel), magnification ({dm_magnification})')
+        print(f'WFS translation ({wfs_translation} pixel), wfs rotation ({wfs_rotation} deg), wfs magnification ({wfs_magnification})')
+        print('done.')
 
     # apply mask
     trans_dm_array = apply_mask(trans_dm_array,trans_dm_mask)
@@ -892,6 +897,14 @@ def interaction_matrix(pup_diam_m,pup_mask,dm_array,dm_mask,dm_height,dm_rotatio
 
     if verbose:
         print('Mask applied.')
+
+    if specula_convention:
+        # transpose the DM array to match the specula convention
+        trans_dm_array = np.transpose(trans_dm_array, (1, 0, 2))
+        # transpose the DM mask to match the specula convention
+        trans_dm_mask = np.transpose(trans_dm_mask, (1, 0))
+        # transpose the pupil mask to match the specula convention
+        trans_pup_mask = np.transpose(trans_pup_mask, (1, 0))
 
     # Derivative od DM modes shape
     der_dx, der_dy = compute_derivatives_with_extrapolation(trans_dm_array,mask=trans_dm_mask)
@@ -912,7 +925,7 @@ def interaction_matrix(pup_diam_m,pup_mask,dm_array,dm_mask,dm_height,dm_rotatio
     if np.max(dm_mask_sa) <= 0:
         raise ValueError('Error in input data, the dm mask is empty.')
     dm_mask_sa = dm_mask_sa * 1/np.max(dm_mask_sa)
-
+    
     # rebin the array to get the correct signal size
     if np.isnan(der_dx).any():
         np.nan_to_num(der_dx, copy=False, nan=0.0, posinf=None, neginf=None)
@@ -947,6 +960,19 @@ def interaction_matrix(pup_diam_m,pup_mask,dm_array,dm_mask,dm_height,dm_rotatio
     print('WFS signal y shape:', WFS_signal_y_2D.shape)
 
     if idx_valid_sa is not None:
+
+        if specula_convention:
+            # transpose idx_valid_sa to match the specula convention
+            sa2D = np.zeros(wfs_nsubaps,wfs_nsubaps))
+            sa2D[idx_valid_sa[:,0], idx_valid_sa[:,1]] = 1
+            sa2D = np.transpose(sa2D, (1, 0))
+            idx_temp = np.where(sa2D>0)
+            idx_valid_sa_new = idx_valid_sa*0.
+            idx_valid_sa_new[:,0] = idx_temp[0]
+            idx_valid_sa_new[:,1] = idx_temp[1]
+        else:
+            idx_valid_sa_new = idx_valid_sa
+        
         if len(idx_valid_sa.shape) > 1 and idx_valid_sa.shape[1] == 2:
             # Convert 2D coordinates [y,x] to linear indices
             # Formula: linear_index = y * width + x
@@ -963,7 +989,10 @@ def interaction_matrix(pup_diam_m,pup_mask,dm_array,dm_mask,dm_height,dm_rotatio
         if verbose:
             print('Indices selected.')
 
-    im = np.concatenate((WFS_signal_x_2D, WFS_signal_y_2D))
+    if specula_convention:
+        im = np.concatenate((WFS_signal_y_2D, WFS_signal_x_2D), axis=0)
+    else:
+        im = np.concatenate((WFS_signal_x_2D, WFS_signal_y_2D))
 
     # Here we consider the DM RMS normalized to 1 nm
     # Conversion from nm to arcsec
