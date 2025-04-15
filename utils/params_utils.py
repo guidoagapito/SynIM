@@ -12,6 +12,7 @@ specula.init(device_idx=-1, precision=1)
 from specula.calib_manager import CalibManager
 from specula.lib.make_mask import make_mask
 from specula.data_objects.ifunc import IFunc
+from specula.data_objects.m2c import M2C
 from specula.data_objects.pupilstop import Pupilstop
 from specula.data_objects.subap_data import SubapData
 
@@ -173,6 +174,19 @@ def prepare_interaction_matrix_params(params, wfs_type=None, wfs_index=None, dm_
         ifunc_path = cm.filename('ifunc', ifunc_tag)
         ifunc = IFunc.restore(ifunc_path)
         
+        m2c_tag = None
+        if 'm2c_tag' in dm_params:
+            print(f"     Loading M2C from file, tag: {dm_params['m2c_tag']}")
+            m2c_tag = dm_params['m2c_tag']
+        if 'm2c_object' in dm_params:
+            print(f"     Loading M2C from file, tag: {dm_params['m2c_object']}")
+            m2c_tag = dm_params['m2c_object']
+        if m2c_tag is not None:
+            m2c_path = cm.filename('m2c', m2c_tag)
+            m2c = M2C.restore(m2c_path)
+            # multiply the influence function by the M2C
+            ifunc.influence_function = ifunc.influence_function @ m2c.m2c
+              
         # Convert influence function from 2D to 3D
         if ifunc.mask_inf_func is not None:           
             # Create empty 3D array (height, width, n_modes)
@@ -963,8 +977,12 @@ def generate_im_filenames(config_file, timestamp=False):
             # Check for custom influence functions
             if 'ifunc_tag' in config['dm']:
                 parts.append(f"ifunc_{config['dm']['ifunc_tag']}")
+                if 'm2c_tag' in config['dm']:
+                    parts.append(f"m2c_{config['dm']['m2c_tag']}")
             elif 'ifunc_object' in config['dm']:
                 parts.append(f"ifunc_{config['dm']['ifunc_object']}")
+                if 'm2c_object' in config['dm']:
+                    parts.append(f"m2c_{config['dm']['m2c_object']}")
             elif 'type_str' in config['dm']:
                 nmodes = dm_params.get('nmodes', 0)
                 parts.append(f"nm{nmodes}_{dm_params['type']}")
@@ -1032,8 +1050,12 @@ def generate_im_filenames(config_file, timestamp=False):
                         # Check for custom influence functions
                         if 'ifunc_tag' in dm_config:
                             parts.append(f"ifunc_{dm_config['ifunc_tag']}")
+                            if 'm2c_tag' in dm_config:
+                                parts.append(f"m2c_{dm_config['m2c_tag']}")
                         elif 'ifunc_object' in dm_config:
                             parts.append(f"ifunc_{dm_config['ifunc_object']}")
+                            if 'm2c_object' in dm_config:
+                                parts.append(f"m2c_{dm_config['m2c_object']}")
                         elif 'type_str' in dm_config:
                             nmodes = dm_config.get('nmodes', 0)
                             parts.append(f"nm{nmodes}_{dm_config['type_str']}")
