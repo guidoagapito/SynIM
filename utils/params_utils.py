@@ -71,11 +71,6 @@ def prepare_interaction_matrix_params(params, wfs_type=None, wfs_index=None, dm_
     Returns:
         dict: Parameters ready to be passed to synim.interaction_matrix
     """
-    # Importiamo le funzioni necessarie
-    from utils.filename_generator import extract_wfs_list, extract_dm_list, is_simple_config, wfs_fov_from_config
-    import re
-    import numpy as np
-    import os
     
     # Prepare the CalibManager
     main_params = params['main']
@@ -97,12 +92,14 @@ def prepare_interaction_matrix_params(params, wfs_type=None, wfs_index=None, dm_
     pup_mask = None
     if 'pupilstop' in params:
         pupilstop_params = params['pupilstop']
-        if 'object' in pupilstop_params or 'pupil_mask_tag' in pupilstop_params:
+        if 'tag' in pupilstop_params or 'pupil_mask_tag' in pupilstop_params:
             # Load pupilstop from file
             if 'pupil_mask_tag' in pupilstop_params:
                 pupilstop_tag = pupilstop_params['pupil_mask_tag']
+                print(f"     Loading pupilstop from file, tag: {pupilstop_tag}")
             else:
-                pupilstop_tag = pupilstop_params['object']
+                pupilstop_tag = pupilstop_params['tag']
+                print(f"     Loading pupilstop from file, tag: {pupilstop_tag}")
             pupilstop_path = cm.filename('pupilstop', pupilstop_tag)
             pupilstop = Pupilstop.restore(pupilstop_path)
             pup_mask = pupilstop.A  # Use the amplitude attribute of Pupilstop
@@ -822,6 +819,24 @@ def generate_im_filename(config_file, wfs_type=None, wfs_index=None, dm_index=No
     elif 'ref' in selected_wfs['name']:
         source_type = 'ref'
     
+    # Extract source identifier based on polar coordinates
+    source_name = None
+    source_coords = None
+    
+    # Extract source information from WFS name
+    source_match = re.search(r'((?:lgs|ngs|ref)\d+)', selected_wfs['name'])
+    if source_match:
+        source_name = f"source_{source_match.group(1)}"
+        if source_name in config and 'polar_coordinates' in config[source_name]:
+            source_coords = config[source_name]['polar_coordinates']
+    
+    # If no polar coordinates found, try to find them in WFS params
+    if source_coords is None and 'gs_pol_coo' in selected_wfs['config']:
+        source_coords = selected_wfs['config']['gs_pol_coo']
+    
+    # Extract DM height
+    dm_height = selected_dm['config'].get('height', 0)
+    
     # Generate filenames for all combinations
     all_filenames = generate_im_filenames(config_file, timestamp=timestamp)
     
@@ -829,32 +844,88 @@ def generate_im_filename(config_file, wfs_type=None, wfs_index=None, dm_index=No
     if source_type in all_filenames:
         filenames = all_filenames[source_type]
         
-        # Try to find a filename containing identifiers for both our WFS and DM
-        wfs_identifier = selected_wfs['name']
-        dm_identifier = selected_dm['name']
+        # Create pattern strings for matching
+        wfs_pattern = None
+        if source_coords is not None:
+            dist, angle = source_coords
+            wfs_pattern = f"pd{dist:.1f}a{angle:.0f}"
         
-        # First try to find an exact match
+        dm_pattern = f"dmH{dm_height}"
+        
+        print(f"Looking for WFS pattern: {wfs_pattern} and DM pattern: {dm_pattern}")
+        
+        # Try to find an exact match based on patterns
         for filename in filenames:
-            # This is an approximation - we should parse the filename more precisely
-            if wfs_identifier in filename and dm_identifier in filename:
+            if (wfs_pattern is None or wfs_pattern in filename) and dm_pattern in filename:
+                print(f"Found matching filename: {filename}")
                 return filename
         
-        # If no exact match, return the first filename for this source type
+        # If no exact match, try just matching DM height
+        for filename in filenames:
+            if dm_pattern in filename:
+                print(f"Found filename matching DM height: {filename}")
+                return filename
+        
+        # If still no match, return the first filename for this source type
         if filenames:
+            print(f"Using first available filename for {source_type}: {filenames[0]}")
             return filenames[0]
     
     # If all else fails, generate a custom filename
     # This is a simplified version - ideally, we'd follow the same pattern as in generate_im_filenames
     base_name = "IM_syn"
-    wfs_part = f"wfs{selected_wfs['index']}_{selected_wfs['type']}"
-    dm_part = f"dm{selected_dm['index']}"
-    timestamp_part = datetime.datetime.now().strftime("%Y%m%d_%H%M%S") if timestamp else ""
     
-    parts = [base_name, wfs_part, dm_part]
-    if timestamp_part:
-        parts.append(timestamp_part)
+    parts = [base_name]
     
-    return "_".join(parts) + ".fits"
+    # Source info
+    if source_coords is not None:
+        dist, angle = source_coords
+        parts.append(f"pd{dist:.1f}a{angle:.0f}")
+    
+    # WFS info
+    wfs_config = selected_wfs['config']
+    if selected_wfs['type'] == 'sh':
+        nsubaps = wfs_config.get('subap_on_diameter', 0)
+        wl = wfs_config.get('wavelengthInNm', 0)
+        fov = wfs_fov_from_config(wfs_config)
+        npx = wfs_config.get('subap_npx', 0)
+        parts.append(f"sh{nsubaps}x{nsubaps}_wl{wl}_fv{fov:.1f}_np{npx}")
+    elif selected_wfs['type'] == 'pyr':
+        pup_diam = wfs_config.get('pup_diam', 0)
+        wl = wfs_config.get('wavelengthInNm', 0)
+        fov = wfs_fov_from_config(wfs_config)
+        mod_amp = wfs_config.get('mod_amp', 0)
+        parts.append(f"pyr{pup_diam:.1f}_wl{wl}_fv{fov:.1f}_ma{mod_amp:.1f}")
+    
+    # DM info
+    parts.append(f"dmH{dm_height}")
+    
+    # Check for custom influence functions
+    dm_config = selected_dm['config']
+    if 'ifunc_tag' in dm_config:
+        parts.append(f"ifunc_{dm_config['ifunc_tag']}")
+        if 'm2c_tag' in dm_config:
+            parts.append(f"m2c_{dm_config['m2c_tag']}")
+    elif 'ifunc_object' in dm_config:
+        parts.append(f"ifunc_{dm_config['ifunc_object']}")
+        if 'm2c_object' in dm_config:
+            parts.append(f"m2c_{dm_config['m2c_object']}")
+    elif 'type_str' in dm_config:
+        nmodes = dm_config.get('nmodes', 0)
+        parts.append(f"nm{nmodes}_{dm_config['type_str']}")
+    else:
+        # Default case
+        nmodes = dm_config.get('nmodes', 0)
+        parts.append(f"nm{nmodes}")
+    
+    # Add timestamp if requested
+    if timestamp:
+        ts = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
+        parts.append(ts)
+    
+    filename = "_".join(parts) + ".fits"
+    print(f"Generated custom filename: {filename}")
+    return filename
 
 def generate_im_filenames(config_file, timestamp=False):
     """Generate interaction matrix filenames for all WFS-DM combinations, grouped by star type"""
