@@ -435,12 +435,18 @@ def prepare_interaction_matrix_params(params, wfs_type=None, wfs_index=None, dm_
         source_match = re.search(r'((?:lgs|ngs|ref)\d+)', wfs_key)
         if source_match:
             source_key = f'source_{source_match.group(1)}'
-            if source_key in params and 'polar_coordinates' in params[source_key]:
-                gs_pol_coo = params[source_key]['polar_coordinates']
+            if source_key in params:
+                if 'polar_coordinates' in params[source_key]:
+                    gs_pol_coo = params[source_key]['polar_coordinates']
+                elif 'polar_coordinate' in params[source_key]:
+                    gs_pol_coo = params[source_key]['polar_coordinate']
         # Try on_axis_source for simple configs
-        elif 'on_axis_source' in params and 'polar_coordinates' in params['on_axis_source']:
-            gs_pol_coo = params['on_axis_source']['polar_coordinates']
-    
+        elif 'on_axis_source' in params:
+            if 'polar_coordinates' in params['on_axis_source']:
+                gs_pol_coo = params['on_axis_source']['polar_coordinates']
+            elif 'polar_coordinate' in params['on_axis_source']:
+                gs_pol_coo = params['on_axis_source']['polar_coordinate']
+
     # Return the prepared parameters
     return {
         'pup_diam_m': pup_diam_m,
@@ -713,7 +719,12 @@ def extract_source_info(config, wfs_name):
     if not source_info and 'on_axis_source' in config:
         source_info['type'] = 'ngs'
         source_info['name'] = 'on_axis_source'
-        source_info['pol_coords'] = config['on_axis_source'].get('polar_coordinates', [0, 0])
+        if config['on_axis_source'].get('polar_coordinates'):
+            source_info['pol_coords'] = config['on_axis_source']['polar_coordinates']
+        elif config['on_axis_source'].get('polar_coordinate'):
+            source_info['pol_coords'] = config['on_axis_source']['polar_coordinate']
+        else:
+            source_info['pol_coords'] = [0, 0]
         source_info['wavelength'] = config['on_axis_source'].get('wavelengthInNm', 750)
     
     return source_info
@@ -827,8 +838,11 @@ def generate_im_filename(config_file, wfs_type=None, wfs_index=None, dm_index=No
     source_match = re.search(r'((?:lgs|ngs|ref)\d+)', selected_wfs['name'])
     if source_match:
         source_name = f"source_{source_match.group(1)}"
-        if source_name in config and 'polar_coordinates' in config[source_name]:
-            source_coords = config[source_name]['polar_coordinates']
+        if source_name in config:
+            if 'polar_coordinates' in config[source_name]:
+                source_coords = config[source_name]['polar_coordinates']
+            elif 'polar_coordinate' in config[source_name]:
+                source_coords = config[source_name]['polar_coordinate']
     
     # If no polar coordinates found, try to find them in WFS params
     if source_coords is None and 'gs_pol_coo' in selected_wfs['config']:
@@ -990,10 +1004,14 @@ def generate_im_filenames(config_file, timestamp=False):
         if 'on_axis_source' in config:
             source_info = {
                 'type': 'ngs',
-                'pol_coords': config['on_axis_source'].get('polar_coordinates', [0, 0]),
                 'wavelength': config['on_axis_source'].get('wavelengthInNm', 0)
             }
-        
+            if 'polar_coordinates' in config['on_axis_source']:
+                source_info['pol_coords'] = config['on_axis_source']['polar_coordinates']
+            elif 'polar_coordinate' in config['on_axis_source']:
+                source_info['pol_coords'] = config['on_axis_source']['polar_coordinate']
+            else:
+                source_info['pol_coords'] = [0.0, 0.0]  # Default on-axis       
         # DM info
         dm_params = {}
         if 'dm' in config:
@@ -1092,6 +1110,9 @@ def generate_im_filenames(config_file, timestamp=False):
                         if 'polar_coordinates' in source:
                             dist, angle = source['polar_coordinates']
                             parts.append(f"pd{dist:.1f}a{angle:.0f}")
+                        elif 'polar_coordinate' in source:
+                            dist, angle = source['polar_coordinate']
+                            parts.append(f"pd{dist:.1f}a{angle:.0f}")
                         
                         if 'height' in source:
                             parts.append(f"h{source['height']:.0f}")
@@ -1166,6 +1187,9 @@ def generate_im_filenames(config_file, timestamp=False):
                         if 'polar_coordinates' in source:
                             dist, angle = source['polar_coordinates']
                             parts.append(f"pd{dist:.1f}a{angle:.0f}")
+                        elif 'polar_coordinate' in source:
+                            dist, angle = source['polar_coordinate']
+                            parts.append(f"pd{dist:.1f}a{angle:.0f}")
                         
                         # Pupil parameters
                         if pupil_params:
@@ -1220,6 +1244,9 @@ def generate_im_filenames(config_file, timestamp=False):
                         source = config[source_key]
                         if 'polar_coordinates' in source:
                             dist, angle = source['polar_coordinates']
+                            parts.append(f"pd{dist:.1f}a{angle:.0f}")
+                        elif 'polar_coordinate' in source:
+                            dist, angle = source['polar_coordinate']
                             parts.append(f"pd{dist:.1f}a{angle:.0f}")
                         
                         # Pupil parameters
