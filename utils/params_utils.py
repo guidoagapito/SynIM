@@ -522,7 +522,14 @@ def parse_pro_file(pro_file_path):
                     elif re.match(r'^-?\d+(\.\d+)?$', value):  # Intero o float
                         value = float(value) if '.' in value else int(value)
                     elif re.match(r'^\[.*\]$', value):  # Lista
-                        value = eval(value)  # Usa eval per interpretare la lista
+                        # Gestione speciale per 'replicate'
+                        def replicate_replacer(match):
+                            val = match.group(1)
+                            num = int(match.group(2))
+                            return str([float(val)] * num)
+                        # Sostituisci tutte le occorrenze di replicate(x, n)
+                        value = re.sub(r'replicate\(([^,]+),\s*(\d+)\)', replicate_replacer, value)
+                        value = eval(value)
                     elif re.match(r'^[\d\.]+/[^\s]+$', value):  # Espressione matematica (e.g., 8.118/160)
                         try:
                             value = eval(value)
