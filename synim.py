@@ -947,24 +947,24 @@ def interaction_matrix(pup_diam_m,pup_mask,dm_array,dm_mask,dm_height,dm_rotatio
         # first line: DM shape
         im0 = axs[0, 0].imshow(trans_dm_array[:, :, idx_mode], cmap='seismic')
         axs[0, 0].set_title(f'DM shape (mode {idx_mode})')
-        fig.colourbar(im0, ax=axs[0, 0])
+        fig.colorbar(im0, ax=axs[0, 0])
         axs[0, 1].axis('off') # empty cell
 
         # second line: Derivate
         im1 = axs[1, 0].imshow(der_dx[:, :, idx_mode], cmap='seismic')
         axs[1, 0].set_title(f'Derivative dx (mode {idx_mode})')
-        fig.colourbar(im1, ax=axs[1, 0])
+        fig.colorbar(im1, ax=axs[1, 0])
         im2 = axs[1, 1].imshow(der_dy[:, :, idx_mode], cmap='seismic')
         axs[1, 1].set_title(f'Derivative dy (mode {idx_mode})')
-        fig.colourbar(im2, ax=axs[1, 1])
+        fig.colorbar(im2, ax=axs[1, 1])
 
         # Third line: WFS signals
         im3 = axs[2, 0].imshow(WFS_signal_x[:, :, idx_mode], cmap='seismic')
         axs[2, 0].set_title(f'WFS signal x (mode {idx_mode})')
-        fig.colourbar(im3, ax=axs[2, 0])
+        fig.colorbar(im3, ax=axs[2, 0])
         im4 = axs[2, 1].imshow(WFS_signal_y[:, :, idx_mode], cmap='seismic')
         axs[2, 1].set_title(f'WFS signal y (mode {idx_mode})')
-        fig.colourbar(im4, ax=axs[2, 1])
+        fig.colorbar(im4, ax=axs[2, 1])
 
         fig.suptitle(f'DM, derivatives, and WFS signals (mode {idx_mode})')
         plt.tight_layout()
