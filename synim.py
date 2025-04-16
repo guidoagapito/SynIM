@@ -631,7 +631,8 @@ def shiftzoom_from_source_dm_params(source_pol_coo, source_height, dm_height, pi
         mag_factor = source_height/(source_height-dm_height)
     source_rec_coo_asec = polar_to_xy(source_pol_coo[0],source_pol_coo[1]*np.pi/180)
     source_rec_coo_m = source_rec_coo_asec*dm_height*arcsec2rad
-    source_rec_coo_pix = source_rec_coo_m / pixel_pitch
+    # change sign to get the shift in the right direction considering the convention applied in rotshiftzoom_array
+    source_rec_coo_pix = -1 * source_rec_coo_m / pixel_pitch
 
     shift = tuple(source_rec_coo_pix)
     zoom = (mag_factor, mag_factor)
