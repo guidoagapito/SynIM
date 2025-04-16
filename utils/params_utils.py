@@ -196,7 +196,7 @@ def prepare_interaction_matrix_params(params, wfs_type=None, wfs_index=None, dm_
         else:
             # If we don't have a mask, assume the influence function is already properly organized
             raise ValueError("IFunc without mask_inf_func is not supported. Mask is required to reconstruct the 3D array.")
-            
+
     elif 'type_str' in dm_params:
         print(f"     Loading influence function from type_str: {dm_params['type_str']}")
         # Create influence functions directly using Zernike modes
@@ -216,6 +216,12 @@ def prepare_interaction_matrix_params(params, wfs_type=None, wfs_index=None, dm_
         print(f"     DM mask sum: {np.sum(dm_mask)}")
     else:
         raise ValueError("No valid influence function configuration found. Need either 'ifunc_tag', 'ifunc_object', or 'type_str'.")
+
+    if 'nmodes' in dm_params:
+        nmodes = dm_params['nmodes']
+        if dm_array.shape[2] > nmodes:
+            print(f"     Trimming DM array to first {nmodes} modes")
+            dm_array = dm_array[:, :, :nmodes]
 
     # WFS selection logic
     selected_wfs = None
