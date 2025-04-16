@@ -929,8 +929,38 @@ def interaction_matrix(pup_diam_m,pup_mask,dm_array,dm_mask,dm_height,dm_rotatio
         np.nan_to_num(der_dx, copy=False, nan=0.0, posinf=None, neginf=None)
     if np.isnan(der_dy).any():
         np.nan_to_num(der_dy, copy=False, nan=0.0, posinf=None, neginf=None)
+        
+    # apply pup mask
+    der_dx = apply_mask(der_dx,trans_pup_mask)
+    der_dy = apply_mask(der_dy,trans_pup_mask)
+        
     WFS_signal_x = rebin(der_dx, (wfs_nsubaps,wfs_nsubaps), method='average')
     WFS_signal_y = rebin(der_dy, (wfs_nsubaps,wfs_nsubaps), method='average')
+
+    debug_rebin_plot = False
+    if debug_rebin_plot:
+        # compare derivative before and after rebining
+        plt.figure(figsize=(10, 4))
+        plt.subplot(121)
+        plt.imshow(der_dx[:,:,2], cmap='seismic')
+        plt.title('DM shape derivative before rebin')
+        plt.colorbar()
+        plt.subplot(122)
+        plt.imshow(WFS_signal_x[:,:,2], cmap='seismic')
+        plt.title('DM shape derivative after rebin')
+        plt.colorbar()
+
+        plt.figure(figsize=(10, 4))
+        plt.subplot(121)
+        plt.imshow(der_dy[:,:,2], cmap='seismic')
+        plt.title('DM shape derivative before rebin')
+        plt.colorbar()
+        plt.subplot(122)
+        plt.imshow(WFS_signal_y[:,:,2], cmap='seismic')
+        plt.title('DM shape derivative after rebin')
+        plt.colorbar()
+        plt.show()
+
 
     if verbose:
         print('Rebin done.')
