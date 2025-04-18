@@ -631,7 +631,8 @@ def shiftzoom_from_source_dm_params(source_pol_coo, source_height, dm_height, pi
         mag_factor = source_height/(source_height-dm_height)
     source_rec_coo_asec = polar_to_xy(source_pol_coo[0],source_pol_coo[1]*np.pi/180)
     source_rec_coo_m = source_rec_coo_asec*dm_height*arcsec2rad
-    source_rec_coo_pix = source_rec_coo_m / pixel_pitch
+    # change sign to get the shift in the right direction considering the convention applied in rotshiftzoom_array
+    source_rec_coo_pix = -1 * source_rec_coo_m / pixel_pitch
 
     shift = tuple(source_rec_coo_pix)
     zoom = (mag_factor, mag_factor)
@@ -726,11 +727,39 @@ def rotshiftzoom_array(input_array, dm_translation=(0.0, 0.0), dm_rotation=0.0, 
     Rotation is applied in the same direction as the first function.
     """
    
-    if len(dm_translation) != 2 or len(wfs_translation) != 2:
-        raise ValueError("Translation vectors must have 2 elements.")
-    if len(dm_magnification) != 2 or len(wfs_magnification) != 2:
-        raise ValueError("Translation vectors must have 2 elements.")
-   
+    # Parameter handling: conversion of single values to tuples
+    try:
+        if not hasattr(dm_translation, '__len__') or len(dm_translation) != 2:
+            dm_translation = (float(dm_translation), float(dm_translation))
+    except (TypeError, ValueError):
+        dm_translation = (0.0, 0.0)
+        
+    try:
+        if not hasattr(wfs_translation, '__len__') or len(wfs_translation) != 2:
+            wfs_translation = (float(wfs_translation), float(wfs_translation))
+    except (TypeError, ValueError):
+        wfs_translation = (0.0, 0.0)
+        
+    try:
+        if not hasattr(dm_magnification, '__len__'):
+            # If it is a single value, we create a tuple with two identical elements
+            dm_magnification = (float(dm_magnification), float(dm_magnification))
+        elif len(dm_magnification) != 2:
+            # if it is a sequence but not of length 2
+            dm_magnification = (float(dm_magnification[0]), float(dm_magnification[0]))
+    except (TypeError, ValueError):
+        dm_magnification = (1.0, 1.0)
+        
+    try:
+        if not hasattr(wfs_magnification, '__len__'):
+            # If it is a single value, we create a tuple with two identical elements
+            wfs_magnification = (float(wfs_magnification), float(wfs_magnification))
+        elif len(wfs_magnification) != 2:
+            # if it is a sequence but not of length 2
+            wfs_magnification = (float(wfs_magnification[0]), float(wfs_magnification[0]))
+    except (TypeError, ValueError):
+        wfs_magnification = (1.0, 1.0)
+
     if np.isnan(input_array).any():
         input_array = np.nan_to_num(input_array, copy=True, nan=0.0, posinf=None, neginf=None)
     
@@ -797,7 +826,7 @@ def rotshiftzoom_array(input_array, dm_translation=(0.0, 0.0), dm_rotation=0.0, 
     return output
 
 def interaction_matrix(pup_diam_m,pup_mask,dm_array,dm_mask,dm_height,dm_rotation,wfs_nsubaps,wfs_rotation,wfs_translation,wfs_magnification,
-                       wfs_fov_arcsec,gs_pol_coo,gs_height,idx_valid_sa=None,verbose=False,display=False):
+                       wfs_fov_arcsec,gs_pol_coo,gs_height,idx_valid_sa=None,verbose=False,display=False,specula_convention=True):
     """
     Computes a single interaction matrix.
     From Guido Agapito.
@@ -819,6 +848,7 @@ def interaction_matrix(pup_diam_m,pup_mask,dm_array,dm_mask,dm_height,dm_rotatio
     - idx_valid_sa: numpy 1D array, indices of the valid sub-apertures
     - verbose, optional
     - display, optional
+    - specula_convention, optional
 
     Returns:
     - im: numpy 2D array, set of signals
@@ -846,16 +876,20 @@ def interaction_matrix(pup_diam_m,pup_mask,dm_array,dm_mask,dm_height,dm_rotatio
     trans_dm_mask[trans_dm_mask<0.5] = 0
     if np.max(trans_dm_mask) <= 0:
         raise ValueError('Error in input data, the rotated dm mask is empty.')
+
     # apply transformation to the pupil mask
     trans_pup_mask  = rotshiftzoom_array(pup_mask, dm_translation=(0,0), dm_rotation=0, dm_magnification=(1,1),
                                         wfs_translation=wfs_translation, wfs_rotation=wfs_rotation, wfs_magnification=wfs_magnification,
                                         output_size=output_size)
     trans_pup_mask[trans_pup_mask<0.5] = 0
+
     if np.max(trans_pup_mask) <= 0:
         raise ValueError('Error in input data, the rotated pup mask is empty.')
 
     if verbose:
-        print('Rotation, shift and zoom done.')
+        print(f'DM rotation ({dm_rotation} deg), translation ({dm_translation} pixel), magnification ({dm_magnification})')
+        print(f'WFS translation ({wfs_translation} pixel), wfs rotation ({wfs_rotation} deg), wfs magnification ({wfs_magnification})')
+        print('done.')
 
     # apply mask
     trans_dm_array = apply_mask(trans_dm_array,trans_dm_mask)
@@ -864,6 +898,12 @@ def interaction_matrix(pup_diam_m,pup_mask,dm_array,dm_mask,dm_height,dm_rotatio
 
     if verbose:
         print('Mask applied.')
+
+    if specula_convention:
+        # transpose the DM array, mask and pupil mask to match the specula convention
+        trans_dm_array = np.transpose(trans_dm_array, (1, 0, 2))
+        trans_dm_mask = np.transpose(trans_dm_mask)
+        trans_pup_mask = np.transpose(trans_pup_mask)
 
     # Derivative od DM modes shape
     der_dx, der_dy = compute_derivatives_with_extrapolation(trans_dm_array,mask=trans_dm_mask)
@@ -879,7 +919,7 @@ def interaction_matrix(pup_diam_m,pup_mask,dm_array,dm_mask,dm_height,dm_rotatio
 
     pup_mask_sa = rebin(trans_pup_mask, (wfs_nsubaps,wfs_nsubaps), method='sum')
     pup_mask_sa = pup_mask_sa * 1/np.max(pup_mask_sa)
-    
+
     dm_mask_sa = rebin(trans_dm_mask, (wfs_nsubaps,wfs_nsubaps), method='sum')
     if np.max(dm_mask_sa) <= 0:
         raise ValueError('Error in input data, the dm mask is empty.')
@@ -890,8 +930,47 @@ def interaction_matrix(pup_diam_m,pup_mask,dm_array,dm_mask,dm_height,dm_rotatio
         np.nan_to_num(der_dx, copy=False, nan=0.0, posinf=None, neginf=None)
     if np.isnan(der_dy).any():
         np.nan_to_num(der_dy, copy=False, nan=0.0, posinf=None, neginf=None)
-    WFS_signal_x = rebin(der_dx, (wfs_nsubaps,wfs_nsubaps), method='average')
-    WFS_signal_y = rebin(der_dy, (wfs_nsubaps,wfs_nsubaps), method='average')
+
+    # apply pup mask
+    der_dx = apply_mask(der_dx,trans_pup_mask)
+    der_dy = apply_mask(der_dy,trans_pup_mask)
+
+    scale_factor = (der_dx.shape[0]/wfs_nsubaps)/np.median(rebin(trans_pup_mask, (wfs_nsubaps,wfs_nsubaps), method='average'))
+    WFS_signal_x = rebin(der_dx, (wfs_nsubaps,wfs_nsubaps), method='average')*scale_factor
+    WFS_signal_y = rebin(der_dy, (wfs_nsubaps,wfs_nsubaps), method='average')*scale_factor
+
+    debug_rebin_plot = False
+    if debug_rebin_plot:
+        # compare derivative before and after rebining
+        idx_mode = 2 # you can change this value as you wish
+
+        fig, axs = plt.subplots(3, 2, figsize=(12, 14))
+
+        # first line: DM shape
+        im0 = axs[0, 0].imshow(trans_dm_array[:, :, idx_mode], cmap='seismic')
+        axs[0, 0].set_title(f'DM shape (mode {idx_mode})')
+        fig.colorbar(im0, ax=axs[0, 0])
+        axs[0, 1].axis('off') # empty cell
+
+        # second line: Derivate
+        im1 = axs[1, 0].imshow(der_dx[:, :, idx_mode], cmap='seismic')
+        axs[1, 0].set_title(f'Derivative dx (mode {idx_mode})')
+        fig.colorbar(im1, ax=axs[1, 0])
+        im2 = axs[1, 1].imshow(der_dy[:, :, idx_mode], cmap='seismic')
+        axs[1, 1].set_title(f'Derivative dy (mode {idx_mode})')
+        fig.colorbar(im2, ax=axs[1, 1])
+
+        # Third line: WFS signals
+        im3 = axs[2, 0].imshow(WFS_signal_x[:, :, idx_mode], cmap='seismic')
+        axs[2, 0].set_title(f'WFS signal x (mode {idx_mode})')
+        fig.colorbar(im3, ax=axs[2, 0])
+        im4 = axs[2, 1].imshow(WFS_signal_y[:, :, idx_mode], cmap='seismic')
+        axs[2, 1].set_title(f'WFS signal y (mode {idx_mode})')
+        fig.colorbar(im4, ax=axs[2, 1])
+
+        fig.suptitle(f'DM, derivatives, and WFS signals (mode {idx_mode})')
+        plt.tight_layout()
+        plt.show()
 
     if verbose:
         print('Rebin done.')
@@ -911,7 +990,7 @@ def interaction_matrix(pup_diam_m,pup_mask,dm_array,dm_mask,dm_height,dm_rotatio
 
     if verbose:
         print('Mask applied.')
-    
+
     WFS_signal_x_2D = WFS_signal_x.reshape((-1,WFS_signal_x.shape[2]))
     WFS_signal_y_2D = WFS_signal_y.reshape((-1,WFS_signal_y.shape[2]))
 
@@ -919,28 +998,44 @@ def interaction_matrix(pup_diam_m,pup_mask,dm_array,dm_mask,dm_height,dm_rotatio
     print('WFS signal y shape:', WFS_signal_y_2D.shape)
 
     if idx_valid_sa is not None:
-        if len(idx_valid_sa.shape) > 1 and idx_valid_sa.shape[1] == 2:
+
+        if specula_convention:
+            # transpose idx_valid_sa to match the specula convention
+            sa2D = np.zeros((wfs_nsubaps,wfs_nsubaps))
+            sa2D[idx_valid_sa[:,0], idx_valid_sa[:,1]] = 1
+            sa2D = np.transpose(sa2D)
+            idx_temp = np.where(sa2D>0)
+            idx_valid_sa_new = idx_valid_sa*0.
+            idx_valid_sa_new[:,0] = idx_temp[0]
+            idx_valid_sa_new[:,1] = idx_temp[1]
+        else:
+            idx_valid_sa_new = idx_valid_sa
+        
+        if len(idx_valid_sa_new.shape) > 1 and idx_valid_sa_new.shape[1] == 2:
             # Convert 2D coordinates [y,x] to linear indices
             # Formula: linear_index = y * width + x
             width = wfs_nsubaps  # Width of the original 2D array
-            linear_indices = idx_valid_sa[:,0] * width + idx_valid_sa[:,1]
+            linear_indices = idx_valid_sa_new[:,0] * width + idx_valid_sa_new[:,1]
             
             # Use these linear indices to select elements from flattened arrays
-            WFS_signal_x_2D = WFS_signal_x_2D[linear_indices,:]
-            WFS_signal_y_2D = WFS_signal_y_2D[linear_indices,:]
+            WFS_signal_x_2D = WFS_signal_x_2D[linear_indices.astype(int),:]
+            WFS_signal_y_2D = WFS_signal_y_2D[linear_indices.astype(int),:]
         else:
             # Use 1D array directly
-            WFS_signal_x_2D = WFS_signal_x_2D[idx_valid_sa,:]
-            WFS_signal_y_2D = WFS_signal_y_2D[idx_valid_sa,:]
+            WFS_signal_x_2D = WFS_signal_x_2D[idx_valid_sa_new.astype(int),:]
+            WFS_signal_y_2D = WFS_signal_y_2D[idx_valid_sa_new.astype(int),:]
         if verbose:
             print('Indices selected.')
 
-    im = np.concatenate((WFS_signal_x_2D, WFS_signal_y_2D))
+    if specula_convention:
+        im = np.concatenate((WFS_signal_y_2D, WFS_signal_x_2D))
+    else:
+        im = np.concatenate((WFS_signal_x_2D, WFS_signal_y_2D))
 
-    # Here we consider the DM RMS normalized to 1 nm
-    # Conversion from nm to arcsec
-    coeff = 4e-9/(pup_diam_m/wfs_nsubaps) * 206265
-    # Conversion from srcsec to slope
+    # Here we consider that tilt give a 4nm/SA derivative
+    # Conversion from 4nm tilt derivative to arcsec
+    coeff = 1e-9/(pup_diam_m/wfs_nsubaps) * 206265
+    # Conversion from arcsec to slope
     coeff *= 1/(0.5 * wfs_fov_arcsec)
     im = im * coeff
 
@@ -953,27 +1048,29 @@ def interaction_matrix(pup_diam_m,pup_mask,dm_array,dm_mask,dm_height,dm_rotatio
         plt.title('Pupil masks rebinned on WFS sub-apertures')
         plt.colorbar()
         
+        idx_plot = [2,5]
+        
         fig, axs = plt.subplots(2,2)
-        im3 = axs[0,0].imshow(trans_dm_array[:,:,2], cmap='seismic')
-        im3 = axs[0,1].imshow(trans_dm_array[:,:,2], cmap='seismic')
-        im3 = axs[1,0].imshow(trans_dm_array[:,:,5], cmap='seismic')
-        im3 = axs[1,1].imshow(trans_dm_array[:,:,5], cmap='seismic')
-        fig.suptitle('DM shapes seen on the WFS direction (idx 2 and 5)')
+        im3 = axs[0,0].imshow(trans_dm_array[:,:,idx_plot[0]], cmap='seismic')
+        im3 = axs[0,1].imshow(trans_dm_array[:,:,idx_plot[0]], cmap='seismic')
+        im3 = axs[1,0].imshow(trans_dm_array[:,:,idx_plot[1]], cmap='seismic')
+        im3 = axs[1,1].imshow(trans_dm_array[:,:,idx_plot[1]], cmap='seismic')
+        fig.suptitle('DM shapes seen on the WFS direction (idx {idx_plot[0]} and {idx_plot[1]})')
         fig.colorbar(im3, ax=axs.ravel().tolist(),fraction=0.02)
         
         fig, axs = plt.subplots(2,2)
-        im4 = axs[0,0].imshow(der_dx[:,:,2], cmap='seismic')
-        im4 = axs[0,1].imshow(der_dy[:,:,2], cmap='seismic')
-        im4 = axs[1,0].imshow(der_dx[:,:,5], cmap='seismic')
-        im4 = axs[1,1].imshow(der_dy[:,:,5], cmap='seismic')
-        fig.suptitle('X and Y derivative of DM shapes seen on the WFS direction (idx 2 and 5)')
+        im4 = axs[0,0].imshow(der_dx[:,:,idx_plot[0]], cmap='seismic')
+        im4 = axs[0,1].imshow(der_dy[:,:,idx_plot[0]], cmap='seismic')
+        im4 = axs[1,0].imshow(der_dx[:,:,idx_plot[1]], cmap='seismic')
+        im4 = axs[1,1].imshow(der_dy[:,:,idx_plot[1]], cmap='seismic')
+        fig.suptitle('X and Y derivative of DM shapes seen on the WFS direction (idx {idx_plot[0]} and {idx_plot[1]})')
         fig.colorbar(im4, ax=axs.ravel().tolist(),fraction=0.02)
         
         fig, axs = plt.subplots(2,2)
-        im5 = axs[0,0].imshow(WFS_signal_x[:,:,2], cmap='seismic')
-        im5 = axs[0,1].imshow(WFS_signal_y[:,:,2], cmap='seismic')
-        im5 = axs[1,0].imshow(WFS_signal_x[:,:,5], cmap='seismic')
-        im5 = axs[1,1].imshow(WFS_signal_y[:,:,5], cmap='seismic')
+        im5 = axs[0,0].imshow(WFS_signal_x[:,:,idx_plot[0]], cmap='seismic')
+        im5 = axs[0,1].imshow(WFS_signal_y[:,:,idx_plot[0]], cmap='seismic')
+        im5 = axs[1,0].imshow(WFS_signal_x[:,:,idx_plot[1]], cmap='seismic')
+        im5 = axs[1,1].imshow(WFS_signal_y[:,:,idx_plot[1]], cmap='seismic')
         fig.suptitle('X and Y WFS signals')
         fig.colorbar(im5, ax=axs.ravel().tolist(),fraction=0.02)
         plt.show()

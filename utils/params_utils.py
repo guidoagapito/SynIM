@@ -1,28 +1,20 @@
 import os
 import re
 import yaml
+import datetime
 import numpy as np
+import matplotlib.pyplot as plt
 import synim
+
+
+# Import all utility functions from params_common_utils
+from utils.params_common_utils import *
 
 import specula
 specula.init(device_idx=-1, precision=1)
 
 from specula.calib_manager import CalibManager
-from specula.lib.make_mask import make_mask
-from specula.data_objects.ifunc import IFunc
-from specula.data_objects.pupilstop import Pupilstop
-from specula.data_objects.subap_data import SubapData
-
-def wfs_fov_from_config(wfs_params):
-    if wfs_params.get('sensor_fov') is not None:
-        wfs_fov_arcsec = wfs_params['sensor_fov']
-    elif wfs_params.get('fov') is not None:
-        wfs_fov_arcsec = wfs_params['fov']
-    elif wfs_params.get('subap_wanted_fov') is not None:
-        wfs_fov_arcsec = wfs_params['subap_wanted_fov']
-    else:
-        wfs_fov_arcsec = 0
-    return wfs_fov_arcsec
+from specula.data_objects.intmat import Intmat
 
 def prepare_interaction_matrix_params(params, wfs_type=None, wfs_index=None, dm_index=None):
     """
@@ -30,14 +22,14 @@ def prepare_interaction_matrix_params(params, wfs_type=None, wfs_index=None, dm_
     
     Args:
         params (dict): Dictionary with configuration parameters.
-        wfs_type (str, optional): Type of WFS ('lgs', 'ngs', or 'ref')
+        wfs_type (str, optional): Type of WFS ('sh', 'pyr') or source type ('lgs', 'ngs', 'ref')
         wfs_index (int, optional): Index of the WFS to use (1-based)
         dm_index (int, optional): Index of the DM to use (1-based)
         
     Returns:
         dict: Parameters ready to be passed to synim.interaction_matrix
-    """  
-        
+    """
+    
     # Prepare the CalibManager
     main_params = params['main']
     cm = CalibManager(main_params['root_dir'])
@@ -47,34 +39,18 @@ def prepare_interaction_matrix_params(params, wfs_type=None, wfs_index=None, dm_
     pixel_pitch = main_params['pixel_pitch']
     pup_diam_m = pixel_pupil * pixel_pitch
     
+    # Determine if this is a simple or complex configuration
+    simple_config = is_simple_config(params)
+    
+    # Extract all WFS and DM configurations
+    wfs_list = extract_wfs_list(params)
+    dm_list = extract_dm_list(params)
+    
     # Load pupilstop and create pupil mask
     pup_mask = None
     if 'pupilstop' in params:
         pupilstop_params = params['pupilstop']
-        if 'object' in pupilstop_params or 'pupil_mask_tag' in pupilstop_params:
-            # Load pupilstop from file
-            if 'pupil_mask_tag' in pupilstop_params:
-                pupilstop_tag = pupilstop_params['pupil_mask_tag']
-            else:
-                pupilstop_tag = pupilstop_params['object']
-            pupilstop_path = cm.filename('pupilstop', pupilstop_tag)
-            pupilstop = Pupilstop.restore(pupilstop_path)
-            pup_mask = pupilstop.A  # Use the amplitude attribute of Pupilstop
-        else:
-            # Create pupilstop from parameters
-            mask_diam = pupilstop_params.get('mask_diam', 1.0)
-            obs_diam = pupilstop_params.get('obs_diam', None)
-            
-            # Create a new Pupilstop instance with the given parameters
-            pupilstop = Pupilstop(
-                pixel_pupil=pixel_pupil,
-                pixel_pitch=pixel_pitch,
-                mask_diam=mask_diam,
-                obs_diam=obs_diam,
-                target_device_idx=-1,
-                precision=0
-            )
-            pup_mask = pupilstop.A  # Use the amplitude attribute
+        pup_mask = load_pupilstop(cm, pupilstop_params, pixel_pupil, pixel_pitch, verbose=True)
     
     # If no pupilstop defined, create a default circular pupil
     if pup_mask is None:
@@ -88,357 +64,169 @@ def prepare_interaction_matrix_params(params, wfs_type=None, wfs_index=None, dm_
         )
         pup_mask = pupilstop.A
     
-    # Find DM parameters based on specified index or use the first available one
-    print("DM -- Looking for DM parameters...")
+    # Find the appropriate DM based on dm_index
+    selected_dm = None
+    
     if dm_index is not None:
-        print(f"     Using specified DM index: {dm_index}")
-        dm_key = f'dm{dm_index}'
-        if dm_key not in params:
-            # Fallback: if specified DM doesn't exist, try 'dm' without number
-            if 'dm' in params:
-                dm_key = 'dm'
-                print(f"     DM with index {dm_index} not found. Using 'dm' section instead.")
-            else:
-                raise ValueError(f"DM with index {dm_index} not found in YAML file.")
-        else:
-            print(f"     Using specified DM: {dm_key}")
-        dm_params = params[dm_key]
-    else:
-        # Original behavior: find the first available DM
-        dm_keys = [key for key in params if key.startswith('dm')]
-        if dm_keys:
-            dm_key = dm_keys[0]
-            dm_params = params[dm_key]
-            print(f"     Using first available DM: {dm_key}")
-        else:
-            raise ValueError("No DM configuration found in the YAML file.")
+        # Try to find DM with specified index
+        for dm in dm_list:
+            if dm['index'] == str(dm_index):
+                selected_dm = dm
+                print(f"DM -- Using specified DM: {dm['name']}")
+                break
+    
+    # If no DM found with specified index or no index specified, use first DM
+    if selected_dm is None and dm_list:
+        selected_dm = dm_list[0]
+        print(f"DM -- Using first available DM: {selected_dm['name']}")
+    
+    if selected_dm is None:
+        raise ValueError("No DM configuration found in the YAML file.")
+    
+    dm_key = selected_dm['name']
+    dm_params = selected_dm['config']
     
     # Extract DM parameters
     dm_height = dm_params.get('height', 0)
     dm_rotation = dm_params.get('rotation', 0.0)
     
     # Load influence functions
-    dm_array = None
-    dm_mask = None
-    if 'ifunc_object' in dm_params or 'ifunc_tag' in dm_params:
-        if 'ifunc_tag' in dm_params:
-            print("     Loading influence function from file, tag:", dm_params['ifunc_tag'])
-            ifunc_tag = dm_params['ifunc_tag']
-        else:
-            print("     Loading influence function from file, tag:", dm_params['ifunc_object'])
-            ifunc_tag = dm_params['ifunc_object']
-        ifunc_path = cm.filename('ifunc', ifunc_tag)
-        ifunc = IFunc.restore(ifunc_path)
-        
-        # Convert influence function from 2D to 3D
-        if ifunc.mask_inf_func is not None:
-            # If we have a mask, reconstruct the complete 3D array
-            mask_shape = ifunc.mask_inf_func.shape
-            n_modes = ifunc.influence_function.shape[0] if ifunc.influence_function.ndim > 1 else 1
-            
-            # Create empty 3D array (height, width, n_modes)
-            dm_array = np.zeros((mask_shape[0], mask_shape[1], n_modes), dtype=float)
-            
-            # Fill the 3D array using the mask
-            if n_modes > 1:
-                # For multiple modes
-                for i in range(n_modes):
-                    temp = np.zeros(mask_shape, dtype=float)
-                    idx = np.where(ifunc.mask_inf_func > 0)
-                    ifunc_i = ifunc.influence_function[i, :]
-                    # normalize by the RMS
-                    ifunc_i /= np.sqrt(np.mean(ifunc_i**2))
-                    temp[idx] = ifunc_i
-                    dm_array[:, :, i] = temp
-            else:
-                # For a single mode
-                temp = np.zeros(mask_shape, dtype=float)
-                idx = np.where(ifunc.mask_inf_func > 0)
-                temp[idx] = ifunc.influence_function
-                dm_array[:, :, 0] = temp
-                
-            # Create the DM mask
-            dm_mask = ifunc.mask_inf_func.copy()
-        else:
-            # If we don't have a mask, assume the influence function is already properly organized
-            raise ValueError("IFunc without mask_inf_func is not supported. Mask is required to reconstruct the 3D array.")
-            
-    elif 'type_str' in dm_params:
-        print("     Loading influence function from type_str:", dm_params['type_str'])
-        # Create influence functions directly using Zernike modes
-        from specula.lib.compute_zern_ifunc import compute_zern_ifunc
-        nmodes = dm_params.get('nmodes', 100)
-        obsratio = dm_params.get('obsratio', 0.0)
-        npixels = dm_params.get('npixels', pixel_pupil)
-        
-        # Compute Zernike influence functions
-        #mask = make_mask(npixels, obsratio, 1.0, get_idx=False, xp=np)
-        z_ifunc, z_mask = compute_zern_ifunc(npixels, nmodes, xp=np, dtype=float, obsratio=obsratio, diaratio=1.0, start_mode=0, mask=None)
-        
-        # Convert to the right format for SynIM
-        dm_array = np.zeros((npixels**2, nmodes), dtype=float)
-        for i in range(nmodes):
-            dm_array[np.where(z_mask.flat),i] = z_ifunc[i]
-        dm_array = dm_array.reshape((npixels, npixels, nmodes))
-        print("     DM array shape:", dm_array.shape)
-        dm_mask = z_mask
-        print("     DM mask shape:", dm_mask.shape)
-        print("     DM mask sum:", np.sum(dm_mask))
+    dm_array, dm_mask = load_influence_functions(cm, dm_params, pixel_pupil, verbose=True)
 
-    else:
-        # If no influence function is specified, raise an error
-        raise ValueError("No influence function specified in the YAML file. Please provide a valid influence function.")    
+    if 'nmodes' in dm_params:
+        nmodes = dm_params['nmodes']
+        if dm_array.shape[2] > nmodes:
+            print(f"     Trimming DM array to first {nmodes} modes")
+            dm_array = dm_array[:, :, :nmodes]
 
-    if dm_array is None:
-        raise ValueError("No influence function data found for the specified DM.")
-
+    # WFS selection logic
+    selected_wfs = None
+    source_type = None
+    
     print("WFS -- Looking for WFS parameters...")
-    # Find WFS parameters based on the specified type and index
-    wfs_found = False
-    wfs_key = None
-    wfs_params = None
     
-    # Try to find the specified WFS - ora cerca anche 'sh' o 'pyramid'
-    # Expanded WFS search to include standard SPECULA sections
-    wfs_keys = []
-      
-    # Look for 'sh' and 'pyramid' sections
-    if 'sh' in params:
-        print("      Found 'sh' section in YAML file.")
-        wfs_keys.append('sh')
-    if 'pyramid' in params:
-        print("      Found 'pyramid' section in YAML file.")
-        wfs_keys.append('pyramid')
-    
-    # Look for sections starting with sh_ or pyramid_
-    for key in params:
-        if key.startswith('sh_') or key.startswith('pyramid_'):
-            print(f"      Found '{key}' section in YAML file.")
-            wfs_keys.append(key)
-
-    # Look for sections starting with wfs
-    for key in params:
-        if key.startswith('wfs'):
-            print(f"      Found '{key}' section in the configuration file.")
-            wfs_keys.append(key)
-    
-    # Process specific wfs_type if provided
-    if wfs_type is not None:
-        # Filter keys by type
-        if wfs_type == 'sh':
-            potential_keys = [k for k in wfs_keys if k == 'sh' or k.startswith('sh_')]
-        elif wfs_type == 'pyr':
-            potential_keys = [k for k in wfs_keys if k == 'pyramid' or k.startswith('pyramid_')]
+    # Simple SCAO configuration case
+    if simple_config:
+        print("     Simple SCAO configuration detected")
+        if len(wfs_list) > 0:
+            selected_wfs = wfs_list[0]
+            source_type = 'ngs'  # Default for simple configs
+            print(f"     Using WFS: {selected_wfs['name']} of type {selected_wfs['type']}")
         else:
-            potential_keys = [k for k in wfs_keys if k.endswith(f"_{wfs_type}")]
+            raise ValueError("No WFS configuration found in the YAML file.")
+    else:
+        # Complex MCAO configuration
+        print("     Complex MCAO configuration detected")
         
-        # Further filter by index if provided
-        if wfs_index is not None and potential_keys:
-            for key in potential_keys:
-                if f"_{wfs_index}" in key or (wfs_index == 1 and key in ['sh', 'pyramid']):
-                    wfs_key = key
-                    wfs_params = params[key]
-                    wfs_found = True
+        # Case 1: wfs_type specifies the sensor type ('sh', 'pyr')
+        if wfs_type in ['sh', 'pyr']:
+            print(f"     Looking for WFS of type: {wfs_type}")
+            matching_wfs = [wfs for wfs in wfs_list if wfs['type'] == wfs_type]
+            
+            if wfs_index is not None:
+                # Try to find specific index
+                for wfs in matching_wfs:
+                    if wfs['index'] == str(wfs_index):
+                        selected_wfs = wfs
+                        print(f"     Found WFS with specified index: {wfs['name']}")
+                        break
+            
+            # If no specific index found, use the first one
+            if selected_wfs is None and matching_wfs:
+                selected_wfs = matching_wfs[0]
+                print(f"     Using first WFS of type {wfs_type}: {selected_wfs['name']}")
+        
+        # Case 2: wfs_type specifies the source type ('lgs', 'ngs', 'ref')
+        elif wfs_type in ['lgs', 'ngs', 'ref']:
+            source_type = wfs_type
+            print(f"     Looking for WFS associated with {wfs_type} source")
+            
+            # Pattern for WFS names corresponding to the source type
+            pattern = f"sh_{source_type}"
+            matching_wfs = [wfs for wfs in wfs_list if pattern in wfs['name']]
+            
+            if wfs_index is not None:
+                # Try to find specific index within the source type
+                target_name = f"{pattern}{wfs_index}"
+                for wfs in matching_wfs:
+                    if wfs['name'] == target_name:
+                        selected_wfs = wfs
+                        print(f"     Found WFS with specified index: {wfs['name']}")
+                        break
+            
+            # If no specific index found, use the first one
+            if selected_wfs is None and matching_wfs:
+                selected_wfs = matching_wfs[0]
+                print(f"     Using first WFS for {wfs_type}: {selected_wfs['name']}")
+        
+        # Case 3: Only wfs_index is specified (no wfs_type)
+        elif wfs_index is not None:
+            print(f"     Looking for WFS with index: {wfs_index}")
+            for wfs in wfs_list:
+                if wfs['index'] == str(wfs_index):
+                    selected_wfs = wfs
+                    print(f"     Found WFS with specified index: {wfs['name']}")
                     break
-        elif potential_keys:
-            # Take the first one matching the type
-            wfs_key = potential_keys[0]
-            wfs_params = params[wfs_key]
-            wfs_found = True
-    
-    # If not found by type or no type specified, try by index
-    elif wfs_index is not None:
-        # Try specific keys with index
-        test_keys = [f'wfs{wfs_index}', f'sh_{wfs_index}', f'pyramid_{wfs_index}']
-        for key in test_keys:
-            if key in params:
-                wfs_key = key
-                wfs_params = params[key]
-                wfs_found = True
-                break
         
-        # Special case for index 1, might be just 'sh' or 'pyramid'
-        if not wfs_found and wfs_index == 1:
-            if 'sh' in params:
-                wfs_key = 'sh'
-                wfs_params = params[wfs_key]
-                wfs_found = True
-            elif 'pyramid' in params:
-                wfs_key = 'pyramid'
-                wfs_params = params[wfs_key]
-                wfs_found = True
+        # Case 4: No specific criteria, use the first available WFS
+        if selected_wfs is None and wfs_list:
+            selected_wfs = wfs_list[0]
+            print(f"     Using first available WFS: {selected_wfs['name']}")
     
-    #slopec
-    if 'slopec' in params:
-        slopec_params = params['slopec']
-
-    # If no specific search criteria, use the first available WFS
-    if not wfs_found and wfs_keys:
-        wfs_key = wfs_keys[0]
-        wfs_params = params[wfs_key]
-        wfs_found = True
+    # If no WFS found, raise error
+    if selected_wfs is None:
+        raise ValueError("No matching WFS configuration found in the YAML file.")
     
-    if not wfs_found:
-        raise ValueError("No matching WFS configuration found in the YAML file. Available keys: " + 
-                         ", ".join(list(params.keys())))
+    wfs_key = selected_wfs['name']
+    wfs_params = selected_wfs['config']
+    wfs_type_detected = selected_wfs['type']
     
-    # Setup WFS parameters
-    # Determine WFS type based on the key
-    if wfs_key == 'pyramid' or wfs_key.startswith('pyramid'):
-        wfs_type = 'pyr'
-    elif wfs_key == 'sh' or wfs_key.startswith('sh'):
-        wfs_type = 'sh'
-    else:
-        wfs_type = wfs_params.get('type', 'sh')  # Default to Shack-Hartmann
+    # Determine source type from WFS name if not already set
+    if source_type is None:
+        source_type = determine_source_type(wfs_key)
     
-    # Define WFS parameters with appropriate defaults
-    if wfs_type == 'sh':
-        # Shack-Hartmann parameters
-        wfs_nsubaps = wfs_params.get('nsubaps', wfs_params.get('subap_on_diameter', 1))
-        wfs_wavelength = wfs_params.get('wavelengthInNm', 750)
-    else:
-        # Pyramid parameters
-        wfs_nsubaps = wfs_params.get('nsubaps', wfs_params.get('pup_diam', 1))
-        wfs_wavelength = wfs_params.get('wavelengthInNm', 750)
+    print(f"     Source type determined: {source_type}")
     
-    # Common WFS parameters
+    # Extract WFS parameters
     wfs_rotation = wfs_params.get('rotation', 0.0)
     wfs_translation = wfs_params.get('translation', [0.0, 0.0])
     wfs_magnification = wfs_params.get('magnification', 1.0)
     wfs_fov_arcsec = wfs_fov_from_config(wfs_params)
-    if np.isnan(wfs_magnification):
-        wfs_magnification = 1.0
-    if np.size(wfs_magnification) == 1:
-        wfs_magnification = [wfs_magnification, wfs_magnification]
     
-    # Load SubapData for valid subapertures if available
-    idx_valid_sa = None
-    subap_path = None
-    subap_tag = None
-
-    # First check - Try to get subapdata from WFS params
-    if 'subapdata_object' in wfs_params or 'subapdata_tag' in wfs_params:
-        if 'subapdata_tag' in wfs_params:
-            print("     Loading subapdata from file, tag:", wfs_params['subapdata_tag'])
-            subap_tag = wfs_params['subapdata_tag']
-            subap_path = cm.filename('subap_data', subap_tag)
-        else:
-            print("     Loading subapdata from file, tag:", wfs_params['subapdata_object'])
-            subap_tag = wfs_params['subapdata_object']
-            subap_path = cm.filename('subapdata', subap_tag)
-
-    # Second check - Try to find corresponding slopec section based on WFS name
-    elif wfs_key is not None:
-        # Determine potential slopec key based on WFS key (e.g., sh_lgs1 -> slopec_lgs1)
-        slopec_key = None
-        if wfs_key.startswith('sh_'):
-            potential_slopec = 'slopec_' + wfs_key[3:]
-            if potential_slopec in params:
-                slopec_key = potential_slopec
-        elif wfs_key.startswith('pyramid_'):
-            potential_slopec = 'slopec_' + wfs_key[8:]
-            if potential_slopec in params:
-                slopec_key = potential_slopec
-        # Handle numeric indices (e.g., sh1 -> slopec1)
-        elif any(char.isdigit() for char in wfs_key):
-            # Extract numeric portion
-            numeric_part = ''.join(char for char in wfs_key if char.isdigit())
-            if numeric_part:
-                potential_slopec = f'slopec{numeric_part}'
-                if potential_slopec in params:
-                    slopec_key = potential_slopec
-        
-        # Check standard slopec key
-        if slopec_key is None and 'slopec' in params:
-            slopec_key = 'slopec'
-        
-        if slopec_key:
-            slopec_params = params[slopec_key]
-            if 'subapdata_tag' in slopec_params:
-                print(f"     Loading subapdata from {slopec_key}, tag:", slopec_params['subapdata_tag'])
-                subap_tag = slopec_params['subapdata_tag']
-                subap_path = cm.filename('subap_data', subap_tag)
-            elif 'subapdata_object' in slopec_params:
-                print(f"     Loading subapdata from {slopec_key}, tag:", slopec_params['subapdata_object'])
-                subap_tag = slopec_params['subapdata_object']
-                subap_path = cm.filename('subapdata', subap_tag)
-
-    # Third check - Try generic slopec section
-    elif 'slopec' in params:
-        slopec_params = params['slopec']
-        if 'subapdata_tag' in slopec_params:
-            print("     Loading subapdata from slopec, tag:", slopec_params['subapdata_tag'])
-            subap_tag = slopec_params['subapdata_tag']
-            subap_path = cm.filename('subap_data', subap_tag)
-        elif 'subapdata_object' in slopec_params:
-            print("     Loading subapdata from slopec, tag:", slopec_params['subapdata_object'])
-            subap_tag = slopec_params['subapdata_object']
-            subap_path = cm.filename('subapdata', subap_tag)
-
-    # Try to load the subapdata if a path was found
-    if subap_path and os.path.exists(subap_path):
-        print("     Loading subapdata from file:", subap_path)
-        subap_data = SubapData.restore(subap_path)
-        idx_valid_sa = np.transpose(np.asarray(np.where(subap_data.single_mask())))
+    if wfs_type_detected == 'sh':
+        # Shack-Hartmann specific parameters
+        wfs_nsubaps = wfs_params.get('subap_on_diameter', 0)
     else:
-        if subap_path:
-            print(f"     Subapdata file not found at {subap_path}. Using default subaperture grid.")
-        else:
-            print("     No subapdata information found. Using default subaperture grid.")
+        # Pyramid specific parameters
+        wfs_nsubaps = wfs_params.get('pup_diam', 0)
     
-    # If we don't have idx_valid_sa from the file, calculate an estimate
-    if idx_valid_sa is None:
-        # Calculate valid subapertures based on the pupil mask
-        from scipy.ndimage import zoom
-        
-        # Resize pupil mask to match the WFS subaperture grid
-        zoom_factor = wfs_nsubaps / pup_mask.shape[0]
-        binned_mask = zoom(pup_mask, zoom_factor, order=0)
-        
-        # Consider a subaperture valid if it's at least half illuminated
-        valid_threshold = 0.5
-        subap_illumination = np.zeros((wfs_nsubaps, wfs_nsubaps))
-        
-        # Calculate illumination for each subaperture
-        for i in range(wfs_nsubaps):
-            for j in range(wfs_nsubaps):
-                subap_illumination[i, j] = np.mean(binned_mask[i, j])
-        
-        # Get indices of valid subapertures
-        valid_indices = np.where(subap_illumination >= valid_threshold)
-        idx_valid_sa = np.column_stack((valid_indices[0], valid_indices[1]))
+    # Load SubapData for valid subapertures
+    idx_valid_sa = find_subapdata(cm, wfs_params, wfs_key, params, verbose=True)
     
     # Guide star parameters
-    gs_pol_coo = wfs_params.get('gs_pol_coo', [0.0, 0.0])  # [theta, rho] in radians and arcsec
-    
-    # L'altezza dovrebbe essere infinita per NGS (stelle naturali) e specifica per LGS (stelle laser)
-    if wfs_type == 'sh' or wfs_key.startswith('sh'):
-        # Per Shack-Hartmann, verifica se è esplicitamente specificata un'altezza
-        gs_height = wfs_params.get('gs_height', float('inf'))  # Default a infinito per NGS
+    if source_type == 'lgs':
+        # LGS is at finite height
+        # Try to get height from source or use typical LGS height
+        gs_height = None
         
-        # Se non c'è altezza ma c'è 'type' che specifica 'lgs', usa un'altezza tipica delle LGS
-        if gs_height == float('inf') and wfs_params.get('type') == 'lgs':
-            gs_height = wfs_params.get('lgs_height', 90000.0)  # Altezza tipica delle LGS (90km)
+        # Check if there's a specific source for this WFS and try to get height
+        source_match = re.search(r'(lgs\d+)', wfs_key)
+        if source_match:
+            source_key = f'source_{source_match.group(1)}'
+            if source_key in params:
+                gs_height = params[source_key].get('height', None)
+        
+        # If still no height, use default
+        if gs_height is None:
+            gs_height = 90000.0  # Default LGS height in meters
     else:
-        # Per altre tipologie di WFS, default a infinito
-        gs_height = wfs_params.get('gs_height', float('inf'))
+        # NGS and REF are at infinite distance
+        gs_height = float('inf')
     
-    # Try to get source info from on_axis_source if no guide star parameters found
-    if 'on_axis_source' in params and gs_pol_coo == [0.0, 0.0]:
-        source = params['on_axis_source']
-        if 'polar_coordinates' in source:
-            gs_pol_coo = source['polar_coordinates']
-        
-        # Se stiamo usando on_axis_source, è sicuramente una NGS (infinito)
-        if gs_height == 0.0:
-            gs_height = float('inf')
+    # Get source polar coordinates
+    gs_pol_coo = extract_source_coordinates(params, wfs_key)
 
-    # Try to get source info from on_axis_source if no guide star parameters found
-    if 'on_axis_source' in params and gs_pol_coo == [0.0, 0.0]:
-        source = params['on_axis_source']
-        if 'polar_coordinates' in source:
-            gs_pol_coo = source['polar_coordinates']
-
+    # Return the prepared parameters
     return {
         'pup_diam_m': pup_diam_m,
         'pup_mask': pup_mask,
@@ -447,7 +235,7 @@ def prepare_interaction_matrix_params(params, wfs_type=None, wfs_index=None, dm_
         'dm_height': dm_height,
         'dm_rotation': dm_rotation,
         'wfs_key': wfs_key,
-        'wfs_type': wfs_type,
+        'wfs_type': wfs_type_detected,
         'wfs_nsubaps': wfs_nsubaps,
         'wfs_rotation': wfs_rotation,
         'wfs_translation': wfs_translation,
@@ -456,99 +244,297 @@ def prepare_interaction_matrix_params(params, wfs_type=None, wfs_index=None, dm_
         'gs_pol_coo': gs_pol_coo,
         'gs_height': gs_height,
         'idx_valid_sa': idx_valid_sa,
-        'dm_key': dm_key
+        'dm_key': dm_key,
+        'source_type': source_type
     }
 
-def parse_pro_file(pro_file_path):
+def is_simple_config(config):
     """
-    Parse a .pro file and extract its structure into a Python dictionary.
-
+    Detect if this is a simple SCAO config or a complex MCAO config.
+    
     Args:
-        pro_file_path (str): Path to the .pro file.
-
+        config (dict): Configuration dictionary
+        
     Returns:
-        dict: Parsed data as a dictionary.
+        bool: True for simple SCAO config, False for complex MCAO config
     """
-    data = {}
-    current_section = None
+    # Check for multiple DMs
+    dm_count = sum(1 for key in config if key.startswith('dm') and key != 'dm')
+    
+    # Check for multiple WFSs
+    wfs_count = sum(1 for key in config if 
+                   (key.startswith('sh_') or key.startswith('pyramid')) and key != 'pyramid')
+    
+    return dm_count == 0 and wfs_count == 0
 
-    with open(pro_file_path, 'r') as file:
-        for line in file:
-            # Rimuovi commenti e spazi bianchi
-            line = line.split(';')[0].strip()
-            if not line:
-                continue
-
-            # Riconosci l'inizio di una nuova sezione (e.g., {main, {DM, etc.)
-            section_match = re.match(r'^\{(\w+),', line)
-            if section_match:
-                current_section = section_match.group(1).lower()
-                data[current_section] = {}
-                continue
-
-            # Riconosci la fine di una sezione
-            if line == '}':
-                current_section = None
-                continue
-
-            # Se siamo in una sezione, processa le coppie chiave-valore
-            if current_section:
-                key_value_match = re.match(r'(\w+)\s*[:=]\s*(.+)', line)
-                if key_value_match:
-                    key = key_value_match.group(1).strip()
-                    value = key_value_match.group(2).strip()
-
-                    # Rimuovi eventuali virgole finali
-                    if value.endswith(','):
-                        value = value[:-1].strip()
-
-                    # Rimuovi apici singoli attorno alle stringhe
-                    if value.startswith("'") and value.endswith("'"):
-                        value = value[1:-1]
-
-                    # Interpreta i tipi di valore
-                    if value.lower() in ['true', 'false']:
-                        value = value.lower() == 'true'
-                    elif re.match(r'^-?\d+(\.\d+)?$', value):  # Intero o float
-                        value = float(value) if '.' in value else int(value)
-                    elif re.match(r'^\[.*\]$', value):  # Lista
-                        value = eval(value)  # Usa eval per interpretare la lista
-                    elif re.match(r'^[\d\.]+/[^\s]+$', value):  # Espressione matematica (e.g., 8.118/160)
-                        try:
-                            value = eval(value)
-                        except Exception:
-                            pass
-                    elif value.lower() == '!values.f_infinity':  # Caso speciale per infinito
-                        value = float('inf')
-
-                    data[current_section][key] = value
-
-    return data
-
-def parse_params_file(file_path):
+def generate_im_filename(config_file, wfs_type=None, wfs_index=None, dm_index=None, timestamp=False, verbose=False):
     """
-    Parse a parameters file (YAML or .pro) and return its contents as a dictionary.
-
+    Generate a specific interaction matrix filename based on WFS and DM indices.
+    
     Args:
-        file_path (str): Path to the parameters file.
-
+        config_file (str): Path to YAML or PRO configuration file
+        wfs_type (str, optional): Type of WFS ('sh', 'pyr') or source type ('lgs', 'ngs', 'ref')
+        wfs_index (int, optional): Index of the WFS to use (1-based)
+        dm_index (int, optional): Index of the DM to use (1-based)
+        timestamp (bool, optional): Whether to include timestamp in the filename
+        verbose (bool, optional): Whether to print verbose output
+        
     Returns:
-        dict: Parsed data as a dictionary.
+        str: Filename for the interaction matrix with the specified parameters
     """
-    if file_path.endswith('.yml') or file_path.endswith('.yaml'):
-        with open(file_path, 'r') as file:
-            return yaml.safe_load(file)
-    elif file_path.endswith('.pro'):
-        return parse_pro_file(file_path)
+    # Load configuration
+    if isinstance(config_file, str):
+        config = parse_params_file(config_file)
     else:
-        raise ValueError(f"Unsupported file format: {file_path}")
+        # Assume it's already a parsed config dictionary
+        config = config_file
+    
+    # Convert indices to strings for comparison
+    wfs_index_str = str(wfs_index) if wfs_index is not None else None
+    dm_index_str = str(dm_index) if dm_index is not None else None
+    
+    # Determine if this is a simple or complex configuration
+    simple_config = is_simple_config(config)
+    
+    # For simple configuration, there's typically only one WFS and DM
+    if simple_config:
+        if verbose:
+            print("Simple SCAO configuration detected")
+        # Just generate the single filename that would be created
+        filenames = generate_im_filenames(config)
+        
+        # Simple configs typically use NGS
+        if 'ngs' in filenames and filenames['ngs']:
+            return filenames['ngs'][0]
+        # Fall back to any available filename
+        for source_type in ['lgs', 'ref']:
+            if source_type in filenames and filenames[source_type]:
+                return filenames[source_type][0]
+        
+        # No valid filename found
+        return None
+    
+    # For complex configuration, we need to find the matching WFS and DM
+    if verbose:
+        print("Complex MCAO configuration detected")
+    
+    # Get lists of all WFSs and DMs
+    wfs_list = extract_wfs_list(config)
+    dm_list = extract_dm_list(config)
+    
+    # Filter WFS list based on wfs_type and wfs_index
+    filtered_wfs = wfs_list
+    if wfs_type:
+        # Check if wfs_type is a sensor type ('sh', 'pyr')
+        if wfs_type in ['sh', 'pyr']:
+            filtered_wfs = [wfs for wfs in filtered_wfs if wfs['type'] == wfs_type]
+        # Check if wfs_type is a source type ('lgs', 'ngs', 'ref')
+        elif wfs_type in ['lgs', 'ngs', 'ref']:
+            filtered_wfs = [wfs for wfs in filtered_wfs if wfs_type in wfs['name']]
+    
+    if wfs_index_str:
+        filtered_wfs = [wfs for wfs in filtered_wfs if wfs['index'] == wfs_index_str]
+    
+    # Filter DM list based on dm_index
+    filtered_dm = dm_list
+    if dm_index_str:
+        filtered_dm = [dm for dm in filtered_dm if dm['index'] == dm_index_str]
+    
+    # If we couldn't find matching WFS or DM, return None
+    if not filtered_wfs or not filtered_dm:
+        if verbose:
+            print("No matching WFS or DM found with the specified parameters")
+        return None
+    
+    # Select the first WFS and DM from the filtered lists
+    selected_wfs = filtered_wfs[0]
+    selected_dm = filtered_dm[0]
+    
+    if verbose:
+        print(f"Selected WFS: {selected_wfs['name']} (type: {selected_wfs['type']}, index: {selected_wfs['index']})")
+        print(f"Selected DM: {selected_dm['name']} (index: {selected_dm['index']})")
+    
+    # Determine the source type from the WFS name
+    source_type = determine_source_type(selected_wfs['name'])
+    
+    # Extract source information
+    source_coords = extract_source_coordinates(config, selected_wfs['name'])
+    
+    # Extract DM height
+    dm_height = selected_dm['config'].get('height', 0)
+    
+    # Generate filename parts
+    base_name = "IM_syn"
+    parts = [base_name]
+    
+    # Source info
+    if source_coords is not None:
+        dist, angle = source_coords
+        parts.append(f"pd{dist:.1f}a{angle:.0f}")
+    
+    # WFS info
+    wfs_config = selected_wfs['config']
+    parts.extend(build_wfs_filename_part(wfs_config, selected_wfs['type']))
+    
+    # DM info
+    parts.append(f"dmH{dm_height}")
+    
+    # Add DM-specific parts
+    parts.extend(build_dm_filename_part(selected_dm['config']))
+    
+    # Add timestamp if requested
+    if timestamp:
+        ts = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
+        parts.append(ts)
+    
+    # Join all parts with underscores and add extension
+    filename = "_".join(parts) + ".fits"
+    return filename
 
-def compute_interaction_matrix(params, wfs_type=None, wfs_index=None, dm_index=None, verbose=False, display=False):
+def generate_im_filenames(config_file, timestamp=False):
+    """
+    Generate interaction matrix filenames for all WFS-DM combinations, grouped by star type.
+    
+    Args:
+        config_file (str or dict): Path to YAML/PRO file or config dictionary
+        timestamp (bool, optional): Whether to include timestamp in filenames
+        
+    Returns:
+        dict: Dictionary with star types as keys and list of filenames as values
+    """
+    # Load YAML or PRO configuration
+    if isinstance(config_file, str):
+        config = parse_params_file(config_file)
+    else:
+        config = config_file
+    
+    # Detect if simple or complex configuration
+    simple_config = is_simple_config(config)
+    
+    # Basic system info
+    base_name = 'IM_syn'
+    
+    # Pupil parameters
+    pupil_params = {}
+    if 'main' in config:
+        pupil_params['pixel_pupil'] = config['main'].get('pixel_pupil', 0)
+        pupil_params['pixel_pitch'] = config['main'].get('pixel_pitch', 0)
+    
+    if 'pupilstop' in config:
+        pupstop = config['pupilstop']
+        if isinstance(pupstop, dict):
+            pupil_params['obsratio'] = pupstop.get('obsratio', 0.0)
+            pupil_params['tag'] = pupstop.get('tag', '')
+    
+    # Output dictionary: key=star type, value=list of filenames
+    filenames_by_type = {
+        'lgs': [],
+        'ngs': [],
+        'ref': []
+    }
+    
+    # Extract all DM configurations
+    dm_list = extract_dm_list(config)
+
+    # For simple configurations with on-axis source
+    if simple_config:
+        # Simple SCAO configuration
+        wfs_type = None
+        wfs_params = {}
+        
+        if 'pyramid' in config:
+            wfs_type = 'pyr'
+            wfs_params = config['pyramid']
+        elif 'sh' in config:
+            wfs_type = 'sh'
+            wfs_params = config['sh']
+            
+        # Source info
+        source_config = config.get('on_axis_source', {})
+        
+        # Build filename parts
+        parts = [base_name]
+        
+        # Add source parts
+        parts.extend(build_source_filename_part(source_config))
+        
+        # Add pupil parts
+        parts.extend(build_pupil_filename_part(pupil_params))
+        
+        # Add WFS parts
+        if wfs_type:
+            parts.extend(build_wfs_filename_part(wfs_params, wfs_type))
+        
+        # Add DM parts - use config for simple configs
+        for dm in dm_list:
+            dm_parts = build_dm_filename_part(dm['config'], config)
+            parts.extend(dm_parts)
+            
+            # Add timestamp if requested
+            if timestamp:
+                ts = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
+                parts.append(ts)
+
+            # Join all parts with underscores and add extension
+            filename = "_".join(parts) + ".fits"
+            filenames_by_type['ngs'].append(filename)  # Default to NGS for simple config
+            break  # Only one DM in simple config
+    else:
+        # Complex MCAO configuration
+        wfs_list = extract_wfs_list(config)
+        
+        # Generate filenames for all WFS-DM combinations
+        for wfs in wfs_list:
+            wfs_type = wfs['type']
+            wfs_params = wfs['config']
+            
+            # Determine source type from WFS name
+            source_type = determine_source_type(wfs['name'])
+            
+            # Get source information
+            source_config = {}
+            source_match = re.search(r'((?:lgs|ngs|ref)\d+)', wfs['name'])
+            if source_match:
+                source_key = f'source_{source_match.group(1)}'
+                if source_key in config:
+                    source_config = config[source_key]
+            
+            # For each DM, generate a filename
+            for dm in dm_list:
+                dm_params = dm['config']
+                
+                # Build filename parts
+                parts = [base_name]
+                
+                # Add source parts
+                parts.extend(build_source_filename_part(source_config))
+                
+                # Add pupil parts
+                parts.extend(build_pupil_filename_part(pupil_params))
+                
+                # Add WFS parts
+                parts.extend(build_wfs_filename_part(wfs_params, wfs_type))
+                
+                # Add DM parts
+                parts.extend(build_dm_filename_part(dm_params))
+                
+                # Add timestamp if requested
+                if timestamp:
+                    ts = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
+                    parts.append(ts)
+                
+                # Join all parts with underscores and add extension
+                filename = "_".join(parts) + ".fits"
+                filenames_by_type[source_type].append(filename)
+    
+    return filenames_by_type
+
+def compute_interaction_matrix(params_file, wfs_type=None, wfs_index=None, dm_index=None, verbose=False, display=False):
     """
     Calculates the interaction matrix for SynIM directly from a SPECULA YAML configuration file.
     
     Args:
-        params (obj): dictionary with configuration
+        params_file (str or dict): Path to YAML/PRO configuration file or dictionary with configuration
         wfs_type (str, optional): Type of WFS ('lgs', 'ngs', or 'ref')
         wfs_index (int, optional): Index of the WFS to use (1-based)
         dm_index (int, optional): Index of the DM to use (1-based)
@@ -556,15 +542,22 @@ def compute_interaction_matrix(params, wfs_type=None, wfs_index=None, dm_index=N
         display (bool): Flag to enable visualization
         
     Returns:
-        tuple: (interaction matrix, parameters used)
+        numpy.ndarray: Computed interaction matrix
     """
-
+    # Load configuration
+    if isinstance(params_file, str):
+        params_parsed = parse_params_file(params_file)
+        # Prepare parameters for the interaction matrix
+        params = prepare_interaction_matrix_params(params_parsed, wfs_type, wfs_index, dm_index)
+    else:
+        params = params_file
     
     if verbose:
         print("Interaction Matrix Parameters:")
         print(f"      Calculating IM for WFS: {params['wfs_key']} with DM: {params['dm_key']}")
         print(f"      WFS type: {params['wfs_type']}, subapertures: {params['wfs_nsubaps']}")
-        print(f"      Valid subapertures shape: {params['idx_valid_sa'].shape}")
+        if params['idx_valid_sa'] is not None:
+            print(f"      Valid subapertures shape: {params['idx_valid_sa'].shape}")
         print(f"      WFS rotation: {params['wfs_rotation']}")
         print(f"      WFS translation: {params['wfs_translation']}")
         print(f"      WFS magnification: {params['wfs_magnification']}")
@@ -580,8 +573,6 @@ def compute_interaction_matrix(params, wfs_type=None, wfs_index=None, dm_index=N
     
     if display:
         print("Displaying parameters...")
-        import matplotlib.pyplot as plt
-        
         plt.figure(figsize=(10, 8))
         plt.imshow(params['pup_mask'], cmap='gray')
         plt.colorbar()
@@ -601,7 +592,8 @@ def compute_interaction_matrix(params, wfs_type=None, wfs_index=None, dm_index=N
         plt.colorbar()
         plt.title("Valid Subapertures")
         plt.show()
-
+    
+    # Calculate the interaction matrix
     im = synim.interaction_matrix(
         pup_diam_m=params['pup_diam_m'],
         pup_mask=params['pup_mask'],
@@ -622,3 +614,388 @@ def compute_interaction_matrix(params, wfs_type=None, wfs_index=None, dm_index=N
     )
     
     return im
+
+def compute_interaction_matrices(yaml_file, root_dir=None, output_im_dir=None, output_rec_dir=None,
+                                 wfs_type=None, overwrite=False, verbose=False, display=False):
+    """
+    Computes and saves interaction matrices for all combinations of WFSs and DMs
+    based on a SPECULA YAML configuration file.
+    
+    Args:
+        yaml_file (str): Path to the YAML configuration file.
+        root_dir (str, optional): Root directory to set in params['main']['root_dir']. 
+                                 If None, uses SPECULA repo path.
+        output_im_dir (str, optional): Output directory for saved matrices. 
+                                      If None, uses calib/MCAO/im in the SPECULA repo.
+        output_rec_dir (str, optional): Output directory for reconstruction matrices.
+                                      If None, uses calib/MCAO/rec in the SPECULA repo.
+        wfs_type (str, optional): Type of WFS ('ngs', 'lgs', 'ref') to use. If None, uses all types.
+        overwrite (bool, optional): Whether to overwrite existing files.
+        verbose (bool, optional): Whether to print detailed information.
+        display (bool, optional): Whether to display plots of interaction matrices.
+        
+    Returns:
+        dict: Dictionary mapping WFS-DM pairs to saved interaction matrix paths.
+    """
+    # Load the YAML or PRO file
+    paramsAll = parse_params_file(yaml_file)
+    
+    # Find the SPECULA repository path
+    specula_init_path = specula.__file__
+    specula_package_dir = os.path.dirname(specula_init_path)
+    specula_repo_path = os.path.dirname(specula_package_dir)
+    
+    # Set up directories
+    if root_dir is None:
+        root_dir = os.path.join(specula_repo_path, "main", "scao", "calib", "MCAO")
+    
+    if output_im_dir is None:
+        output_im_dir = os.path.join(specula_repo_path, "main", "scao", "calib", "MCAO", "im")
+    
+    if output_rec_dir is None:
+        output_rec_dir = os.path.join(specula_repo_path, "main", "scao", "calib", "MCAO", "rec")
+    
+    # Update root_dir in params
+    if 'main' in paramsAll:
+        paramsAll['main']['root_dir'] = root_dir
+        if verbose:
+            print(f"Root directory set to: {paramsAll['main']['root_dir']}")
+    
+    # Make sure the output directories exist
+    os.makedirs(output_im_dir, exist_ok=True)
+    os.makedirs(output_rec_dir, exist_ok=True)
+    
+    # Get WFS and DM lists
+    wfs_list = extract_wfs_list(paramsAll)
+    dm_list = extract_dm_list(paramsAll)
+    
+    # Filter by wfs_type if specified
+    if wfs_type is not None:
+        filtered_wfs_list = []
+        for wfs in wfs_list:
+            if wfs_type in wfs['name']:
+                filtered_wfs_list.append(wfs)
+        wfs_list = filtered_wfs_list
+    
+    if verbose:
+        print(f"Found {len(wfs_list)} WFS(s) and {len(dm_list)} DM(s)")
+        for wfs in wfs_list:
+            print(f"  WFS: {wfs['name']} (type: {wfs['type']}, index: {wfs['index']})")
+        for dm in dm_list:
+            print(f"  DM: {dm['name']} (index: {dm['index']})")
+    
+    # Dictionary to store saved matrix paths
+    saved_matrices = {}
+    
+    # Process each WFS-DM combination
+    for wfs in wfs_list:
+        wfs_idx = int(wfs['index'])
+        wfs_name = wfs['name']
+        
+        for dm in dm_list:
+            dm_idx = int(dm['index'])
+            dm_name = dm['name']
+            
+            if verbose:
+                print(f"\nProcessing WFS {wfs_name} (index {wfs_idx}) and DM {dm_name} (index {dm_idx})")
+            
+            # Determine source type from WFS name
+            source_type = determine_source_type(wfs_name)
+            
+            # Generate filename for this combination
+            im_filename = generate_im_filename(yaml_file, wfs_type=source_type, 
+                                              wfs_index=wfs_idx, dm_index=dm_idx)
+            
+            # Full path for the file
+            im_path = os.path.join(output_im_dir, im_filename)
+            
+            # Check if the file already exists
+            if os.path.exists(im_path) and not overwrite:
+                if verbose:
+                    print(f"  File {im_filename} already exists. Skipping computation.")
+                saved_matrices[f"{wfs_name}_{dm_name}"] = im_path
+                continue
+            
+            # Prepare parameters for interaction matrix computation
+            params = prepare_interaction_matrix_params(paramsAll, wfs_type=source_type, 
+                                                     wfs_index=wfs_idx, dm_index=dm_idx)
+            
+            # Calculate the interaction matrix
+            im = compute_interaction_matrix(params, verbose=verbose, display=display)
+            
+            # Transpose to be coherent with the specula convention
+            im = im.transpose() * 2 * np.pi
+            
+            if verbose:
+                print(f"  Interaction matrix shape: {im.shape}")
+                print(f'  First few rows of IM: {im[0:5,:]}')
+            
+            # Display the matrix if requested
+            if display:
+                plt.figure(figsize=(10, 8))
+                plt.imshow(im, cmap='viridis')
+                plt.colorbar()
+                plt.title(f"Interaction Matrix: {wfs_name} - {dm_name}")
+                plt.tight_layout()
+                plt.show()
+            
+            # Create the Intmat object
+            wfs_info = f"{params['wfs_type']}_{params['wfs_nsubaps']}"
+            pupdata_tag = f"{os.path.basename(yaml_file).split('.')[0]}_{wfs_info}"
+            
+            # Create Intmat object and save it
+            intmat_obj = Intmat(
+                im, 
+                pupdata_tag=pupdata_tag,
+                norm_factor=1.0,  # Default value
+                target_device_idx=None,  # Use default device
+                precision=None    # Use default precision
+            )
+            
+            # Save the interaction matrix
+            intmat_obj.save(im_path)
+            if verbose:
+                print(f"  Interaction matrix saved as: {im_path}")
+            
+            saved_matrices[f"{wfs_name}_{dm_name}"] = im_path
+    
+    return saved_matrices
+
+def combine_interaction_matrices(yaml_file, output_im_dir=None, wfs_type='ngs', n_modes=None, 
+                                dm_indices=None, verbose=False, display=False):
+    """
+    Loads and combines individual interaction matrices into a full system matrix.
+    
+    Args:
+        yaml_file (str): Path to the YAML configuration file.
+        output_im_dir (str, optional): Directory where interaction matrices are stored.
+        wfs_type (str, optional): Type of WFS ('ngs', 'lgs', 'ref') to use.
+        n_modes (int, list, or dict, optional): 
+            - If int: Total number of modes for the combined matrix
+            - If list: Number of modes per DM by index position (e.g., [2, 0, 3] means 2 modes from DM1, 0 from DM2, 3 from DM3)
+            - If dict: Number of modes per DM with keys as DM indices (e.g., {1: 2, 3: 3} means 2 modes from DM1, 3 from DM3)
+        dm_indices (list, optional): List of DM indices to include. If None, uses all.
+        verbose (bool, optional): Whether to print detailed information.
+        display (bool, optional): Whether to display plots of the combined matrix.
+        
+    Returns:
+        numpy.ndarray: The combined interaction matrix.
+    """
+    # Find the SPECULA repository path
+    specula_init_path = specula.__file__
+    specula_package_dir = os.path.dirname(specula_init_path)
+    specula_repo_path = os.path.dirname(specula_package_dir)
+    
+    # Set up output directory
+    if output_im_dir is None:
+        output_im_dir = os.path.join(specula_repo_path, "main", "scao", "calib", "MCAO", "im")
+    
+    # Load the YAML file
+    paramsAll = parse_params_file(yaml_file)
+    
+    # Get WFS and DM lists
+    wfs_list = extract_wfs_list(paramsAll)
+    dm_list = extract_dm_list(paramsAll)
+    
+    # Filter WFSs by type
+    filtered_wfs = []
+    for wfs in wfs_list:
+        if wfs_type in wfs['name']:
+            filtered_wfs.append(wfs)
+    
+    # Filter DMs by indices if specified
+    if dm_indices is not None:
+        filtered_dms = []
+        for dm in dm_list:
+            if int(dm['index']) in dm_indices:
+                filtered_dms.append(dm)
+        dm_list = filtered_dms
+    
+    # First, determine n_slopes by loading the first available matrix
+    n_slopes = None
+    
+    # Try to load the first available matrix to determine n_slopes
+    for wfs in filtered_wfs:
+        wfs_idx = int(wfs['index'])
+        
+        for dm in dm_list:
+            dm_idx = int(dm['index'])
+            
+            im_filename = generate_im_filename(yaml_file, wfs_type=wfs_type, 
+                                             wfs_index=wfs_idx, dm_index=dm_idx)
+            im_path = os.path.join(output_im_dir, im_filename)
+            
+            if os.path.exists(im_path):
+                if verbose:
+                    print(f"Loading {im_filename} to determine matrix dimensions")
+                
+                intmat_obj = Intmat.restore(im_path)
+                n_slopes = intmat_obj._intmat.shape[1]
+                
+                if verbose:
+                    print(f"Determined n_slopes = {n_slopes} from matrix shape {intmat_obj._intmat.shape}")
+                
+                break
+        
+        if n_slopes is not None:
+            break
+    
+    if n_slopes is None:
+        raise ValueError("Could not determine n_slopes. No interaction matrices found.")
+    
+    # Process n_modes parameter
+    mode_map = {}
+    total_modes = 0
+    
+    if n_modes is None:
+        # Default: 2 modes for DM1 and 3 modes for DM3
+        mode_map = {1: list(range(2)), 3: list(range(2, 5))}
+        total_modes = 5
+    elif isinstance(n_modes, int):
+        # Backward compatibility: distribute modes with default logic
+        current_idx = 0
+        for dm in dm_list:
+            dm_idx = int(dm['index'])
+            
+            # Configure mode indices based on DM index
+            if dm_idx == 1:  # First 2 modes for DM1
+                mode_map[dm_idx] = list(range(2))
+                current_idx = 2
+            elif dm_idx == 2:  # Skip DM2 (typically tip-tilt mirror)
+                continue
+            elif dm_idx == 3:  # Next 3 modes for DM3
+                mode_map[dm_idx] = list(range(current_idx, current_idx + 3))
+                current_idx += 3
+            else:
+                # Default allocation
+                nm = min(2, n_modes - current_idx)  # Default 2 modes per DM
+                if nm <= 0:
+                    break  # No more modes to allocate
+                mode_map[dm_idx] = list(range(current_idx, current_idx + nm))
+                current_idx += nm
+        
+        total_modes = n_modes
+    elif isinstance(n_modes, list):
+        # List format: position corresponds to DM index - 1
+        current_idx = 0
+        for i, nm in enumerate(n_modes):
+            dm_idx = i + 1  # Convert to 1-based index
+            
+            # Skip if modes count is 0
+            if nm <= 0:
+                continue
+                
+            # Check if this DM is in our filtered list
+            dm_in_filtered = any(int(dm['index']) == dm_idx for dm in dm_list)
+            if not dm_in_filtered:
+                if verbose:
+                    print(f"  DM{dm_idx} is specified in n_modes but not in filtered DM list. Skipping.")
+                continue
+                
+            mode_map[dm_idx] = list(range(current_idx, current_idx + nm))
+            current_idx += nm
+            
+        total_modes = current_idx
+    elif isinstance(n_modes, dict):
+        # Dict format: keys are DM indices
+        current_idx = 0
+        
+        # Sort DM indices for consistent mode ordering
+        for dm_idx in sorted(n_modes.keys()):
+            nm = n_modes[dm_idx]
+            
+            # Skip if modes count is 0
+            if nm <= 0:
+                continue
+                
+            # Check if this DM is in our filtered list
+            dm_in_filtered = any(int(dm['index']) == dm_idx for dm in dm_list)
+            if not dm_in_filtered:
+                if verbose:
+                    print(f"  DM{dm_idx} is specified in n_modes but not in filtered DM list. Skipping.")
+                continue
+                
+            mode_map[dm_idx] = list(range(current_idx, current_idx + nm))
+            current_idx += nm
+            
+        total_modes = current_idx
+    else:
+        raise ValueError("n_modes must be an integer, list, or dictionary")
+        
+    if total_modes == 0:
+        raise ValueError("No valid modes to combine. Check n_modes parameter and DM filtering.")
+    
+    # Calculate dimensions for the combined matrix
+    N = total_modes
+    M = len(filtered_wfs) * n_slopes
+    im_full = np.zeros((N, M))
+    
+    if verbose:
+        print(f"Creating combined matrix of shape ({N}, {M})")
+        print(f"Using {len(filtered_wfs)} WFSs and {len(mode_map)} DMs")
+        print("Mode map:")
+        for dm_idx, modes in mode_map.items():
+            print(f"  DM{dm_idx}: {len(modes)} modes at indices {modes}")
+    
+    # Load and combine matrices
+    for i, wfs in enumerate(filtered_wfs):
+        wfs_idx = int(wfs['index'])
+        
+        for dm in dm_list:
+            dm_idx = int(dm['index'])
+            
+            # Skip if this DM is not in the mode map (has 0 modes or was filtered out)
+            if dm_idx not in mode_map:
+                if verbose:
+                    print(f"  Skipping DM{dm_idx} (not in mode map)")
+                continue
+            
+            im_filename = generate_im_filename(yaml_file, wfs_type=wfs_type, 
+                                             wfs_index=wfs_idx, dm_index=dm_idx)
+            im_path = os.path.join(output_im_dir, im_filename)
+            
+            if verbose:
+                print(f"  Loading {im_filename}")
+            
+            # Check if file exists
+            if not os.path.exists(im_path):
+                if verbose:
+                    print(f"  File not found: {im_path}")
+                continue
+            
+            # Load the interaction matrix
+            intmat_obj = Intmat.restore(im_path)
+            
+            # Get mode indices for this DM
+            mode_idx = mode_map[dm_idx]
+            
+            # Insert into the full matrix
+            slope_idx_start = i * n_slopes
+            slope_idx_end = (i + 1) * n_slopes
+            
+            # Use the utility function to insert the matrix part
+            insert_interaction_matrix_part(
+                im_full, intmat_obj, mode_idx, slope_idx_start, slope_idx_end, verbose=verbose
+            )
+    
+    # Display the combined matrix
+    if display:
+        plt.figure(figsize=(10, 8))
+        plt.imshow(im_full, cmap='viridis')
+        plt.colorbar()
+        plt.title("Combined Interaction Matrix")
+        plt.tight_layout()
+        plt.show()
+        
+        if verbose:
+            # Print statistics
+            print(f"Combined matrix shape: {im_full.shape}")
+            print(f"Matrix min: {im_full.min()}, max: {im_full.max()}, mean: {np.mean(im_full)}")
+            
+            # Display as pandas DataFrame for better readability
+            import pandas as pd
+            print("Full interaction matrix:")
+            df = pd.DataFrame(im_full)
+            print(df.to_string(float_format=lambda x: f"{x:.6e}"))
+    
+    return im_full
