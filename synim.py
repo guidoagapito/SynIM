@@ -936,8 +936,8 @@ def interaction_matrix(pup_diam_m,pup_mask,dm_array,dm_mask,dm_height,dm_rotatio
     der_dy = apply_mask(der_dy,trans_pup_mask)
 
     scale_array = (der_dx.shape[0]/wfs_nsubaps)/rebin(trans_pup_mask, (wfs_nsubaps,wfs_nsubaps), method='average')
-    WFS_signal_x = rebin(der_dx, (wfs_nsubaps,wfs_nsubaps), method='average')*scale_array
-    WFS_signal_y = rebin(der_dy, (wfs_nsubaps,wfs_nsubaps), method='average')*scale_array
+    WFS_signal_x = rebin(der_dx, (wfs_nsubaps,wfs_nsubaps), method='average')*scale_array[:,:,np.newaxis]
+    WFS_signal_y = rebin(der_dy, (wfs_nsubaps,wfs_nsubaps), method='average')*scale_array[:,:,np.newaxis]
 
     debug_rebin_plot = False
     if debug_rebin_plot:
