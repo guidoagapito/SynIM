@@ -919,24 +919,25 @@ def interaction_matrix(pup_diam_m,pup_mask,dm_array,dm_mask,dm_height,dm_rotatio
 
     pup_mask_sa = rebin(trans_pup_mask, (wfs_nsubaps,wfs_nsubaps), method='sum')
     pup_mask_sa = pup_mask_sa * 1/np.max(pup_mask_sa)
-    
+
     dm_mask_sa = rebin(trans_dm_mask, (wfs_nsubaps,wfs_nsubaps), method='sum')
     if np.max(dm_mask_sa) <= 0:
         raise ValueError('Error in input data, the dm mask is empty.')
     dm_mask_sa = dm_mask_sa * 1/np.max(dm_mask_sa)
-    
+
     # rebin the array to get the correct signal size
     if np.isnan(der_dx).any():
         np.nan_to_num(der_dx, copy=False, nan=0.0, posinf=None, neginf=None)
     if np.isnan(der_dy).any():
         np.nan_to_num(der_dy, copy=False, nan=0.0, posinf=None, neginf=None)
-        
+
     # apply pup mask
     der_dx = apply_mask(der_dx,trans_pup_mask)
     der_dy = apply_mask(der_dy,trans_pup_mask)
-        
-    WFS_signal_x = rebin(der_dx, (wfs_nsubaps,wfs_nsubaps), method='average')
-    WFS_signal_y = rebin(der_dy, (wfs_nsubaps,wfs_nsubaps), method='average')
+
+    scale_array = (der_dx.shape[0]/wfs_nsubaps)/rebin(trans_pup_mask, (wfs_nsubaps,wfs_nsubaps), method='average')
+    WFS_signal_x = rebin(der_dx, (wfs_nsubaps,wfs_nsubaps), method='average')*scale_array
+    WFS_signal_y = rebin(der_dy, (wfs_nsubaps,wfs_nsubaps), method='average')*scale_array
 
     debug_rebin_plot = False
     if debug_rebin_plot:
@@ -989,7 +990,7 @@ def interaction_matrix(pup_diam_m,pup_mask,dm_array,dm_mask,dm_height,dm_rotatio
 
     if verbose:
         print('Mask applied.')
-    
+
     WFS_signal_x_2D = WFS_signal_x.reshape((-1,WFS_signal_x.shape[2]))
     WFS_signal_y_2D = WFS_signal_y.reshape((-1,WFS_signal_y.shape[2]))
 
@@ -1031,10 +1032,10 @@ def interaction_matrix(pup_diam_m,pup_mask,dm_array,dm_mask,dm_height,dm_rotatio
     else:
         im = np.concatenate((WFS_signal_x_2D, WFS_signal_y_2D))
 
-    # Here we consider the DM RMS normalized to 1 nm
-    # Conversion from nm to arcsec
-    coeff = 4e-9/(pup_diam_m/wfs_nsubaps) * 206265
-    # Conversion from srcsec to slope
+    # Here we consider that tilt give a 4nm/SA derivative
+    # Conversion from 4nm tilt derivative to arcsec
+    coeff = 1e-9/(pup_diam_m/wfs_nsubaps) * 206265
+    # Conversion from arcsec to slope
     coeff *= 1/(0.5 * wfs_fov_arcsec)
     im = im * coeff
 
@@ -1047,27 +1048,29 @@ def interaction_matrix(pup_diam_m,pup_mask,dm_array,dm_mask,dm_height,dm_rotatio
         plt.title('Pupil masks rebinned on WFS sub-apertures')
         plt.colorbar()
         
+        idx_plot = [2,5]
+        
         fig, axs = plt.subplots(2,2)
-        im3 = axs[0,0].imshow(trans_dm_array[:,:,2], cmap='seismic')
-        im3 = axs[0,1].imshow(trans_dm_array[:,:,2], cmap='seismic')
-        im3 = axs[1,0].imshow(trans_dm_array[:,:,5], cmap='seismic')
-        im3 = axs[1,1].imshow(trans_dm_array[:,:,5], cmap='seismic')
-        fig.suptitle('DM shapes seen on the WFS direction (idx 2 and 5)')
+        im3 = axs[0,0].imshow(trans_dm_array[:,:,idx_plot[0]], cmap='seismic')
+        im3 = axs[0,1].imshow(trans_dm_array[:,:,idx_plot[0]], cmap='seismic')
+        im3 = axs[1,0].imshow(trans_dm_array[:,:,idx_plot[1]], cmap='seismic')
+        im3 = axs[1,1].imshow(trans_dm_array[:,:,idx_plot[1]], cmap='seismic')
+        fig.suptitle('DM shapes seen on the WFS direction (idx {idx_plot[0]} and {idx_plot[1]})')
         fig.colorbar(im3, ax=axs.ravel().tolist(),fraction=0.02)
         
         fig, axs = plt.subplots(2,2)
-        im4 = axs[0,0].imshow(der_dx[:,:,2], cmap='seismic')
-        im4 = axs[0,1].imshow(der_dy[:,:,2], cmap='seismic')
-        im4 = axs[1,0].imshow(der_dx[:,:,5], cmap='seismic')
-        im4 = axs[1,1].imshow(der_dy[:,:,5], cmap='seismic')
-        fig.suptitle('X and Y derivative of DM shapes seen on the WFS direction (idx 2 and 5)')
+        im4 = axs[0,0].imshow(der_dx[:,:,idx_plot[0]], cmap='seismic')
+        im4 = axs[0,1].imshow(der_dy[:,:,idx_plot[0]], cmap='seismic')
+        im4 = axs[1,0].imshow(der_dx[:,:,idx_plot[1]], cmap='seismic')
+        im4 = axs[1,1].imshow(der_dy[:,:,idx_plot[1]], cmap='seismic')
+        fig.suptitle('X and Y derivative of DM shapes seen on the WFS direction (idx {idx_plot[0]} and {idx_plot[1]})')
         fig.colorbar(im4, ax=axs.ravel().tolist(),fraction=0.02)
         
         fig, axs = plt.subplots(2,2)
-        im5 = axs[0,0].imshow(WFS_signal_x[:,:,2], cmap='seismic')
-        im5 = axs[0,1].imshow(WFS_signal_y[:,:,2], cmap='seismic')
-        im5 = axs[1,0].imshow(WFS_signal_x[:,:,5], cmap='seismic')
-        im5 = axs[1,1].imshow(WFS_signal_y[:,:,5], cmap='seismic')
+        im5 = axs[0,0].imshow(WFS_signal_x[:,:,idx_plot[0]], cmap='seismic')
+        im5 = axs[0,1].imshow(WFS_signal_y[:,:,idx_plot[0]], cmap='seismic')
+        im5 = axs[1,0].imshow(WFS_signal_x[:,:,idx_plot[1]], cmap='seismic')
+        im5 = axs[1,1].imshow(WFS_signal_y[:,:,idx_plot[1]], cmap='seismic')
         fig.suptitle('X and Y WFS signals')
         fig.colorbar(im5, ax=axs.ravel().tolist(),fraction=0.02)
         plt.show()
