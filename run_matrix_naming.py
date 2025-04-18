@@ -2,7 +2,7 @@ import sys
 import os
 sys.path.append(os.path.join(os.path.dirname(__file__), '..', 'src'))
 
-from utils.params_utils import generate_im_filenames
+from utils.params_common_utils import generate_im_filenames
 
 def main():
     # Percorso del file di configurazione YAML
