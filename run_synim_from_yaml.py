@@ -1,8 +1,8 @@
 import os
 import numpy as np
 import matplotlib.pyplot as plt
-from utils.params_utils import parse_params_file, compute_interaction_matrix, prepare_interaction_matrix_params
-from utils.filename_generator import generate_im_filenames
+from utils.params_utils import prepare_interaction_matrix_params, compute_interaction_matrix
+from utils.params_common_utils import parse_params_file, generate_im_filenames
 
 import specula
 specula.init(device_idx=-1, precision=1)
@@ -62,32 +62,11 @@ params['main']['root_dir'] = os.path.join(specula_repo_path, "main", "scao","cal
 print(f"Absolute path of root directory: {params['main']['root_dir']}")
 params = prepare_interaction_matrix_params(params)
 
-# -------------------------------------------------------------------
-# rotate the DM array and mask to be coherent with the specula convention
-params['dm_array'] = params['dm_array'].transpose(1, 0, 2)
-params['dm_mask'] = np.transpose(params['dm_mask'])
-params['pup_mask'] = np.transpose(params['pup_mask'])
-# rotate the list of valid subapertures to be coherent with the specula convention
-sa2D = np.zeros((params['wfs_nsubaps'],params['wfs_nsubaps']))
-sa2D[params['idx_valid_sa'][:,0], params['idx_valid_sa'][:,1]] = 1
-sa2D = np.transpose(sa2D)
-idx_valid_sa_new = np.where(sa2D>0)
-idx_valid_sa = params['idx_valid_sa']
-idx_valid_sa[:,0] = idx_valid_sa_new[0]
-idx_valid_sa[:,1] = idx_valid_sa_new[1]
-params['idx_valid_sa'] = idx_valid_sa
-# -------------------------------------------------------------------
-
 # Calculate the interaction matrix
 im = compute_interaction_matrix(params, verbose=True, display=True)
 
 # transpose to be coherent with the specula convention
 im = im.transpose()*2*np.pi
-# change x and y to be coherent with the specula convention
-print('im.shape',im.shape)
-right_half = im[:, int(im.shape[1] / 2):]
-left_half = im[:, :int(im.shape[1] / 2)]
-im = np.concatenate((right_half, left_half), axis=1)
 print('im.shape',im.shape)
 
 # Create the Intmat object
@@ -132,11 +111,20 @@ plt.tight_layout()
 
 plt.figure(figsize=(8, 12))
 imBig = None
+
+sa2D = np.zeros((params['wfs_nsubaps'],params['wfs_nsubaps']))
+sa2D[params['idx_valid_sa'][:,0], params['idx_valid_sa'][:,1]] = 1
+sa2D = np.transpose(sa2D)
+idx_valid_sa_new = np.where(sa2D>0)
+idx_valid_sa = params['idx_valid_sa']
+idx_valid_sa[:,0] = idx_valid_sa_new[0]
+idx_valid_sa[:,1] = idx_valid_sa_new[1]
+
 for i in range(4):
     im2Dx = np.zeros((params['wfs_nsubaps'],params['wfs_nsubaps']), dtype=im.dtype)
-    im2Dx[params['idx_valid_sa'][:,0], params['idx_valid_sa'][:,1]] = im[i,:params['idx_valid_sa'].shape[0]]
+    im2Dx[idx_valid_sa[:,0], idx_valid_sa[:,1]] = im[i,:idx_valid_sa.shape[0]]
     im2Dy = np.zeros((params['wfs_nsubaps'],params['wfs_nsubaps']), dtype=im.dtype)
-    im2Dy[params['idx_valid_sa'][:,0], params['idx_valid_sa'][:,1]] = im[i,params['idx_valid_sa'].shape[0]:]
+    im2Dy[idx_valid_sa[:,0], idx_valid_sa[:,1]] = im[i,idx_valid_sa.shape[0]:]
     im2D = np.concatenate((im2Dx, im2Dy), axis=1)
     if imBig is None:
         imBig = im2D
