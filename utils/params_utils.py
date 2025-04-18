@@ -655,6 +655,407 @@ def compute_interaction_matrix(params_file, wfs_type=None, wfs_index=None, dm_in
     
     return im
 
+def compute_interaction_matrices(yaml_file, root_dir=None, output_im_dir=None, 
+                                 wfs_type=None, overwrite=False, verbose=False, display=False):
+    """
+    Computes and saves interaction matrices for all combinations of WFSs and DMs
+    based on a SPECULA YAML configuration file.
+    
+    Args:
+        yaml_file (str): Path to the YAML configuration file.
+        root_dir (str, optional): Root directory to set in params['main']['root_dir']. 
+                                 If None, uses SPECULA repo path.
+        output_im_dir (str, optional): Output directory for saved matrices. 
+                                      If None, uses calib/MCAO/im in the SPECULA repo.
+        wfs_type (str, optional): Type of WFS ('ngs', 'lgs', 'ref') to use. If None, uses all types.
+        overwrite (bool, optional): Whether to overwrite existing files.
+        verbose (bool, optional): Whether to print detailed information.
+        display (bool, optional): Whether to display plots of interaction matrices.
+        
+    Returns:
+        dict: Dictionary mapping WFS-DM pairs to saved interaction matrix paths.
+    """
+    # Load the YAML or PRO file
+    paramsAll = parse_params_file(yaml_file)
+    
+    # Find the SPECULA repository path
+    specula_init_path = specula.__file__
+    specula_package_dir = os.path.dirname(specula_init_path)
+    specula_repo_path = os.path.dirname(specula_package_dir)
+    
+    # Set up directories
+    if root_dir is None:
+        root_dir = os.path.join(specula_repo_path, "main", "scao", "calib", "MCAO")
+    
+    if output_im_dir is None:
+        output_im_dir = os.path.join(specula_repo_path, "main", "scao", "calib", "MCAO", "im")
+
+    # Update root_dir in params
+    if 'main' in paramsAll:
+        paramsAll['main']['root_dir'] = root_dir
+        if verbose:
+            print(f"Root directory set to: {paramsAll['main']['root_dir']}")
+    
+    # Make sure the output directories exist
+    os.makedirs(output_im_dir, exist_ok=True)
+    
+    # Get WFS and DM lists
+    wfs_list = extract_wfs_list(paramsAll)
+    dm_list = extract_dm_list(paramsAll)
+    
+    # Filter by wfs_type if specified
+    if wfs_type is not None:
+        filtered_wfs_list = []
+        for wfs in wfs_list:
+            if wfs_type in wfs['name']:
+                filtered_wfs_list.append(wfs)
+        wfs_list = filtered_wfs_list
+    
+    if verbose:
+        print(f"Found {len(wfs_list)} WFS(s) and {len(dm_list)} DM(s)")
+        for wfs in wfs_list:
+            print(f"  WFS: {wfs['name']} (type: {wfs['type']}, index: {wfs['index']})")
+        for dm in dm_list:
+            print(f"  DM: {dm['name']} (index: {dm['index']})")
+    
+    # Dictionary to store saved matrix paths
+    saved_matrices = {}
+    
+    # Process each WFS-DM combination
+    for wfs in wfs_list:
+        wfs_idx = int(wfs['index'])
+        wfs_name = wfs['name']
+        
+        for dm in dm_list:
+            dm_idx = int(dm['index'])
+            dm_name = dm['name']
+            
+            if verbose:
+                print(f"\nProcessing WFS {wfs_name} (index {wfs_idx}) and DM {dm_name} (index {dm_idx})")
+            
+            # Determine source type from WFS name
+            if 'lgs' in wfs_name:
+                source_type = 'lgs'
+            elif 'ngs' in wfs_name:
+                source_type = 'ngs'
+            elif 'ref' in wfs_name:
+                source_type = 'ref'
+            else:
+                source_type = 'ngs'  # Default
+            
+            # Generate filename for this combination
+            im_filename = generate_im_filename(yaml_file, wfs_type=source_type, 
+                                              wfs_index=wfs_idx, dm_index=dm_idx)
+            
+            # Full path for the file
+            im_path = os.path.join(output_im_dir, im_filename)
+            
+            # Check if the file already exists
+            if os.path.exists(im_path) and not overwrite:
+                if verbose:
+                    print(f"  File {im_filename} already exists. Skipping computation.")
+                saved_matrices[f"{wfs_name}_{dm_name}"] = im_path
+                continue
+            
+            # Prepare parameters for interaction matrix computation
+            params = prepare_interaction_matrix_params(paramsAll, wfs_type=source_type, 
+                                                     wfs_index=wfs_idx, dm_index=dm_idx)
+            
+            # Calculate the interaction matrix
+            im = compute_interaction_matrix(params, verbose=verbose, display=display)
+            
+            # Transpose to be coherent with the specula convention
+            im = im.transpose() * 2 * np.pi
+            
+            if verbose:
+                print(f"  Interaction matrix shape: {im.shape}")
+                print(f'  First few rows of IM: {im[0:5,:]}')
+            
+            # Display the matrix if requested
+            if display:
+                plt.figure(figsize=(10, 8))
+                plt.imshow(im, cmap='viridis')
+                plt.colorbar()
+                plt.title(f"Interaction Matrix: {wfs_name} - {dm_name}")
+                plt.tight_layout()
+                plt.show()
+            
+            # Create the Intmat object
+            wfs_info = f"{params['wfs_type']}_{params['wfs_nsubaps']}"
+            pupdata_tag = f"{os.path.basename(yaml_file).split('.')[0]}_{wfs_info}"
+            
+            # Create Intmat object and save it
+            intmat_obj = Intmat(
+                im, 
+                pupdata_tag=pupdata_tag,
+                norm_factor=1.0,  # Default value
+                target_device_idx=None,  # Use default device
+                precision=None    # Use default precision
+            )
+            
+            # Save the interaction matrix
+            intmat_obj.save(im_path)
+            if verbose:
+                print(f"  Interaction matrix saved as: {im_path}")
+            
+            saved_matrices[f"{wfs_name}_{dm_name}"] = im_path
+    
+    return saved_matrices
+
+
+def combine_interaction_matrices(yaml_file, output_im_dir=None, wfs_type='ngs', n_modes=None, 
+                                dm_indices=None, verbose=False, display=False):
+    """
+    Loads and combines individual interaction matrices into a full system matrix.
+    
+    Args:
+        yaml_file (str): Path to the YAML configuration file.
+        output_im_dir (str, optional): Directory where interaction matrices are stored.
+        wfs_type (str, optional): Type of WFS ('ngs', 'lgs', 'ref') to use.
+        n_modes (int, list, or dict, optional): 
+            - If int: Total number of modes for the combined matrix
+            - If list: Number of modes per DM by index position (e.g., [2, 0, 3] means 2 modes from DM1, 0 from DM2, 3 from DM3)
+            - If dict: Number of modes per DM with keys as DM indices (e.g., {1: 2, 3: 3} means 2 modes from DM1, 3 from DM3)
+        dm_indices (list, optional): List of DM indices to include. If None, uses all.
+        verbose (bool, optional): Whether to print detailed information.
+        display (bool, optional): Whether to display plots of the combined matrix.
+        
+    Returns:
+        numpy.ndarray: The combined interaction matrix.
+    """
+    # Find the SPECULA repository path
+    specula_init_path = specula.__file__
+    specula_package_dir = os.path.dirname(specula_init_path)
+    specula_repo_path = os.path.dirname(specula_package_dir)
+    
+    # Set up output directory
+    if output_im_dir is None:
+        output_im_dir = os.path.join(specula_repo_path, "main", "scao", "calib", "MCAO", "im")
+    
+    # Load the YAML file
+    paramsAll = parse_params_file(yaml_file)
+    
+    # Get WFS and DM lists
+    wfs_list = extract_wfs_list(paramsAll)
+    dm_list = extract_dm_list(paramsAll)
+    
+    # Filter WFSs by type
+    filtered_wfs = []
+    for wfs in wfs_list:
+        if wfs_type in wfs['name']:
+            filtered_wfs.append(wfs)
+    
+    # Filter DMs by indices if specified
+    if dm_indices is not None:
+        filtered_dms = []
+        for dm in dm_list:
+            if int(dm['index']) in dm_indices:
+                filtered_dms.append(dm)
+        dm_list = filtered_dms
+    
+    # First, determine n_slopes by loading the first available matrix
+    n_slopes = None
+    
+    # Try to load the first available matrix to determine n_slopes
+    for wfs in filtered_wfs:
+        wfs_idx = int(wfs['index'])
+        
+        for dm in dm_list:
+            dm_idx = int(dm['index'])
+            
+            im_filename = generate_im_filename(yaml_file, wfs_type=wfs_type, 
+                                             wfs_index=wfs_idx, dm_index=dm_idx)
+            im_path = os.path.join(output_im_dir, im_filename)
+            
+            if os.path.exists(im_path):
+                if verbose:
+                    print(f"Loading {im_filename} to determine matrix dimensions")
+                
+                intmat_obj = Intmat.restore(im_path)
+                n_slopes = intmat_obj._intmat.shape[1]
+                
+                if verbose:
+                    print(f"Determined n_slopes = {n_slopes} from matrix shape {intmat_obj._intmat.shape}")
+                
+                break
+        
+        if n_slopes is not None:
+            break
+    
+    if n_slopes is None:
+        raise ValueError("Could not determine n_slopes. No interaction matrices found.")
+    
+    # Process n_modes parameter
+    mode_map = {}
+    total_modes = 0
+    
+    if n_modes is None:
+        # Default: 2 modes for DM1 and 3 modes for DM3
+        mode_map = {1: list(range(2)), 3: list(range(2, 5))}
+        total_modes = 5
+    elif isinstance(n_modes, int):
+        # Backward compatibility: distribute modes with default logic
+        current_idx = 0
+        for dm in dm_list:
+            dm_idx = int(dm['index'])
+            
+            # Configure mode indices based on DM index
+            if dm_idx == 1:  # First 2 modes for DM1
+                mode_map[dm_idx] = list(range(2))
+                current_idx = 2
+            elif dm_idx == 2:  # Skip DM2 (typically tip-tilt mirror)
+                continue
+            elif dm_idx == 3:  # Next 3 modes for DM3
+                mode_map[dm_idx] = list(range(current_idx, current_idx + 3))
+                current_idx += 3
+            else:
+                # Default allocation
+                nm = min(2, n_modes - current_idx)  # Default 2 modes per DM
+                if nm <= 0:
+                    break  # No more modes to allocate
+                mode_map[dm_idx] = list(range(current_idx, current_idx + nm))
+                current_idx += nm
+        
+        total_modes = n_modes
+    elif isinstance(n_modes, list):
+        # List format: position corresponds to DM index - 1
+        current_idx = 0
+        for i, nm in enumerate(n_modes):
+            dm_idx = i + 1  # Convert to 1-based index
+            
+            # Skip if modes count is 0
+            if nm <= 0:
+                continue
+                
+            # Check if this DM is in our filtered list
+            dm_in_filtered = any(int(dm['index']) == dm_idx for dm in dm_list)
+            if not dm_in_filtered:
+                if verbose:
+                    print(f"  DM{dm_idx} is specified in n_modes but not in filtered DM list. Skipping.")
+                continue
+                
+            mode_map[dm_idx] = list(range(current_idx, current_idx + nm))
+            current_idx += nm
+            
+        total_modes = current_idx
+    elif isinstance(n_modes, dict):
+        # Dict format: keys are DM indices
+        current_idx = 0
+        
+        # Sort DM indices for consistent mode ordering
+        for dm_idx in sorted(n_modes.keys()):
+            nm = n_modes[dm_idx]
+            
+            # Skip if modes count is 0
+            if nm <= 0:
+                continue
+                
+            # Check if this DM is in our filtered list
+            dm_in_filtered = any(int(dm['index']) == dm_idx for dm in dm_list)
+            if not dm_in_filtered:
+                if verbose:
+                    print(f"  DM{dm_idx} is specified in n_modes but not in filtered DM list. Skipping.")
+                continue
+                
+            mode_map[dm_idx] = list(range(current_idx, current_idx + nm))
+            current_idx += nm
+            
+        total_modes = current_idx
+    else:
+        raise ValueError("n_modes must be an integer, list, or dictionary")
+        
+    if total_modes == 0:
+        raise ValueError("No valid modes to combine. Check n_modes parameter and DM filtering.")
+    
+    # Calculate dimensions for the combined matrix
+    N = total_modes
+    M = len(filtered_wfs) * n_slopes
+    im_full = np.zeros((N, M))
+    
+    if verbose:
+        print(f"Creating combined matrix of shape ({N}, {M})")
+        print(f"Using {len(filtered_wfs)} WFSs and {len(mode_map)} DMs")
+        print("Mode map:")
+        for dm_idx, modes in mode_map.items():
+            print(f"  DM{dm_idx}: {len(modes)} modes at indices {modes}")
+    
+    # Load and combine matrices
+    for i, wfs in enumerate(filtered_wfs):
+        wfs_idx = int(wfs['index'])
+        
+        for dm in dm_list:
+            dm_idx = int(dm['index'])
+            
+            # Skip if this DM is not in the mode map (has 0 modes or was filtered out)
+            if dm_idx not in mode_map:
+                if verbose:
+                    print(f"  Skipping DM{dm_idx} (not in mode map)")
+                continue
+            
+            im_filename = generate_im_filename(yaml_file, wfs_type=wfs_type, 
+                                             wfs_index=wfs_idx, dm_index=dm_idx)
+            im_path = os.path.join(output_im_dir, im_filename)
+            
+            if verbose:
+                print(f"  Loading {im_filename}")
+            
+            # Check if file exists
+            if not os.path.exists(im_path):
+                if verbose:
+                    print(f"  File not found: {im_path}")
+                continue
+            
+            # Load the interaction matrix
+            intmat_obj = Intmat.restore(im_path)
+            
+            # Get mode indices for this DM
+            mode_idx = mode_map[dm_idx]
+            
+            # Insert into the full matrix
+            slope_idx_start = i * n_slopes
+            slope_idx_end = (i + 1) * n_slopes
+            
+            # Make sure we don't exceed matrix dimensions
+            if len(mode_idx) > 0 and slope_idx_end <= M:
+                # Calculate how many modes we can actually use from this IM
+                available_dm_modes = intmat_obj._intmat.shape[0]
+                actual_mode_indices = [idx for idx in mode_idx if idx < available_dm_modes]
+                
+                if not actual_mode_indices:
+                    if verbose:
+                        print(f"  Warning: No valid mode indices for DM{dm_idx}. "
+                              f"Available modes: {available_dm_modes}, requested: {mode_idx}")
+                    continue
+                    
+                # Insert the valid modes into our combined matrix
+                im_full[mode_idx, slope_idx_start:slope_idx_end] = intmat_obj._intmat[actual_mode_indices, :n_slopes]
+                
+                if verbose:
+                    print(f"  Inserted {len(actual_mode_indices)} modes from DM{dm_idx} "
+                          f"at indices {actual_mode_indices}, slopes {slope_idx_start}:{slope_idx_end}")
+    
+    # Display the combined matrix
+    if display:
+        plt.figure(figsize=(10, 8))
+        plt.imshow(im_full, cmap='viridis')
+        plt.colorbar()
+        plt.title(f"Combined Interaction Matrix")
+        plt.tight_layout()
+        plt.show()
+        
+        if verbose:
+            # Print statistics
+            print(f"Combined matrix shape: {im_full.shape}")
+            print(f"Matrix min: {im_full.min()}, max: {im_full.max()}, mean: {np.mean(im_full)}")
+            
+            # Display as pandas DataFrame for better readability
+            import pandas as pd
+            print("Full interaction matrix:")
+            df = pd.DataFrame(im_full)
+            print(df.to_string(float_format=lambda x: f"{x:.6e}"))
+    
+    return im_full
+
 def extract_wfs_list(config):
     """Extract all WFS configurations from config"""
     wfs_list = []
@@ -1033,31 +1434,31 @@ def generate_im_filenames(config_file, timestamp=False):
                 'nmodes': config['dm'].get('nmodes', 0),
                 'type': config['dm'].get('type_str', 'zernike')
             }
-        
+
         # Build filename parts
         parts = []
         parts.append(base_name)
-        
+ 
         if source_info:
             if 'pol_coords' in source_info:
                 dist, angle = source_info['pol_coords']
                 parts.append(f"pd{dist:.1f}a{angle:.0f}")
-        
+
         if pupil_params:
             ps = pupil_params.get('pixel_pupil', 0)
             pp = pupil_params.get('pixel_pitch', 0)
             parts.append(f"ps{ps}p{pp:.4f}")
-            
+
             if 'obsratio' in pupil_params and pupil_params['obsratio'] > 0:
                 parts.append(f"o{pupil_params['obsratio']:.3f}")
-        
+
         if wfs_type == 'sh':
             nsubaps = wfs_params.get('nsubaps', 0)
             wl = wfs_params.get('wavelength', 0)
             wfs_fov_arcsec = wfs_fov_from_config(wfs_params)           
             npx = wfs_params.get('npx', 0)
             parts.append(f"sh{nsubaps}x{nsubaps}_wl{wl}_fv{wfs_fov_arcsec:.1f}_np{npx}")
-        
+
         elif wfs_type == 'pyr':
             pup_diam = wfs_params.get('pup_diam', 0)
             wl = wfs_params.get('wavelength', 0)
@@ -1075,7 +1476,7 @@ def generate_im_filenames(config_file, timestamp=False):
         if dm_params:
             height = dm_params.get('height', 0)
             parts.append(f"dmH{height}")
-            
+
             # Check for custom influence functions
             if 'ifunc_tag' in config['dm']:
                 parts.append(f"ifunc_{config['dm']['ifunc_tag']}")
@@ -1097,13 +1498,13 @@ def generate_im_filenames(config_file, timestamp=False):
         if timestamp:
             ts = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
             parts.append(ts)
-        
+
         # Join all parts with underscores and add extension
         filename = "_".join(parts) + ".fits"
         filenames_by_type['ngs'].append(filename)  # Default to NGS for simple config
     else:
         # Complex MCAO configuration: find all sources and related WFSs
-        
+
         # Find all LGS sources and WFSs
         lgs_sources = [k for k in config.keys() if k.startswith('source_lgs')]
         for source_key in lgs_sources:
@@ -1111,13 +1512,13 @@ def generate_im_filenames(config_file, timestamp=False):
             if source_idx:
                 idx = source_idx.group(1)
                 wfs_key = f'sh_lgs{idx}'
-                
+  
                 if wfs_key in config:
                     # Process each DM with this WFS
                     for dm in dm_list:
                         parts = []
                         parts.append(base_name)
-                        
+
                         # Source parameters
                         source = config[source_key]
                         if 'polar_coordinates' in source:
@@ -1126,19 +1527,19 @@ def generate_im_filenames(config_file, timestamp=False):
                         elif 'polar_coordinate' in source:
                             dist, angle = source['polar_coordinate']
                             parts.append(f"pd{dist:.1f}a{angle:.0f}")
-                        
+
                         if 'height' in source:
                             parts.append(f"h{source['height']:.0f}")
-                        
+
                         # Pupil parameters
                         if pupil_params:
                             ps = pupil_params.get('pixel_pupil', 0)
                             pp = pupil_params.get('pixel_pitch', 0)
                             parts.append(f"ps{ps}p{pp:.4f}")
-                            
+
                             if 'obsratio' in pupil_params and pupil_params['obsratio'] > 0:
                                 parts.append(f"o{pupil_params['obsratio']:.3f}")
-                        
+
                         # WFS parameters
                         wfs_config = config[wfs_key]
                         nsubaps = wfs_config.get('subap_on_diameter', 0)
