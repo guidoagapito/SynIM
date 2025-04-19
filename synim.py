@@ -382,7 +382,6 @@ def compute_derivatives_with_extrapolation(data,mask=None):
             # Apply extrapolation
             data[:,:,i] = apply_extrapolation(data[:,:,i], edge_pixels, reference_indices, coefficients, 
                                               debug=True, problem_indices=None)
-        print('Using extrapolation to compute derivatives.')
 
     # Compute x derivative
     dx = np.gradient(data, axis=(1), edge_order=1)
@@ -993,9 +992,6 @@ def interaction_matrix(pup_diam_m,pup_mask,dm_array,dm_mask,dm_height,dm_rotatio
 
     WFS_signal_x_2D = WFS_signal_x.reshape((-1,WFS_signal_x.shape[2]))
     WFS_signal_y_2D = WFS_signal_y.reshape((-1,WFS_signal_y.shape[2]))
-
-    print('WFS signal x shape:', WFS_signal_x_2D.shape)
-    print('WFS signal y shape:', WFS_signal_y_2D.shape)
 
     if idx_valid_sa is not None:
 
