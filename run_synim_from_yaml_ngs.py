@@ -18,7 +18,7 @@ specula_repo_path = os.path.dirname(specula_package_dir)
 
 # Path to the YAML configuration file and output directory
 # The path to the YAML file is determined by the specula module
-yaml_file = "/Users/guido/GitHub/SPECULA_scripts/params_morfeo_full2.yml"
+yaml_file = "/Users/guido/GitHub/SynIM/params_morfeo.yml"
 root_dir = os.path.join(specula_repo_path, "main", "scao","calib","MCAO")
 print(f"YAML file path: {yaml_file}")
 #output directory is set to the caibration directory of the SPECULA repository
