@@ -497,7 +497,7 @@ def compute_interaction_matrices(yaml_file, root_dir=None, output_im_dir=None, o
             
             saved_matrices[f"{wfs_name}_{dm_name}"] = im_path
     
-    return saved_matrices
+    return paramsAll, saved_matrices
 
 def combine_interaction_matrices(yaml_file, output_im_dir=None, wfs_type='ngs', n_modes=None, 
                                 dm_indices=None, verbose=False, display=False):
