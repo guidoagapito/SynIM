@@ -248,25 +248,6 @@ def prepare_interaction_matrix_params(params, wfs_type=None, wfs_index=None, dm_
         'source_type': source_type
     }
 
-def is_simple_config(config):
-    """
-    Detect if this is a simple SCAO config or a complex MCAO config.
-    
-    Args:
-        config (dict): Configuration dictionary
-        
-    Returns:
-        bool: True for simple SCAO config, False for complex MCAO config
-    """
-    # Check for multiple DMs
-    dm_count = sum(1 for key in config if key.startswith('dm') and key != 'dm')
-    
-    # Check for multiple WFSs
-    wfs_count = sum(1 for key in config if 
-                   (key.startswith('sh_') or key.startswith('pyramid')) and key != 'pyramid')
-    
-    return dm_count == 0 and wfs_count == 0
-
 def compute_interaction_matrix(params_file, wfs_type=None, wfs_index=None, dm_index=None, verbose=False, display=False):
     """
     Calculates the interaction matrix for SynIM directly from a SPECULA YAML configuration file.

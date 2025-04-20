@@ -17,7 +17,24 @@ from specula.data_objects.pupilstop import Pupilstop
 from specula.data_objects.subap_data import SubapData
 from specula.data_objects.intmat import Intmat
 
-# -------- Utility Functions for Common Tasks --------
+def is_simple_config(config):
+    """
+    Detect if this is a simple SCAO config or a complex MCAO config.
+    
+    Args:
+        config (dict): Configuration dictionary
+        
+    Returns:
+        bool: True for simple SCAO config, False for complex MCAO config
+    """
+    # Check for multiple DMs
+    dm_count = sum(1 for key in config if key.startswith('dm') and key != 'dm')
+    
+    # Check for multiple WFSs
+    wfs_count = sum(1 for key in config if 
+                   (key.startswith('sh_') or key.startswith('pyramid')) and key != 'pyramid')
+    
+    return dm_count == 0 and wfs_count == 0
 
 def wfs_fov_from_config(wfs_params):
     """
