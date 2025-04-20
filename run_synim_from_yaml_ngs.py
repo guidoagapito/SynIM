@@ -1,7 +1,9 @@
 import os
 import numpy as np
+import pandas as pd
+
 import matplotlib.pyplot as plt
-from utils.params_utils import compute_interaction_matrices
+from utils.params_manager import ParamsManager
 from utils.params_common_utils import generate_im_filename, prepare_interaction_matrix_params, compute_mmse_reconstructor, dm3d_to_2d
 import specula
 specula.init(device_idx=-1, precision=1)
@@ -12,22 +14,27 @@ from specula.lib.modal_base_generator import compute_ifs_covmat
 # -------------------------------------------------------------------
 # Get the path to the specula package's __init__.py file
 specula_init_path = specula.__file__
+# Get the path to the synim package's __init__.py file
+synim_init_path = os.path.dirname(__file__)
 # Navigate up to repository root
 specula_package_dir = os.path.dirname(specula_init_path)
 specula_repo_path = os.path.dirname(specula_package_dir)
 
 # Path to the YAML configuration file and output directory
 # The path to the YAML file is determined by the specula module
-yaml_file = "/Users/guido/GitHub/SynIM/params_morfeo.yml"
+yaml_file = os.path.join(synim_init_path, "params_morfeo.yml")
 root_dir = os.path.join(specula_repo_path, "main", "scao","calib","MCAO")
 print(f"YAML file path: {yaml_file}")
+
+params_mgr = ParamsManager(yaml_file, root_dir=root_dir, verbose=True)
+im_paths = params_mgr.compute_interaction_matrices(wfs_type='ngs', overwrite=False)
+
+print('im_paths:', im_paths)
+
 #output directory is set to the caibration directory of the SPECULA repository
 output_im_dir = os.path.join(specula_repo_path, "main", "scao", "calib", "MCAO", "im")
 output_rec_dir = os.path.join(specula_repo_path, "main", "scao", "calib", "MCAO", "rec")
 print(f"Output directory: {output_im_dir}")
-
-paramsAll, matrices = compute_interaction_matrices(yaml_file, root_dir=root_dir, output_im_dir=output_im_dir, 
-                                 wfs_type='ngs', overwrite=True, verbose=False, display=False)
 
 # -------------------------------------------------------------------
 # Load from disk the full set of interaction matrices
@@ -66,8 +73,8 @@ print(df.to_string(float_format=lambda x: f"{x:.6e}"))
 r0 = 0.2
 L0 = 25
 for i in range(3):
-    params = prepare_interaction_matrix_params(paramsAll, wfs_type='ngs', 
-                                               wfs_index=1, dm_index=i+1)
+    params = params_mgr.prepare_interaction_matrix_params(wfs_type='ngs', 
+                                                         wfs_index=1, dm_index=i+1)
     dm2d = dm3d_to_2d(params['dm_array'],params['dm_mask'])
     C_atm = compute_ifs_covmat(
         params['dm_mask'], params['pup_diam_m'], dm2d, r0, L0, 
