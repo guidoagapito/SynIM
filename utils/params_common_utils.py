@@ -514,7 +514,7 @@ def dm3d_to_2d(dm_array, mask):
 
     return dm_array_2d
 
-def dm2d_to_3d(dm_array, mask):
+def dm2d_to_3d(dm_array, mask, normalize=True):
     """
     Convert a 2D DM influence function to a 3D array using a mask.
     
@@ -538,7 +538,8 @@ def dm2d_to_3d(dm_array, mask):
         idx = np.where(mask > 0)
         dm_i = dm_array[i]
         # normalize by the RMS
-        dm_i /= np.sqrt(np.mean(dm_i**2))
+        if normalize:
+            dm_i /= np.sqrt(np.mean(dm_i**2))
         dm_i_3d = np.zeros(mask.shape, dtype=float)
         dm_i_3d[idx] = dm_i
         dm_array_3d[:, :, i] = dm_i_3d
