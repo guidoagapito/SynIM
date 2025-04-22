@@ -434,7 +434,7 @@ class ParamsManager:
         )
         
         # Transpose to be coherent with the specula convention
-        im = im.transpose() * 2 * np.pi
+        im = im.transpose()
         
         return im
     
