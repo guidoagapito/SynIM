@@ -1616,7 +1616,6 @@ def compute_mmse_reconstructor(interaction_matrix, C_atm, noise_variance=None, C
     
     # Setup matrices
     A = interaction_matrix
-    At = A.T
     
     # Handle noise covariance matrix
     if C_noise is None and noise_variance is not None:
@@ -1635,10 +1634,10 @@ def compute_mmse_reconstructor(interaction_matrix, C_atm, noise_variance=None, C
             C_noise[start_idx:end_idx, start_idx:end_idx] = noise_variance[i] * np.eye(n_slopes_per_wfs)
     
     # Check dimensions
-    if A.shape[0] != C_atm.shape[0]:
+    if A.shape[1] != C_atm.shape[0]:
         raise ValueError(f"A ({A.shape}) and C_atm ({C_atm.shape}) must have compatible dimensions")
     
-    if C_noise is not None and A.shape[1] != C_noise.shape[0]:
+    if C_noise is not None and A.shape[0] != C_noise.shape[0]:
         raise ValueError(f"A ({A.shape}) and C_noise ({C_noise.shape}) must have compatible dimensions")
     
     # Compute inverses if needed
@@ -1692,9 +1691,9 @@ def compute_mmse_reconstructor(interaction_matrix, C_atm, noise_variance=None, C
     
     # Check if C_noise_inv is scalar
     if isinstance(C_noise_inv, (int, float)) or (hasattr(C_noise_inv, 'size') and C_noise_inv.size == 1):
-        H = C_noise_inv * np.dot(At, A) + C_atm_inv
+        H = C_noise_inv * np.dot(A.T, A) + C_atm_inv
     else:
-        H = np.dot(At, np.dot(C_noise_inv, A)) + C_atm_inv
+        H = np.dot(A.T, np.dot(C_noise_inv, A)) + C_atm_inv
     
     # Compute H^(-1)
     if verbose:
@@ -1712,9 +1711,9 @@ def compute_mmse_reconstructor(interaction_matrix, C_atm, noise_variance=None, C
     
     # Check if C_noise_inv is scalar
     if isinstance(C_noise_inv, (int, float)) or (hasattr(C_noise_inv, 'size') and C_noise_inv.size == 1):
-        W_mmse = C_noise_inv * np.dot(H_inv, At)
+        W_mmse = C_noise_inv * np.dot(H_inv, A.T)
     else:
-        W_mmse = np.dot(H_inv, np.dot(At, C_noise_inv))
+        W_mmse = np.dot(H_inv, np.dot(A.T, C_noise_inv))
     
     if verbose:
         print("MMSE reconstruction matrix computed")

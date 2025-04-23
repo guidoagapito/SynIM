@@ -3,8 +3,8 @@ import numpy as np
 import pandas as pd
 
 import matplotlib.pyplot as plt
-from params_manager import ParamsManager
-from params_common_utils import generate_im_filename, compute_mmse_reconstructor, dm3d_to_2d
+from synim.params_manager import ParamsManager
+from synim.utils import generate_im_filename, compute_mmse_reconstructor, dm3d_to_2d
 import specula
 specula.init(device_idx=-1, precision=1)
 
@@ -42,8 +42,9 @@ print(f"Output directory: {output_im_dir}")
 # where N is the number of modes, 2 for the first DM and 3 for the third DM
 # and M is the number of slopes, 8 multiplied by 3 WFSs
 N = 5
-n_slopes = 2
-M = 3*n_slopes
+n_slopes_per_wfs = 2
+n_wfs = 3
+M = n_wfs*n_slopes_per_wfs
 im_full = np.zeros((N,M)) 
 for ii in range(3):
     for jj in range(3):
@@ -61,7 +62,7 @@ for ii in range(3):
         if jj == 2:
             mode_idx = [2,3,4]
         print(f'size of intmat: {intmat_obj._intmat.shape}')
-        im_full[mode_idx, n_slopes*ii:n_slopes*(ii+1)] = intmat_obj._intmat[mode_idx,:]
+        im_full[mode_idx, n_slopes_per_wfs*ii:n_slopes_per_wfs*(ii+1)] = intmat_obj._intmat[mode_idx,:]
         
 import pandas as pd
 print("Full interaction matrix:")
@@ -72,26 +73,44 @@ print(df.to_string(float_format=lambda x: f"{x:.6e}"))
 # 1 Compute atmospheric covariance matrix using the compute_ifs_covmat function
 r0 = 0.2
 L0 = 25
+C_atm_full = np.zeros((im_full.shape[0], im_full.shape[0]))
+n_modes = [2,5,5]
 for i in range(3):
+    if i == 1:
+        continue
     params = params_mgr.prepare_interaction_matrix_params(wfs_type='ngs', 
                                                          wfs_index=1, dm_index=i+1)
     dm2d = dm3d_to_2d(params['dm_array'],params['dm_mask'])
+    dm2d = dm2d[:n_modes[i],:]   # Select only the first n modes
+    print("dm2d shape", dm2d.shape)
+    print("computing covariance matrix for DM", i+1)
     C_atm = compute_ifs_covmat(
         params['dm_mask'], params['pup_diam_m'], dm2d, r0, L0, 
         oversampling=2, verbose=False
     )
+    # add C_atm to the full covariance matrix as bloack elements on the diagonal
+    if i == 0:
+        C_atm_full[0:C_atm.shape[0], 0:C_atm.shape[1]] = C_atm
+    if i == 2:
+        C_atm = C_atm[2:,2:] # remove tip and tilt
+        C_atm_full[n_modes[0]:n_modes[0]+C_atm.shape[0], n_modes[0]:n_modes[0]+C_atm.shape[1]] = C_atm
+
+display_covmat = False
+if display_covmat: 
     plt.figure(figsize=(10, 8))
-    plt.imshow(C_atm, cmap='viridis')
+    plt.imshow(C_atm_full, cmap='viridis')
     plt.colorbar()
-    plt.title(f"Atmospheric Covariance Matrix for DM {i+1}")
+    plt.title(f"Atmospheric Covariance Matrix for all DMs")
     plt.tight_layout()
     plt.show()
 
-
 # 2 Create the noise covariance matrix
-n_slopes_total = interaction_matrix.shape[1]
-n_wfs = len(noise_variance)
-n_slopes_per_wfs = n_slopes_total // n_wfs
+# computes noise from magnitude and 0-magnitude flux
+magnitude = np.array([10,16,18])
+flux0 = 7.40e-11
+flux = flux0 * 10**(-0.4*magnitude)
+noise_variance = 1/np.sqrt(flux)
+n_slopes_total = im_full.shape[1]
 
 C_noise = np.zeros((n_slopes_total, n_slopes_total))
 for i in range(n_wfs):
@@ -100,8 +119,16 @@ for i in range(n_wfs):
     end_idx = (i + 1) * n_slopes_per_wfs
     C_noise[start_idx:end_idx, start_idx:end_idx] = noise_variance[i] * np.eye(n_slopes_per_wfs)
 
+if display_covmat: 
+    plt.figure(figsize=(10, 8))
+    plt.imshow(C_noise, cmap='viridis')
+    plt.colorbar()
+    plt.title(f"Noise Covariance Matrix")
+    plt.tight_layout()
+    plt.show()
+
 # 3 Compute the MMSE reconstructor
-reconstructor = compute_mmse_reconstructor(interaction_matrix, C_atm, noise_variance=None, C_noise=C_noise, 
+reconstructor = compute_mmse_reconstructor(im_full.T, C_atm_full, noise_variance=None, C_noise=C_noise, 
                         cinverse=False, verbose=False)
 
 # Print some statistics about the matrices
