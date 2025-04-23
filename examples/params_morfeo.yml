@@ -9,7 +9,7 @@
 
 
 main:
-  root_dir:          '/Users/guido/GitHub/SPECULA/main/scao/calib/MCAO'         # Root directory for calibration manager
+  root_dir:          'C:\Users\guido\OneDrive\Documenti\GitHub\SPECULA\main\scao\calib\MCAO'         # Root directory for calibration manager
   store_dir:         './output'             # Data result directory: 'store_dir'/TN/
   pixel_pupil:       480                    # Linear dimension of pupil phase array
   pixel_pitch:       0.0802                 # [m] Pitch of the pupil phase array2

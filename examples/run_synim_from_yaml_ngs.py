@@ -3,8 +3,8 @@ import numpy as np
 import pandas as pd
 
 import matplotlib.pyplot as plt
-from utils.params_manager import ParamsManager
-from utils.params_common_utils import generate_im_filename, prepare_interaction_matrix_params, compute_mmse_reconstructor, dm3d_to_2d
+from params_manager import ParamsManager
+from params_common_utils import generate_im_filename, compute_mmse_reconstructor, dm3d_to_2d
 import specula
 specula.init(device_idx=-1, precision=1)
 

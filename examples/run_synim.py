@@ -1,7 +1,7 @@
 import numpy as np
 import matplotlib as mpl
 import matplotlib.pyplot as plt
-import synim
+import synim as synim
 
 plt.ion()  # Enable interactive mode
 

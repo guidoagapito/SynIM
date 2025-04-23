@@ -209,6 +209,9 @@ def make_orto_modes(array):
     return Q
 
 def zern_degree(j):
+    """
+    From Armando Riccardi IDL function.
+    """
     # return the zernike degree
     n = np.floor(0.5 * (np.sqrt(8 * j - 7) - 3)) + 1
     cn = n * (n + 1) / 2 + 1
@@ -371,8 +374,18 @@ def zern2phi(dim, maxZernNumber, mask=None, no_round_mask=False, xsign=1, ysign=
     return z2phi
 
 def compute_derivatives_with_extrapolation(data,mask=None):
-    # Compute x and y derivatives using numpy.gradient on a 2D or 3D numpy array
-    # if mask is present does an extrapolation to avoid issue at the edges
+    """
+    Compute x and y derivatives using numpy.gradient on a 2D or 3D numpy array
+    if mask is present does an extrapolation to avoid issue at the edges
+    
+    Parameters:
+    - data: numpy 3D array
+    - mask: optional, numpy 2D array, mask
+
+    Returns:
+    - dx: numpy 3D array, x derivative
+    - dy: numpy 3D array, y derivative
+    """
 
     if mask is not None:
         # Calculate indices and coefficients for extrapolation
@@ -401,8 +414,20 @@ def compute_derivatives_with_extrapolation(data,mask=None):
     return dx, dy
 
 def integrate_derivatives(dx, dy):
-    # Numerical integration of derivatives using numpy.cumsum
+    """
+    Numerical integration of derivatives using numpy.cumsum
+    along the x and y axes.
 
+    Parameters:
+        dx (ndarray): x derivative of the data.
+        dy (ndarray): y derivative of the data.
+
+    Returns:
+        tuple: (integrated_x, integrated_y)
+            - integrated_x: Integrated x derivative.
+            - integrated_y: Integrated y derivative.
+    """
+    
     # Integrate x derivative along the x-axis
     integrated_x = np.cumsum(dx, axis=1)
 
@@ -622,6 +647,20 @@ def apply_extrapolation(data, edge_pixels, reference_indices, coefficients, debu
 
 
 def shiftzoom_from_source_dm_params(source_pol_coo, source_height, dm_height, pixel_pitch):
+    """
+    Compute the shift and zoom parameters for a DM based on the source coordinates and heights.
+    
+    Parameters:
+    - source_pol_coo: tuple, (radius, angle) in polar coordinates
+    - source_height: float, height of the source
+    - dm_height: float, height of the DM
+    - pixel_pitch: float, pixel pitch in meters
+
+    Returns:
+    - shift: tuple, (x_shift, y_shift) in pixels
+    - zoom: tuple, (x_zoom, y_zoom) magnification factors
+    """
+
     arcsec2rad = np.pi/180/3600
     
     if np.isinf(source_height):
@@ -640,7 +679,22 @@ def shiftzoom_from_source_dm_params(source_pol_coo, source_height, dm_height, pi
 
 def rotshiftzoom_array_noaffine(input_array, dm_translation=(0.0, 0.0),  dm_rotation=0.0,   dm_magnification=(1.0, 1.0),
                                     wfs_translation=(0.0, 0.0), wfs_rotation=0.0, wfs_magnification=(1.0, 1.0), output_size=None):
-    # This function applies magnification, rotation, shift and resize of a 2D or 3D numpy array
+    """
+    This function applies magnification, rotation, shift and resize of a 2D or 3D numpy array
+    
+    Parameters:
+    - input_array: numpy array, input data to be transformed
+    - dm_translation: tuple, translation for DM (x, y)
+    - dm_rotation: float, rotation angle for DM in degrees
+    - dm_magnification: tuple, magnification factors for DM (x, y)
+    - wfs_translation: tuple, translation for WFS (x, y)
+    - wfs_rotation: float, rotation angle for WFS in degrees
+    - wfs_magnification: tuple, magnification factors for WFS (x, y)
+    - output_size: tuple, desired output size (height, width)
+
+    Returns:
+    - output: numpy array, transformed data
+    """
     
     if np.isnan(input_array).any():
         np.nan_to_num(input_array, copy=False, nan=0.0, posinf=None, neginf=None)
@@ -724,6 +778,19 @@ def rotshiftzoom_array(input_array, dm_translation=(0.0, 0.0), dm_rotation=0.0, 
     """
     This function applies magnification, rotation, shift and resize of a 2D or 3D numpy array using affine transformation.
     Rotation is applied in the same direction as the first function.
+
+    Parameters:
+    - input_array: numpy array, input data to be transformed
+    - dm_translation: tuple, translation for DM (x, y)
+    - dm_rotation: float, rotation angle for DM in degrees
+    - dm_magnification: tuple, magnification factors for DM (x, y)
+    - wfs_translation: tuple, translation for WFS (x, y)
+    - wfs_rotation: float, rotation angle for WFS in degrees
+    - wfs_magnification: tuple, magnification factors for WFS (x, y)
+    - output_size: tuple, desired output size (height, width)
+
+    Returns:
+    - output: numpy array, transformed data
     """
    
     # Parameter handling: conversion of single values to tuples

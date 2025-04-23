@@ -2,10 +2,10 @@ import os
 import re
 import numpy as np
 import matplotlib.pyplot as plt
-import synim
+import synim.synim as synim
 
 # Import all utility functions from params_common_utils
-from utils.params_common_utils import *
+from synim.params_common_utils import *
 
 import specula
 specula.init(device_idx=-1, precision=1)
@@ -568,3 +568,23 @@ class ParamsManager:
                 saved_matrices[f"{wfs_name}_{dm_name}"] = im_path
         
         return saved_matrices
+    
+    def list_wfs(self):
+        """Return a list of all WFS names and types."""
+        return [(wfs['name'], wfs['type'], wfs['index']) for wfs in self.wfs_list]
+
+    def list_dm(self):
+        """Return a list of all DM names and indices."""
+        return [(dm['name'], dm['index']) for dm in self.dm_list]
+
+    def get_source_info(self, wfs_name):
+        """Return source info for a given WFS."""
+        return extract_source_info(self.params, wfs_name)
+
+    def generate_im_filename(self, wfs_type=None, wfs_index=None, dm_index=None, timestamp=False, verbose=False):
+        """Generate the interaction matrix filename for a given WFS-DM combination."""
+        return generate_im_filename(self.params_file, wfs_type, wfs_index, dm_index, timestamp, verbose)
+
+    def generate_im_filenames(self, timestamp=False):
+        """Generate all possible interaction matrix filenames."""
+        return generate_im_filenames(self.params_file, timestamp)

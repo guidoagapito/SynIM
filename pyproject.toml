@@ -1,0 +1,19 @@
+[build-system]
+requires = ["setuptools", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "synim"
+version = "0.1.0"
+description = "Synthetic interaction matrix generator for adaptive optics systems"
+authors = [
+    { name="Guido Agapito" }
+]
+readme = "README.md"
+requires-python = ">=3.8"
+dependencies = [
+    "numpy",
+    "scipy",
+    "matplotlib",
+    "specula"
+]

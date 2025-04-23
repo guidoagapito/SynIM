@@ -4,7 +4,7 @@ import yaml
 import datetime
 import numpy as np
 import matplotlib.pyplot as plt
-import synim
+import synim.synim as synim
 
 import specula
 specula.init(device_idx=-1, precision=1)
