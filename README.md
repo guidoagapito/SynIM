@@ -28,8 +28,8 @@ intmat = synim.interaction_matrix(pup_m,pup_mask,
                                   dm_height,dm_rotation,
                                   nsubaps,wfs_rotation,
                                   wfs_translation,wfs_magnification,
-                                  wfs_fov_arcsec,GS_pol_coo,
-                                  GS_height,idx_valid_sa=idx_valid_sa,
+                                  wfs_fov_arcsec,gs_pol_coo,
+                                  gs_height,idx_valid_sa=idx_valid_sa,
                                   verbose=True,display=True,
                                   specula_convention=False)
 ```
