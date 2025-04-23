@@ -5,7 +5,7 @@ import matplotlib.pyplot as plt
 import synim.synim as synim
 
 # Import all utility functions from params_common_utils
-from synim.params_common_utils import *
+from synim.utils import *
 
 import specula
 specula.init(device_idx=-1, precision=1)
@@ -548,7 +548,8 @@ class ParamsManager:
                     config_name = os.path.basename(self.params_file).split('.')[0]
                 else:
                     config_name = "config"
-                    
+ 
+                # TODO: this must be the subapdata name
                 pupdata_tag = f"{config_name}_{wfs_info}"
                 
                 # Create Intmat object and save it
