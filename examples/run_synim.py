@@ -1,9 +1,7 @@
 import numpy as np
-import matplotlib as mpl
 import matplotlib.pyplot as plt
-import synim
-
-plt.ion()  # Enable interactive mode
+import synim.utils as utils
+import synim.synim as synim
 
 # pupil parameters
 pup_m = 38.5
@@ -20,7 +18,7 @@ dm_rotation = 22.5
 
 # WFS parameters
 # number of subapertures of the WFS (sub-multiple of pup_npoints)
-nsubaps = 20#68
+nsubaps = 20
 wfs_rotation = 0
 wfs_translation = (0,0)
 wfs_magnification = (1,1)
@@ -35,17 +33,17 @@ print('LGS height [m]', LGS_height)
 print('LGS star pos. [arcsec, deg]', LGS_pol_coo)
 
 # Pupil and DM masks
-pup_mask = synim.make_mask(pup_npoints, obsratio=pup_obsratio, diaratio=1.0, xc=0.0, yc=0.0, square=False, inverse=False, centeronpixel=False)
-dm_mask = synim.make_mask(dm_npoints, obsratio=dm_obsratio, diaratio=1.0, xc=0.0, yc=0.0, square=False, inverse=False, centeronpixel=False)
+pup_mask = utils.make_mask(pup_npoints, obsratio=pup_obsratio, diaratio=1.0, xc=0.0, yc=0.0, square=False, inverse=False, centeronpixel=False)
+dm_mask = utils.make_mask(dm_npoints, obsratio=dm_obsratio, diaratio=1.0, xc=0.0, yc=0.0, square=False, inverse=False, centeronpixel=False)
 
 # estimate the valid sub-apertures indices
 pup_mask_sa = synim.rebin(pup_mask, (nsubaps,nsubaps), method='sum')
-idx_valid_sa = np.ravel(np.array(np.where(pup_mask_sa.flatten() > (0.5*np.max(pup_mask_sa)))))
+idx_valid_sa = np.ravel(np.array(np.where(pup_mask_sa.flat > (0.5*np.max(pup_mask_sa)))).astype(np.int32))
 
 print('Masks computed.')
 
 # DM modes shape (zernike)
-dm_array = synim.zern2phi(dm_npoints, n_modes, mask=dm_mask, no_round_mask=False, xsign=1, ysign=1, rot_angle=0, verbose=False)
+dm_array = utils.zern2phi(dm_npoints, n_modes, mask=dm_mask, no_round_mask=False, xsign=1, ysign=1, rot_angle=0, verbose=False)
 
 print('Zernike computed.')
 
@@ -67,7 +65,8 @@ intmat = synim.interaction_matrix(pup_m,pup_mask,dm_array,
                                   dm_mask,dm_height,dm_rotation,
                                   nsubaps,wfs_rotation,wfs_translation,
                                   wfs_magnification,wfs_fov_arcsec,LGS_pol_coo,LGS_height,
-                                  idx_valid_sa=idx_valid_sa,verbose=True,display=True)
+                                  idx_valid_sa=idx_valid_sa,verbose=True,display=True,
+                                  specula_convention=False)
 
 fig, _ = plt.subplots()
 plt.imshow(intmat)
