@@ -606,18 +606,23 @@ class ParamsManager:
 
         # Load base_inv_array from dm_inv
         base_inv_array = None
-        if 'dm_inv' in self.params:
-            if verbose_flag:
-                print("Loading inverse basis functions from dm_inv")
+        if 'dm_inv' in self.params or 'modal_analysis' in self.params:
 
-            dm_inv_params = self.params['dm_inv']
+            if 'dm_inv' in self.params:
+                if verbose_flag:
+                    print("Loading inverse basis functions from dm_inv")
+                dm_inv_params = self.params['dm_inv']
+            else:
+                if verbose_flag:
+                    print("Loading inverse basis functions from modal_analysis")
+                dm_inv_params = self.params['modal_analysis']
 
             try:
                 # Load influence functions from dm_inv
-                inv_array, inv_mask = load_influence_functions(
-                    self.cm, 
-                    dm_inv_params, 
-                    self.pixel_pupil, 
+                base_inv_array, inv_mask = load_influence_functions(
+                    self.cm,
+                    dm_inv_params,
+                    self.pixel_pupil,
                     verbose=verbose_flag
                 )
 
@@ -632,52 +637,58 @@ class ParamsManager:
                         print(f"Loaded inverse basis with shape {inv_array.shape}")
                         print(f"Mask has {n_valid_pixels} valid pixels")
 
-                    # Reshape the inverse functions to create base_inv_array
-                    base_inv_array = np.zeros((n_modes, n_valid_pixels))
-
-                    for i in range(n_modes):
-                        base_inv_array[i, :] = inv_array[:, :, i][valid_pixels]
-
-                    if verbose_flag:
-                        print(f"Created base_inv_array with shape {base_inv_array.shape}")
-
             except Exception as e:
                 print(f"Error loading dm_inv influence functions: {e}")
-  
+
         if base_inv_array is None:
             if verbose_flag:
                 print("Warning: Could not load base_inv_array from ifunc. Using default identity matrix.")
 
-        # Filter WFSs by type if specified - support 'opt' type
-        filtered_wfs_list = self.wfs_list
-        if wfs_type is not None:
-            filtered_wfs_list = []
-            for wfs in self.wfs_list:
-                if wfs_type in wfs['name']:
-                    filtered_wfs_list.append(wfs)
+        print('base_inv_array.shape:', base_inv_array.shape)
+
+        # Find all optical sources
+        opt_sources = []
+        for key, value in self.params.items():
+            if key.startswith('source_opt'):
+                try:
+                    index = int(key.replace('source_opt', ''))
+                    opt_sources.append({
+                        'name': key,
+                        'index': index,
+                        'config': value
+                    })
+                except ValueError:
+                    # Skip if we can't extract a valid index
+                    pass
+
+        # Sort by index
+        opt_sources.sort(key=lambda x: x['index'])
 
         if verbose_flag:
-            print(f"Computing projection matrices for {len(filtered_wfs_list)} WFS(s) and {len(self.dm_list)} DM(s)")
+            print(f"Found {len(opt_sources)} optical sources")
+            for src in opt_sources:
+                print(f"  Source: {src['name']} (index: {src['index']})")
+            print(f"Computing projection matrices for these sources and {len(self.dm_list)} DM(s)")
 
-        # Process each WFS-DM combination using cached parameters
-        for wfs in filtered_wfs_list:
-            wfs_idx = int(wfs['index'])
-            wfs_name = wfs['name']
+        # Process each Source-DM combination
+        for source in opt_sources:
+            source_name = source['name']
+            source_idx = source['index']
+            source_config = source['config']
 
-            # Determine source type from WFS name - handle 'opt' type
-            source_type = 'opt' if 'opt' in wfs_name else determine_source_type(wfs_name)
+            # Get source parameters
+            gs_pol_coo = source_config.get('polar_coordinates', [0.0, 0.0])
+            gs_height = source_config.get('height', float('inf'))
 
             for dm in self.dm_list:
                 dm_idx = int(dm['index'])
                 dm_name = dm['name']
 
                 if verbose_flag:
-                    print(f"\nProcessing WFS {wfs_name} (index {wfs_idx}) and DM {dm_name} (index {dm_idx})")
+                    print(f"\nProcessing Source {source_name} (index {source_idx}) and DM {dm_name} (index {dm_idx})")
 
-                # Generate filename for this combination (replace IM with PM)
-                im_filename = generate_im_filename(self.params_file, wfs_type=source_type, 
-                                                wfs_index=wfs_idx, dm_index=dm_idx)
-                pm_filename = "PM_" + im_filename[3:]  # Replace "IM_" with "PM_"
+                # Generate filename for this combination
+                pm_filename = f"PM_{os.path.basename(self.params_file).split('.')[0]}_opt{source_idx}_dm{dm_idx}.fits"
 
                 # Full path for the file
                 pm_path = os.path.join(output_dir, pm_filename)
@@ -686,42 +697,44 @@ class ParamsManager:
                 if os.path.exists(pm_path) and not overwrite:
                     if verbose_flag:
                         print(f"  File {pm_filename} already exists. Skipping computation.")
-                    saved_matrices[f"{wfs_name}_{dm_name}"] = pm_path
+                    saved_matrices[f"{source_name}_{dm_name}"] = pm_path
                     continue
 
-                # Get parameters for projection matrix calculation
-                params = self.prepare_interaction_matrix_params(
-                    wfs_type=source_type, 
-                    wfs_index=wfs_idx, 
-                    dm_index=dm_idx
-                )
+                # Get DM parameters
+                dm_params = self.get_dm_params(dm_idx)
+
+                # Set default WFS parameters for optical source (no rotation/translation/magnification)
+                wfs_rotation = 0.0
+                wfs_translation = (0.0, 0.0)
+                wfs_magnification = (1.0, 1.0)
 
                 # Check if base_inv_array is properly loaded
                 if base_inv_array is None:
                     if verbose_flag:
                         print("  No base_inv_array provided. Creating a simple identity matrix.")
-
                     # Create a default identity matrix for basic projection
-                    n_valid_pixels = np.sum(params['pup_mask'] > 0.5)
+                    n_valid_pixels = np.sum(self.pup_mask > 0.5)
                     base_inv_array = np.eye(n_valid_pixels)
 
                 if verbose_flag:
                     print(f"  Computing projection matrix with base_inv_array shape: {base_inv_array.shape}")
+                    print(f"  Source coordinates: {gs_pol_coo}, height: {gs_height}")
+                    print(f"  DM height: {dm_params['dm_height']}, rotation: {dm_params['dm_rotation']}")
 
                 # Calculate the projection matrix
                 pm = synim.projection_matrix(
-                    pup_diam_m=params['pup_diam_m'],
-                    pup_mask=params['pup_mask'],
-                    dm_array=params['dm_array'],
-                    dm_mask=params['dm_mask'],
+                    pup_diam_m=self.pup_diam_m,
+                    pup_mask=self.pup_mask,
+                    dm_array=dm_params['dm_array'],
+                    dm_mask=dm_params['dm_mask'],
                     base_inv_array=base_inv_array,
-                    dm_height=params['dm_height'],
-                    dm_rotation=params['dm_rotation'],
-                    wfs_rotation=params['wfs_rotation'],
-                    wfs_translation=params['wfs_translation'],
-                    wfs_magnification=params['wfs_magnification'],
-                    gs_pol_coo=params['gs_pol_coo'],
-                    gs_height=params['gs_height'],
+                    dm_height=dm_params['dm_height'],
+                    dm_rotation=dm_params['dm_rotation'],
+                    wfs_rotation=wfs_rotation,
+                    wfs_translation=wfs_translation,
+                    wfs_magnification=wfs_magnification,
+                    gs_pol_coo=gs_pol_coo,
+                    gs_height=gs_height,
                     verbose=verbose_flag,
                     display=display,
                     specula_convention=True
@@ -736,14 +749,9 @@ class ParamsManager:
                     plt.figure(figsize=(10, 8))
                     plt.imshow(pm, cmap='viridis')
                     plt.colorbar()
-                    plt.title(f"Projection Matrix: {wfs_name} - {dm_name}")
+                    plt.title(f"Projection Matrix: {source_name} - {dm_name}")
                     plt.tight_layout()
                     plt.show()
-
-                # Create the Intmat object (reusing the Intmat class for storage)
-                # Get parameters to include in the tag
-                wfs_params = self.get_wfs_params(source_type, wfs_idx)
-                wfs_info = f"{wfs_params['wfs_type']}_{wfs_params['wfs_nsubaps']}"
 
                 # Create tag for the pupdata
                 if isinstance(self.params_file, str):
@@ -751,7 +759,7 @@ class ParamsManager:
                 else:
                     config_name = "config"
 
-                pupdata_tag = f"{config_name}_{wfs_info}"
+                pupdata_tag = f"{config_name}_opt{source_idx}"
 
                 # Create Intmat object and save it (we reuse the Intmat class for storage)
                 pm_obj = Intmat(
@@ -767,7 +775,7 @@ class ParamsManager:
                 if verbose_flag:
                     print(f"  Projection matrix saved as: {pm_path}")
 
-                saved_matrices[f"{wfs_name}_{dm_name}"] = pm_path
+                saved_matrices[f"{source_name}_{dm_name}"] = pm_path
 
         return saved_matrices
 
