@@ -386,7 +386,7 @@ class ParamsManager:
         }
         
         return params
-    
+
     def compute_interaction_matrix(self, wfs_type=None, wfs_index=None, dm_index=None, verbose=None, display=False):
         """
         Compute an interaction matrix for a specific WFS-DM combination.
@@ -403,16 +403,16 @@ class ParamsManager:
         """
         # Use class verbose setting if not overridden
         verbose_flag = self.verbose if verbose is None else verbose
-        
+
         # Prepare parameters
         params = self.prepare_interaction_matrix_params(wfs_type, wfs_index, dm_index)
-        
+
         if verbose_flag:
             print("Computing interaction matrix with parameters:")
             print(f"      WFS: {params['wfs_key']}, DM: {params['dm_key']}")
             print(f"      WFS type: {params['wfs_type']}, nsubaps: {params['wfs_nsubaps']}")
             print(f"      Guide star: {params['gs_pol_coo']} at height {params['gs_height']} m")
-        
+
         # Calculate the interaction matrix
         im = synim.interaction_matrix(
             pup_diam_m=params['pup_diam_m'],
@@ -432,12 +432,12 @@ class ParamsManager:
             verbose=verbose_flag,
             display=display
         )
-        
+
         # Transpose to be coherent with the specula convention
         im = im.transpose()
-        
+
         return im
-    
+
     def compute_interaction_matrices(self, output_im_dir=None, output_rec_dir=None,
                                 wfs_type=None, overwrite=False, verbose=None, display=False):
         """
@@ -461,21 +461,21 @@ class ParamsManager:
         specula_init_path = specula.__file__
         specula_package_dir = os.path.dirname(specula_init_path)
         specula_repo_path = os.path.dirname(specula_package_dir)
-        
+
         # Set up directories
         if output_im_dir is None:
             output_im_dir = os.path.join(specula_repo_path, "main", "scao", "calib", "MCAO", "im")
-        
+
         if output_rec_dir is None:
             output_rec_dir = os.path.join(specula_repo_path, "main", "scao", "calib", "MCAO", "rec")
-        
+
         # Create directories if they don't exist
         os.makedirs(output_im_dir, exist_ok=True)
         os.makedirs(output_rec_dir, exist_ok=True)
-        
+
         # Use verbose flag from instance if not overridden
         verbose_flag = self.verbose if verbose is None else verbose
-        
+
         # Filter WFSs by type if specified
         filtered_wfs_list = self.wfs_list
         if wfs_type is not None:
@@ -483,39 +483,39 @@ class ParamsManager:
             for wfs in self.wfs_list:
                 if wfs_type in wfs['name']:
                     filtered_wfs_list.append(wfs)
-        
+
         if verbose_flag:
             print(f"Computing interaction matrices for {len(filtered_wfs_list)} WFS(s) and {len(self.dm_list)} DM(s)")
-        
+
         # Process each WFS-DM combination using cached parameters
         for wfs in filtered_wfs_list:
             wfs_idx = int(wfs['index'])
             wfs_name = wfs['name']
-            
+
             # Determine source type from WFS name
             source_type = determine_source_type(wfs_name)
-            
+
             for dm in self.dm_list:
                 dm_idx = int(dm['index'])
                 dm_name = dm['name']
-                
+
                 if verbose_flag:
                     print(f"\nProcessing WFS {wfs_name} (index {wfs_idx}) and DM {dm_name} (index {dm_idx})")
-                
+
                 # Generate filename for this combination
                 im_filename = generate_im_filename(self.params_file, wfs_type=source_type, 
                                                 wfs_index=wfs_idx, dm_index=dm_idx)
-                
+
                 # Full path for the file
                 im_path = os.path.join(output_im_dir, im_filename)
-                
+
                 # Check if the file already exists
                 if os.path.exists(im_path) and not overwrite:
                     if verbose_flag:
                         print(f"  File {im_filename} already exists. Skipping computation.")
                     saved_matrices[f"{wfs_name}_{dm_name}"] = im_path
                     continue
-                
+
                 # Calculate the interaction matrix using our cached parameters
                 im = self.compute_interaction_matrix(
                     wfs_type=source_type,
@@ -524,11 +524,11 @@ class ParamsManager:
                     verbose=verbose_flag,
                     display=display
                 )
-                
+
                 if verbose_flag:
                     print(f"  Interaction matrix shape: {im.shape}")
                     print(f"  First few values of IM: {im[:5, :5]}")
-                
+
                 # Display the matrix if requested
                 if display:
                     plt.figure(figsize=(10, 8))
@@ -537,21 +537,21 @@ class ParamsManager:
                     plt.title(f"Interaction Matrix: {wfs_name} - {dm_name}")
                     plt.tight_layout()
                     plt.show()
-                
+
                 # Create the Intmat object
                 # Get parameters to include in the tag
                 wfs_params = self.get_wfs_params(source_type, wfs_idx)
                 wfs_info = f"{wfs_params['wfs_type']}_{wfs_params['wfs_nsubaps']}"
-                
+
                 # Create tag for the pupdata
                 if isinstance(self.params_file, str):
                     config_name = os.path.basename(self.params_file).split('.')[0]
                 else:
                     config_name = "config"
- 
+
                 # TODO: this must be the subapdata name
                 pupdata_tag = f"{config_name}_{wfs_info}"
-                
+
                 # Create Intmat object and save it
                 intmat_obj = Intmat(
                     im, 
@@ -560,16 +560,217 @@ class ParamsManager:
                     target_device_idx=None,  # Use default device
                     precision=None    # Use default precision
                 )
-                
+
                 # Save the interaction matrix
                 intmat_obj.save(im_path)
                 if verbose_flag:
                     print(f"  Interaction matrix saved as: {im_path}")
-                
+
                 saved_matrices[f"{wfs_name}_{dm_name}"] = im_path
-        
+
         return saved_matrices
-    
+
+    def compute_projection_matrices(self, output_dir=None, wfs_type=None, overwrite=False, 
+                                verbose=None, display=False):
+        """
+        Compute and save projection matrices for all combinations of WFSs and DMs.
+        Reuses cached parameters to avoid redundant loading.
+        Uses ifunc from the parameters file to create the inverse basis array.
+        
+        Args:
+            output_dir (str, optional): Output directory for saved matrices
+            wfs_type (str, optional): Type of WFS ('opt', 'ngs', 'lgs', 'ref') to use
+            overwrite (bool, optional): Whether to overwrite existing files
+            verbose (bool, optional): Override the class's verbose setting
+            display (bool, optional): Whether to display plots
+            
+        Returns:
+            dict: Dictionary mapping WFS-DM pairs to saved projection matrix paths
+        """
+        saved_matrices = {}
+
+        # Find the SPECULA repository path for default paths
+        specula_init_path = specula.__file__
+        specula_package_dir = os.path.dirname(specula_init_path)
+        specula_repo_path = os.path.dirname(specula_package_dir)
+
+        # Set up directories
+        if output_dir is None:
+            output_dir = os.path.join(specula_repo_path, "main", "scao", "calib", "MCAO", "pm")
+
+        # Create directory if it doesn't exist
+        os.makedirs(output_dir, exist_ok=True)
+
+        # Use verbose flag from instance if not overridden
+        verbose_flag = self.verbose if verbose is None else verbose
+
+        # Load base_inv_array from dm_inv
+        base_inv_array = None
+        if 'dm_inv' in self.params:
+            if verbose_flag:
+                print("Loading inverse basis functions from dm_inv")
+
+            dm_inv_params = self.params['dm_inv']
+
+            try:
+                # Load influence functions from dm_inv
+                inv_array, inv_mask = load_influence_functions(
+                    self.cm, 
+                    dm_inv_params, 
+                    self.pixel_pupil, 
+                    verbose=verbose_flag
+                )
+
+                if inv_array is not None:
+                    # Convert 3D influence function array to 2D base_inv_array
+                    # Each mode becomes a row in base_inv_array
+                    height, width, n_modes = inv_array.shape
+                    valid_pixels = inv_mask > 0.5
+                    n_valid_pixels = np.sum(valid_pixels)
+
+                    if verbose_flag:
+                        print(f"Loaded inverse basis with shape {inv_array.shape}")
+                        print(f"Mask has {n_valid_pixels} valid pixels")
+
+                    # Reshape the inverse functions to create base_inv_array
+                    base_inv_array = np.zeros((n_modes, n_valid_pixels))
+
+                    for i in range(n_modes):
+                        base_inv_array[i, :] = inv_array[:, :, i][valid_pixels]
+
+                    if verbose_flag:
+                        print(f"Created base_inv_array with shape {base_inv_array.shape}")
+
+            except Exception as e:
+                print(f"Error loading dm_inv influence functions: {e}")
+  
+        if base_inv_array is None:
+            if verbose_flag:
+                print("Warning: Could not load base_inv_array from ifunc. Using default identity matrix.")
+
+        # Filter WFSs by type if specified - support 'opt' type
+        filtered_wfs_list = self.wfs_list
+        if wfs_type is not None:
+            filtered_wfs_list = []
+            for wfs in self.wfs_list:
+                if wfs_type in wfs['name']:
+                    filtered_wfs_list.append(wfs)
+
+        if verbose_flag:
+            print(f"Computing projection matrices for {len(filtered_wfs_list)} WFS(s) and {len(self.dm_list)} DM(s)")
+
+        # Process each WFS-DM combination using cached parameters
+        for wfs in filtered_wfs_list:
+            wfs_idx = int(wfs['index'])
+            wfs_name = wfs['name']
+
+            # Determine source type from WFS name - handle 'opt' type
+            source_type = 'opt' if 'opt' in wfs_name else determine_source_type(wfs_name)
+
+            for dm in self.dm_list:
+                dm_idx = int(dm['index'])
+                dm_name = dm['name']
+
+                if verbose_flag:
+                    print(f"\nProcessing WFS {wfs_name} (index {wfs_idx}) and DM {dm_name} (index {dm_idx})")
+
+                # Generate filename for this combination (replace IM with PM)
+                im_filename = generate_im_filename(self.params_file, wfs_type=source_type, 
+                                                wfs_index=wfs_idx, dm_index=dm_idx)
+                pm_filename = "PM_" + im_filename[3:]  # Replace "IM_" with "PM_"
+
+                # Full path for the file
+                pm_path = os.path.join(output_dir, pm_filename)
+
+                # Check if the file already exists
+                if os.path.exists(pm_path) and not overwrite:
+                    if verbose_flag:
+                        print(f"  File {pm_filename} already exists. Skipping computation.")
+                    saved_matrices[f"{wfs_name}_{dm_name}"] = pm_path
+                    continue
+
+                # Get parameters for projection matrix calculation
+                params = self.prepare_interaction_matrix_params(
+                    wfs_type=source_type, 
+                    wfs_index=wfs_idx, 
+                    dm_index=dm_idx
+                )
+
+                # Check if base_inv_array is properly loaded
+                if base_inv_array is None:
+                    if verbose_flag:
+                        print("  No base_inv_array provided. Creating a simple identity matrix.")
+
+                    # Create a default identity matrix for basic projection
+                    n_valid_pixels = np.sum(params['pup_mask'] > 0.5)
+                    base_inv_array = np.eye(n_valid_pixels)
+
+                if verbose_flag:
+                    print(f"  Computing projection matrix with base_inv_array shape: {base_inv_array.shape}")
+
+                # Calculate the projection matrix
+                pm = synim.projection_matrix(
+                    pup_diam_m=params['pup_diam_m'],
+                    pup_mask=params['pup_mask'],
+                    dm_array=params['dm_array'],
+                    dm_mask=params['dm_mask'],
+                    base_inv_array=base_inv_array,
+                    dm_height=params['dm_height'],
+                    dm_rotation=params['dm_rotation'],
+                    wfs_rotation=params['wfs_rotation'],
+                    wfs_translation=params['wfs_translation'],
+                    wfs_magnification=params['wfs_magnification'],
+                    gs_pol_coo=params['gs_pol_coo'],
+                    gs_height=params['gs_height'],
+                    verbose=verbose_flag,
+                    display=display,
+                    specula_convention=True
+                )
+
+                if verbose_flag:
+                    print(f"  Projection matrix shape: {pm.shape}")
+                    print(f"  First few values of PM: {pm[:min(5, pm.shape[0]), :min(5, pm.shape[1])]}")
+
+                # Display the matrix if requested
+                if display:
+                    plt.figure(figsize=(10, 8))
+                    plt.imshow(pm, cmap='viridis')
+                    plt.colorbar()
+                    plt.title(f"Projection Matrix: {wfs_name} - {dm_name}")
+                    plt.tight_layout()
+                    plt.show()
+
+                # Create the Intmat object (reusing the Intmat class for storage)
+                # Get parameters to include in the tag
+                wfs_params = self.get_wfs_params(source_type, wfs_idx)
+                wfs_info = f"{wfs_params['wfs_type']}_{wfs_params['wfs_nsubaps']}"
+
+                # Create tag for the pupdata
+                if isinstance(self.params_file, str):
+                    config_name = os.path.basename(self.params_file).split('.')[0]
+                else:
+                    config_name = "config"
+
+                pupdata_tag = f"{config_name}_{wfs_info}"
+
+                # Create Intmat object and save it (we reuse the Intmat class for storage)
+                pm_obj = Intmat(
+                    pm, 
+                    pupdata_tag=pupdata_tag,
+                    norm_factor=1.0,
+                    target_device_idx=None,  # Use default device
+                    precision=None    # Use default precision
+                )
+
+                # Save the projection matrix
+                pm_obj.save(pm_path)
+                if verbose_flag:
+                    print(f"  Projection matrix saved as: {pm_path}")
+
+                saved_matrices[f"{wfs_name}_{dm_name}"] = pm_path
+
+        return saved_matrices
+
     def list_wfs(self):
         """Return a list of all WFS names and types."""
         return [(wfs['name'], wfs['type'], wfs['index']) for wfs in self.wfs_list]
