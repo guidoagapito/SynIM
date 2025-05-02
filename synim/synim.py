@@ -520,7 +520,7 @@ def rotshiftzoom_array(input_array, dm_translation=(0.0, 0.0), dm_rotation=0.0, 
 
     return output
 
-def projection_matrix(pup_diam_m, pup_mask, dm_array, dm_mask, base_inv_array, 
+def projection_matrix(pup_diam_m, pup_mask, dm_array, dm_mask, base_inv_array,
                       dm_height, dm_rotation, wfs_rotation, wfs_translation, wfs_magnification,
                       gs_pol_coo, gs_height, verbose=False, display=False, specula_convention=True):
     """
@@ -630,8 +630,14 @@ def projection_matrix(pup_diam_m, pup_mask, dm_array, dm_mask, base_inv_array,
     for i in range(n_modes):
         dm_valid_values[:, i] = trans_dm_array[:, :, i][valid_pixels]
 
+    height_base, width_base, n_modes_base = base_inv_array.shape
+    base_inv_values = np.zeros((n_valid_pixels, n_modes_base))
+
+    for i in range(n_modes_base):
+        base_inv_values[:, i] = base_inv_array[:, :, i][valid_pixels]
+
     # Perform matrix multiplication with base_inv_array to get projection coefficients
-    projection = np.dot(base_inv_array, dm_valid_values)
+    projection = np.dot(base_inv_values.T, dm_valid_values)
 
     if verbose:
         print('Matrix multiplication done, projection shape:', projection.shape)
