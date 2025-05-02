@@ -503,7 +503,7 @@ class ParamsManager:
                     print(f"\nProcessing WFS {wfs_name} (index {wfs_idx}) and DM {dm_name} (index {dm_idx})")
 
                 # Generate filename for this combination
-                im_filename = generate_im_filename(self.params_file, wfs_type=source_type, 
+                im_filename = generate_im_filename(self.params_file, wfs_type=source_type,
                                                 wfs_index=wfs_idx, dm_index=dm_idx)
 
                 # Full path for the file
@@ -570,8 +570,8 @@ class ParamsManager:
 
         return saved_matrices
 
-    def compute_projection_matrices(self, output_dir=None, wfs_type=None, overwrite=False, 
-                                verbose=None, display=False):
+    def compute_projection_matrices(self, output_dir=None, overwrite=False,
+                                    verbose=None, display=False):
         """
         Compute and save projection matrices for all combinations of WFSs and DMs.
         Reuses cached parameters to avoid redundant loading.
@@ -579,7 +579,6 @@ class ParamsManager:
         
         Args:
             output_dir (str, optional): Output directory for saved matrices
-            wfs_type (str, optional): Type of WFS ('opt', 'ngs', 'lgs', 'ref') to use
             overwrite (bool, optional): Whether to overwrite existing files
             verbose (bool, optional): Override the class's verbose setting
             display (bool, optional): Whether to display plots
@@ -626,15 +625,12 @@ class ParamsManager:
                     verbose=verbose_flag
                 )
 
-                if inv_array is not None:
-                    # Convert 3D influence function array to 2D base_inv_array
-                    # Each mode becomes a row in base_inv_array
-                    height, width, n_modes = inv_array.shape
+                if base_inv_array is not None:
                     valid_pixels = inv_mask > 0.5
                     n_valid_pixels = np.sum(valid_pixels)
 
                     if verbose_flag:
-                        print(f"Loaded inverse basis with shape {inv_array.shape}")
+                        print(f"Loaded inverse basis with shape {base_inv_array.shape}")
                         print(f"Mask has {n_valid_pixels} valid pixels")
 
             except Exception as e:
@@ -688,7 +684,7 @@ class ParamsManager:
                     print(f"\nProcessing Source {source_name} (index {source_idx}) and DM {dm_name} (index {dm_idx})")
 
                 # Generate filename for this combination
-                pm_filename = f"PM_{os.path.basename(self.params_file).split('.')[0]}_opt{source_idx}_dm{dm_idx}.fits"
+                pm_filename = generate_pm_filename(self.params_file, opt_index=source_idx, dm_index=dm_idx)
 
                 # Full path for the file
                 pm_path = os.path.join(output_dir, pm_filename)
@@ -703,10 +699,10 @@ class ParamsManager:
                 # Get DM parameters
                 dm_params = self.get_dm_params(dm_idx)
 
-                # Set default WFS parameters for optical source (no rotation/translation/magnification)
-                wfs_rotation = 0.0
-                wfs_translation = (0.0, 0.0)
-                wfs_magnification = (1.0, 1.0)
+                # Set default Basis parameters for optical source (no rotation/translation/magnification)
+                base_rotation = 0.0
+                base_translation = (0.0, 0.0)
+                base_magnification = (1.0, 1.0)
 
                 # Check if base_inv_array is properly loaded
                 if base_inv_array is None:
@@ -730,9 +726,9 @@ class ParamsManager:
                     base_inv_array=base_inv_array,
                     dm_height=dm_params['dm_height'],
                     dm_rotation=dm_params['dm_rotation'],
-                    wfs_rotation=wfs_rotation,
-                    wfs_translation=wfs_translation,
-                    wfs_magnification=wfs_magnification,
+                    base_rotation=base_rotation,
+                    base_translation=base_translation,
+                    base_magnification=base_magnification,
                     gs_pol_coo=gs_pol_coo,
                     gs_height=gs_height,
                     verbose=verbose_flag,
