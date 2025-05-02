@@ -529,7 +529,7 @@ def load_influence_functions(cm, dm_params, pixel_pupil, verbose=False):
     Returns:
         tuple: (dm_array, dm_mask) - 3D array of DM influence functions and mask
     """
-    if 'ifunc_object' in dm_params or 'ifunc_tag' in dm_params:
+    if 'ifunc_object' in dm_params or 'ifunc_tag' in dm_params:        
         if 'ifunc_tag' in dm_params:
             ifunc_tag = dm_params['ifunc_tag']
             if verbose:
@@ -555,7 +555,7 @@ def load_influence_functions(cm, dm_params, pixel_pupil, verbose=False):
             m2c = M2C.restore(m2c_path)
             # multiply the influence function by the M2C
             ifunc.influence_function = ifunc.influence_function @ m2c.m2c
-              
+
         # Convert influence function from 2D to 3D
         if ifunc.mask_inf_func is not None:           
             # Create empty 3D array (height, width, n_modes)
@@ -580,12 +580,22 @@ def load_influence_functions(cm, dm_params, pixel_pupil, verbose=False):
         nmodes = dm_params.get('nmodes', 100)
         obsratio = dm_params.get('obsratio', 0.0)
         npixels = dm_params.get('npixels', pixel_pupil)
+
+        if 'mask_object' in dm_params:
+            mask_tag = dm_params['mask_object']
+            mask_path = cm.filename('pupilstop', mask_tag)
+            print(f"     Loading mask from file, tag: {mask_tag}")
+            pupilstop = Pupilstop.restore(mask_path)
+            mask = pupilstop.A
+        else:
+            mask = None
+            print("     No mask provided. Using default mask.")
         
         # Compute Zernike influence functions
-        z_ifunc, z_mask = compute_zern_ifunc(npixels, nmodes, xp=np, dtype=float, 
-                                             obsratio=obsratio, diaratio=1.0, 
-                                             start_mode=0, mask=None)
-        
+        z_ifunc, z_mask = compute_zern_ifunc(npixels, nmodes, xp=np, dtype=float,
+                                             obsratio=obsratio, diaratio=1.0,
+                                             start_mode=0, mask=mask)
+
         # Create empty 3D array (height, width, n_modes)
         dm_array = dm2d_to_3d(z_ifunc, z_mask)
         if verbose:
