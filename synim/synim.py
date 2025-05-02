@@ -521,22 +521,23 @@ def rotshiftzoom_array(input_array, dm_translation=(0.0, 0.0), dm_rotation=0.0, 
     return output
 
 def projection_matrix(pup_diam_m, pup_mask, dm_array, dm_mask, base_inv_array,
-                      dm_height, dm_rotation, wfs_rotation, wfs_translation, wfs_magnification,
+                      dm_height, dm_rotation, base_rotation, base_translation, base_magnification,
                       gs_pol_coo, gs_height, verbose=False, display=False, specula_convention=True):
     """
     Computes a projection matrix for DM modes onto a desired basis.
+    From Guido Agapito.
 
     Parameters:
     - pup_diam_m: float, size in m of the side of the pupil
-    - pup_mask: numpy 2D array, pupil mask
-    - dm_array: numpy 3D array, Deformable Mirror 2D shapes
-    - dm_mask: numpy 2D array, DM mask
-    - base_inv_array: numpy 2D array, inverted basis for projection (n_modes x n_valid_pixels)
+    - pup_mask: numpy 2D array, pupil mask (n_pup x n_pup)
+    - dm_array: numpy 3D array, Deformable Mirror 2D shapes (n x n x n_dm_modes)
+    - dm_mask: numpy 2D array, DM mask (n x n)
+    - base_inv_array: numpy 3D array, inverted basis for projection (n_pup x n_pup x n_base_modes)
     - dm_height: float, conjugation altitude of the Deformable Mirror
     - dm_rotation: float, rotation in deg of the Deformable Mirror with respect to the pupil
-    - wfs_rotation: float, rotation of the wavefront sensor
-    - wfs_translation: tuple, translation of the wavefront sensor
-    - wfs_magnification: tuple, magnification of the wavefront sensor
+    - base_rotation: float, rotation of the basis in deg
+    - base_translation: tuple, translation of the basis
+    - base_magnification: tuple, magnification of the basis
     - gs_pol_coo: tuple, polar coordinates of the guide star radius in arcsec and angle in deg
     - gs_height: float, altitude of the guide star
     - verbose: bool, optional, display verbose output
@@ -549,7 +550,7 @@ def projection_matrix(pup_diam_m, pup_mask, dm_array, dm_mask, base_inv_array,
 
     pup_diam_pix = pup_mask.shape[0]
     pixel_pitch = pup_diam_m / pup_diam_pix
-    dm_diam_pix = dm_mask.shape[0]
+
     if dm_mask.shape[0] != dm_array.shape[0]:
         raise ValueError('Error in input data, the dm and mask array must have the same dimensions.')
 
@@ -559,22 +560,22 @@ def projection_matrix(pup_diam_m, pup_mask, dm_array, dm_mask, base_inv_array,
     output_size = (pup_diam_pix, pup_diam_pix)
 
     # Extraction of patch seen by GS and application of DM rotation
-    trans_dm_array = rotshiftzoom_array(dm_array, 
-                                       dm_translation=dm_translation, 
-                                       dm_rotation=dm_rotation, 
+    trans_dm_array = rotshiftzoom_array(dm_array,
+                                       dm_translation=dm_translation,
+                                       dm_rotation=dm_rotation,
                                        dm_magnification=dm_magnification,
-                                       wfs_translation=wfs_translation, 
-                                       wfs_rotation=wfs_rotation, 
-                                       wfs_magnification=wfs_magnification,
+                                       wfs_translation=base_translation,
+                                       wfs_rotation=base_rotation,
+                                       wfs_magnification=base_magnification,
                                        output_size=output_size)
 
     # Apply transformation to the DM mask
     trans_dm_mask = rotshiftzoom_array(dm_mask, 
-                                      dm_translation=dm_translation, 
-                                      dm_rotation=dm_rotation, 
+                                      dm_translation=dm_translation,
+                                      dm_rotation=dm_rotation,
                                       dm_magnification=dm_magnification,
-                                      wfs_translation=(0,0), 
-                                      wfs_rotation=0, 
+                                      wfs_translation=(0,0),
+                                      wfs_rotation=0,
                                       wfs_magnification=(1,1),
                                       output_size=output_size)
     trans_dm_mask[trans_dm_mask<0.5] = 0
@@ -583,13 +584,13 @@ def projection_matrix(pup_diam_m, pup_mask, dm_array, dm_mask, base_inv_array,
         raise ValueError('Error in input data, the rotated dm mask is empty.')
 
     # Apply transformation to the pupil mask
-    trans_pup_mask = rotshiftzoom_array(pup_mask, 
-                                       dm_translation=(0,0), 
-                                       dm_rotation=0, 
+    trans_pup_mask = rotshiftzoom_array(pup_mask,
+                                       dm_translation=(0,0),
+                                       dm_rotation=0,
                                        dm_magnification=(1,1),
-                                       wfs_translation=wfs_translation, 
-                                       wfs_rotation=wfs_rotation, 
-                                       wfs_magnification=wfs_magnification,
+                                       wfs_translation=base_translation,
+                                       wfs_rotation=base_rotation,
+                                       wfs_magnification=base_magnification,
                                        output_size=output_size)
     trans_pup_mask[trans_pup_mask<0.5] = 0
 
@@ -598,7 +599,7 @@ def projection_matrix(pup_diam_m, pup_mask, dm_array, dm_mask, base_inv_array,
 
     if verbose:
         print(f'DM rotation ({dm_rotation} deg), translation ({dm_translation} pixel), magnification ({dm_magnification})')
-        print(f'WFS translation ({wfs_translation} pixel), wfs rotation ({wfs_rotation} deg), wfs magnification ({wfs_magnification})')
+        print(f'Basis translation ({base_translation} pixel), basis rotation ({base_rotation} deg), basis magnification ({base_magnification})')
         print('done.')
 
     # Apply mask
@@ -631,13 +632,13 @@ def projection_matrix(pup_diam_m, pup_mask, dm_array, dm_mask, base_inv_array,
         dm_valid_values[:, i] = trans_dm_array[:, :, i][valid_pixels]
 
     height_base, width_base, n_modes_base = base_inv_array.shape
-    base_inv_values = np.zeros((n_valid_pixels, n_modes_base))
+    base_valid_values = np.zeros((n_valid_pixels, n_modes_base))
 
     for i in range(n_modes_base):
-        base_inv_values[:, i] = base_inv_array[:, :, i][valid_pixels]
+        base_valid_values[:, i] = base_inv_array[:, :, i][valid_pixels]
 
     # Perform matrix multiplication with base_inv_array to get projection coefficients
-    projection = np.dot(base_inv_values.T, dm_valid_values)
+    projection = np.dot(base_valid_values.T, dm_valid_values)
 
     if verbose:
         print('Matrix multiplication done, projection shape:', projection.shape)
@@ -648,7 +649,7 @@ def projection_matrix(pup_diam_m, pup_mask, dm_array, dm_mask, base_inv_array,
         plt.imshow(valid_mask)
         plt.title('Valid pixels mask')
         plt.colorbar()
- 
+
         # Display a couple of DM modes
         plt.figure(figsize=(10, 5))
         plt.subplot(1, 2, 1)
@@ -668,6 +669,15 @@ def projection_matrix(pup_diam_m, pup_mask, dm_array, dm_mask, base_inv_array,
         plt.title('Projection coefficients')
         plt.xlabel('DM mode index')
         plt.ylabel('Coefficient')
+        plt.grid(True)
+
+        # Display projection array
+        plt.figure()
+        plt.imshow(projection, cmap='seismic', origin='lower')
+        plt.legend()
+        plt.title('Projection coefficients')
+        plt.xlabel('DM mode index')
+        plt.ylabel('Basis mode index')
         plt.grid(True)
         plt.show()
 
@@ -704,7 +714,7 @@ def interaction_matrix(pup_diam_m,pup_mask,dm_array,dm_mask,dm_height,dm_rotatio
 
     pup_diam_pix = pup_mask.shape[0]
     pixel_pitch = pup_diam_m/pup_diam_pix
-    dm_diam_pix = dm_mask.shape[0]
+
     if dm_mask.shape[0] != dm_array.shape[0]:
         raise ValueError('Error in input data, the dm and mask array must have the same dimensions.')
 
