@@ -520,6 +520,87 @@ def rotshiftzoom_array(input_array, dm_translation=(0.0, 0.0), dm_rotation=0.0, 
 
     return output
 
+def update_dm_pup(pup_diam_m, pup_mask, dm_array, dm_mask, dm_height, dm_rotation,
+                  wfs_rotation, wfs_translation, wfs_magnification,
+                  gs_pol_coo, gs_height, verbose=False, specula_convention=True):
+    """
+    Update the DM and pupil array to be used in the computation of interaction matrix.
+    From Guido Agapito.
+
+    Parameters:
+    - pup_diam_m: float, size in m of the side of the pupil
+    - pup_mask: numpy 2D array, mask
+    - dm_array: numpy 3D array, Deformable Mirror 2D shapes
+    - dm_mask: numpy 2D array, mask
+    - dm_height: float, conjugation altitude of the Deformable Mirror
+    - dm_rotation: float, rotation in deg of the Deformable Mirror with respect to the pupil
+    - wfs_rotation
+    - wfs_translation
+    - wfs_magnification
+    - gs_pol_coo: tuple, polar coordinates of the gudie star radius in arcsec and angle in deg
+    - gs_height: float, altitude of the guide star
+    - verbose, optional
+    - specula_convention, optional
+
+    Returns:
+    - trans_dm_array: DM array
+    - trans_dm_mask: DM mask
+    - trans_pup_mask: pupil mask
+    """
+
+    pup_diam_pix = pup_mask.shape[0]
+    pixel_pitch = pup_diam_m/pup_diam_pix
+
+    if dm_mask.shape[0] != dm_array.shape[0]:
+        raise ValueError('Error in input data, the dm and mask array must have the same dimensions.')
+
+    pixel_pitch = pup_diam_m / pup_diam_pix
+
+    dm_translation, dm_magnification = shiftzoom_from_source_dm_params(gs_pol_coo, gs_height, dm_height, pixel_pitch)
+    output_size = (pup_diam_pix,pup_diam_pix)
+
+    #Extraction of patch seen by GS and application of DM rotation
+    trans_dm_array = rotshiftzoom_array(dm_array, dm_translation=dm_translation, dm_rotation=dm_rotation, dm_magnification=dm_magnification,
+                                        wfs_translation=wfs_translation, wfs_rotation=wfs_rotation, wfs_magnification=wfs_magnification,
+                                        output_size=output_size)
+    # apply transformation to the DM mask
+    trans_dm_mask  = rotshiftzoom_array(dm_mask, dm_translation=dm_translation, dm_rotation=dm_rotation, dm_magnification=dm_magnification,
+                                        wfs_translation=(0,0), wfs_rotation=0, wfs_magnification=(1,1),
+                                        output_size=output_size)
+    trans_dm_mask[trans_dm_mask<0.5] = 0
+    if np.max(trans_dm_mask) <= 0:
+        raise ValueError('Error in input data, the rotated dm mask is empty.')
+
+    # apply transformation to the pupil mask
+    trans_pup_mask  = rotshiftzoom_array(pup_mask, dm_translation=(0,0), dm_rotation=0, dm_magnification=(1,1),
+                                        wfs_translation=wfs_translation, wfs_rotation=wfs_rotation, wfs_magnification=wfs_magnification,
+                                        output_size=output_size)
+    trans_pup_mask[trans_pup_mask<0.5] = 0
+
+    if np.max(trans_pup_mask) <= 0:
+        raise ValueError('Error in input data, the rotated pup mask is empty.')
+
+    if verbose:
+        print(f'DM rotation ({dm_rotation} deg), translation ({dm_translation} pixel), magnification ({dm_magnification})')
+        print(f'WFS translation ({wfs_translation} pixel), wfs rotation ({wfs_rotation} deg), wfs magnification ({wfs_magnification})')
+        print('done.')
+
+    # apply mask
+    trans_dm_array = apply_mask(trans_dm_array,trans_dm_mask)
+    if np.max(trans_dm_array) <= 0:
+        raise ValueError('Error in input data, the rotated dm array is empty.')
+
+    if verbose:
+        print('Mask applied.')
+
+    if specula_convention:
+        # transpose the DM array, mask and pupil mask to match the specula convention
+        trans_dm_array = np.transpose(trans_dm_array, (1, 0, 2))
+        trans_dm_mask = np.transpose(trans_dm_mask)
+        trans_pup_mask = np.transpose(trans_pup_mask)
+    
+    return trans_dm_array, trans_dm_mask, trans_pup_mask
+
 def projection_matrix(pup_diam_m, pup_mask, dm_array, dm_mask, base_inv_array,
                       dm_height, dm_rotation, base_rotation, base_translation, base_magnification,
                       gs_pol_coo, gs_height, verbose=False, display=False, specula_convention=True):
@@ -548,76 +629,10 @@ def projection_matrix(pup_diam_m, pup_mask, dm_array, dm_mask, base_inv_array,
     - pm: numpy 2D array, projection matrix (n_base_modes x n_dm_modes)
     """
 
-    pup_diam_pix = pup_mask.shape[0]
-    pixel_pitch = pup_diam_m / pup_diam_pix
-
-    if dm_mask.shape[0] != dm_array.shape[0]:
-        raise ValueError('Error in input data, the dm and mask array must have the same dimensions.')
-
-    pixel_pitch = pup_diam_m / pup_diam_pix
-
-    dm_translation, dm_magnification = shiftzoom_from_source_dm_params(gs_pol_coo, gs_height, dm_height, pixel_pitch)
-    output_size = (pup_diam_pix, pup_diam_pix)
-
-    # Extraction of patch seen by GS and application of DM rotation
-    trans_dm_array = rotshiftzoom_array(dm_array,
-                                       dm_translation=dm_translation,
-                                       dm_rotation=dm_rotation,
-                                       dm_magnification=dm_magnification,
-                                       wfs_translation=base_translation,
-                                       wfs_rotation=base_rotation,
-                                       wfs_magnification=base_magnification,
-                                       output_size=output_size)
-
-    # Apply transformation to the DM mask
-    trans_dm_mask = rotshiftzoom_array(dm_mask, 
-                                      dm_translation=dm_translation,
-                                      dm_rotation=dm_rotation,
-                                      dm_magnification=dm_magnification,
-                                      wfs_translation=(0,0),
-                                      wfs_rotation=0,
-                                      wfs_magnification=(1,1),
-                                      output_size=output_size)
-    trans_dm_mask[trans_dm_mask<0.5] = 0
-
-    if np.max(trans_dm_mask) <= 0:
-        raise ValueError('Error in input data, the rotated dm mask is empty.')
-
-    # Apply transformation to the pupil mask
-    trans_pup_mask = rotshiftzoom_array(pup_mask,
-                                       dm_translation=(0,0),
-                                       dm_rotation=0,
-                                       dm_magnification=(1,1),
-                                       wfs_translation=base_translation,
-                                       wfs_rotation=base_rotation,
-                                       wfs_magnification=base_magnification,
-                                       output_size=output_size)
-    trans_pup_mask[trans_pup_mask<0.5] = 0
-
-    if np.max(trans_pup_mask) <= 0:
-        raise ValueError('Error in input data, the rotated pup mask is empty.')
-
-    if verbose:
-        print(f'DM rotation ({dm_rotation} deg), translation ({dm_translation} pixel), magnification ({dm_magnification})')
-        print(f'Basis translation ({base_translation} pixel), basis rotation ({base_rotation} deg), basis magnification ({base_magnification})')
-        print('done.')
-
-    # Apply mask
-    trans_dm_array = apply_mask(trans_dm_array, trans_dm_mask)
-    if np.max(trans_dm_array) <= 0:
-        raise ValueError('Error in input data, the rotated dm array is empty.')
-
-    if verbose:
-        print('Mask applied.')
-
-    if specula_convention:
-        # Transpose the DM array, mask and pupil mask to match the specula convention
-        trans_dm_array = np.transpose(trans_dm_array, (1, 0, 2))
-        trans_dm_mask = np.transpose(trans_dm_mask)
-        trans_pup_mask = np.transpose(trans_pup_mask)
-
-    # Apply pupil mask to the DM array
-    trans_dm_array = apply_mask(trans_dm_array, trans_pup_mask)
+    trans_dm_array, trans_dm_mask, trans_pup_mask = update_dm_pup(
+                  pup_diam_m, pup_mask, dm_array, dm_mask, dm_height, dm_rotation,
+                  base_rotation, base_translation, base_magnification,
+                  gs_pol_coo,gs_height, verbose=verbose, specula_convention=specula_convention)
 
     # Create mask for valid pixels (both in DM and pupil)
     valid_mask = trans_dm_mask * trans_pup_mask
@@ -683,8 +698,10 @@ def projection_matrix(pup_diam_m, pup_mask, dm_array, dm_mask, base_inv_array,
 
     return projection
 
-def interaction_matrix(pup_diam_m,pup_mask,dm_array,dm_mask,dm_height,dm_rotation,wfs_nsubaps,wfs_rotation,wfs_translation,wfs_magnification,
-                       wfs_fov_arcsec,gs_pol_coo,gs_height,idx_valid_sa=None,verbose=False,display=False,specula_convention=True):
+def interaction_matrix(pup_diam_m, pup_mask, dm_array, dm_mask, dm_height, dm_rotation,
+                       wfs_nsubaps, wfs_rotation, wfs_translation, wfs_magnification,
+                       wfs_fov_arcsec, gs_pol_coo, gs_height, idx_valid_sa=None,
+                       verbose=False, display=False, specula_convention=True):
     """
     Computes a single interaction matrix.
     From Guido Agapito.
@@ -712,57 +729,11 @@ def interaction_matrix(pup_diam_m,pup_mask,dm_array,dm_mask,dm_height,dm_rotatio
     - im: numpy 2D array, set of signals
     """
 
-    pup_diam_pix = pup_mask.shape[0]
-    pixel_pitch = pup_diam_m/pup_diam_pix
-
-    if dm_mask.shape[0] != dm_array.shape[0]:
-        raise ValueError('Error in input data, the dm and mask array must have the same dimensions.')
-
-    pixel_pitch = pup_diam_m / pup_diam_pix
-
-    dm_translation, dm_magnification = shiftzoom_from_source_dm_params(gs_pol_coo, gs_height, dm_height, pixel_pitch)
-    output_size = (pup_diam_pix,pup_diam_pix)
-
-    #Extraction of patch seen by GS and application of DM rotation
-    trans_dm_array = rotshiftzoom_array(dm_array, dm_translation=dm_translation, dm_rotation=dm_rotation, dm_magnification=dm_magnification,
-                                        wfs_translation=wfs_translation, wfs_rotation=wfs_rotation, wfs_magnification=wfs_magnification,
-                                        output_size=output_size)
-    # apply transformation to the DM mask
-    trans_dm_mask  = rotshiftzoom_array(dm_mask, dm_translation=dm_translation, dm_rotation=dm_rotation, dm_magnification=dm_magnification,
-                                        wfs_translation=(0,0), wfs_rotation=0, wfs_magnification=(1,1),
-                                        output_size=output_size)
-    trans_dm_mask[trans_dm_mask<0.5] = 0
-    if np.max(trans_dm_mask) <= 0:
-        raise ValueError('Error in input data, the rotated dm mask is empty.')
-
-    # apply transformation to the pupil mask
-    trans_pup_mask  = rotshiftzoom_array(pup_mask, dm_translation=(0,0), dm_rotation=0, dm_magnification=(1,1),
-                                        wfs_translation=wfs_translation, wfs_rotation=wfs_rotation, wfs_magnification=wfs_magnification,
-                                        output_size=output_size)
-    trans_pup_mask[trans_pup_mask<0.5] = 0
-
-    if np.max(trans_pup_mask) <= 0:
-        raise ValueError('Error in input data, the rotated pup mask is empty.')
-
-    if verbose:
-        print(f'DM rotation ({dm_rotation} deg), translation ({dm_translation} pixel), magnification ({dm_magnification})')
-        print(f'WFS translation ({wfs_translation} pixel), wfs rotation ({wfs_rotation} deg), wfs magnification ({wfs_magnification})')
-        print('done.')
-
-    # apply mask
-    trans_dm_array = apply_mask(trans_dm_array,trans_dm_mask)
-    if np.max(trans_dm_array) <= 0:
-        raise ValueError('Error in input data, the rotated dm array is empty.')
-
-    if verbose:
-        print('Mask applied.')
-
-    if specula_convention:
-        # transpose the DM array, mask and pupil mask to match the specula convention
-        trans_dm_array = np.transpose(trans_dm_array, (1, 0, 2))
-        trans_dm_mask = np.transpose(trans_dm_mask)
-        trans_pup_mask = np.transpose(trans_pup_mask)
-
+    trans_dm_array, trans_dm_mask, trans_pup_mask = update_dm_pup(
+                  pup_diam_m, pup_mask, dm_array, dm_mask, dm_height, dm_rotation,
+                  wfs_rotation, wfs_translation, wfs_magnification,
+                  gs_pol_coo, gs_height, verbose=verbose, specula_convention=specula_convention)
+    
     # Derivative od DM modes shape
     der_dx, der_dy = compute_derivatives_with_extrapolation(trans_dm_array,mask=trans_dm_mask)
 
@@ -839,7 +810,7 @@ def interaction_matrix(pup_diam_m,pup_mask,dm_array,dm_mask,dm_height,dm_rotatio
     dm_mask_sa[dm_mask_sa<0.5] = 0
     WFS_signal_x = apply_mask(WFS_signal_x,dm_mask_sa,norm=True)
     WFS_signal_y = apply_mask(WFS_signal_y,dm_mask_sa,norm=True)
-    
+
     # set to zero the signal outside the pupil
     pup_mask_sa[pup_mask_sa<0.5] = 0
     pup_mask_sa[pup_mask_sa>=0.5] = 1
