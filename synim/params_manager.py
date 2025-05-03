@@ -104,11 +104,11 @@ class ParamsManager:
     def get_dm_params(self, component_idx, is_layer=False):
         """
         Get DM or layer parameters, loading from cache if available.
-        
+
         Args:
             component_idx (int): Index of the DM or layer to load
             is_layer (bool): Whether to load a layer instead of a DM
-            
+
         Returns:
             dict: DM or layer parameters
         """
@@ -144,6 +144,7 @@ class ParamsManager:
             'dm_mask': dm_mask,
             'dm_height': dm_height,
             'dm_rotation': dm_rotation,
+            'dm_key': component_key,  # Add the component key here
         }
 
         return self.dm_cache[cache_key]
@@ -419,7 +420,7 @@ class ParamsManager:
         im = im.transpose()
 
         return im
-    
+
     def compute_interaction_matrices(self, output_im_dir=None, output_rec_dir=None,
                                 wfs_type=None, overwrite=False, verbose=None, display=False):
         """
@@ -438,7 +439,7 @@ class ParamsManager:
             dict: Dictionary mapping WFS-DM pairs to saved interaction matrix paths
         """
         saved_matrices = {}
-        
+
         # Find the SPECULA repository path for default paths
         specula_init_path = specula.__file__
         specula_package_dir = os.path.dirname(specula_init_path)
@@ -501,7 +502,7 @@ class ParamsManager:
                 # Calculate the interaction matrix using our cached parameters
                 im = self.compute_interaction_matrix(
                     wfs_type=source_type,
-                    wfs_index=wfs_idx, 
+                    wfs_index=wfs_idx,
                     dm_index=dm_idx,
                     verbose=verbose_flag,
                     display=display
