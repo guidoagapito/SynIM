@@ -1,148 +1,78 @@
 import os
 import numpy as np
-import pandas as pd
-
 import matplotlib.pyplot as plt
 from synim.params_manager import ParamsManager
-from synim.utils import generate_im_filename, compute_mmse_reconstructor, dm3d_to_2d
+from synim.utils import generate_pm_filename, extract_dm_list, extract_layer_list, extract_opt_list
 import specula
 specula.init(device_idx=-1, precision=1)
 
 from specula.data_objects.intmat import Intmat
-from specula.lib.modal_base_generator import compute_ifs_covmat
 
 # -------------------------------------------------------------------
-# Get the path to the specula package's __init__.py file
+# Get paths
 specula_init_path = specula.__file__
-# Get the path to the synim package's __init__.py file
 synim_init_path = os.path.dirname(__file__)
-# Navigate up to repository root
 specula_package_dir = os.path.dirname(specula_init_path)
 specula_repo_path = os.path.dirname(specula_package_dir)
 
-# Path to the YAML configuration file and output directory
-# The path to the YAML file is determined by the specula module
+# Set up file paths
 yaml_file = os.path.join(synim_init_path, "params_morfeo_proj.yml")
-root_dir = os.path.join(specula_repo_path, "main", "scao","calib","MCAO")
+root_dir = os.path.join(specula_repo_path, "main", "scao", "calib", "MCAO")
+output_pm_dir = os.path.join(specula_repo_path, "main", "scao", "calib", "MCAO", "pm")
 print(f"YAML file path: {yaml_file}")
 
+# Compute projection matrices if needed
 params_mgr = ParamsManager(yaml_file, root_dir=root_dir, verbose=True)
-im_paths = params_mgr.compute_projection_matrices(overwrite=False)
+pm_paths = params_mgr.compute_projection_matrices(overwrite=False)
 
-print('im_paths:', im_paths)
+pm_full_dm, pm_full_layer, weights_array = params_mgr.assemble_projection_matrices(output_dir=output_pm_dir, save=False)
 
-#output directory is set to the caibration directory of the SPECULA repository
-output_im_dir = os.path.join(specula_repo_path, "main", "scao", "calib", "MCAO", "pm")
-output_rec_dir = os.path.join(specula_repo_path, "main", "scao", "calib", "MCAO", "pm")
-print(f"Output directory: {output_im_dir}")
+# Display summary information
+print("\nFinal 4D projection matrices:")
+if pm_full_dm is not None:
+    print(f"DM projection matrix shape: {pm_full_dm.shape} (n_modes, n_sources, n_dms, n_dm_modes)")
+if pm_full_layer is not None:
+    print(f"Layer projection matrix shape: {pm_full_layer.shape} (n_modes, n_sources, n_layers, n_layer_modes)")
 
-# -------------------------------------------------------------------
-# Load from disk the full set of interaction matrices
-# then put them in a singla 2D array NXM
-# where N is the number of modes, 2 for the first DM and 3 for the third DM
-# and M is the number of slopes, 8 multiplied by 3 WFSs
-N = 5
-n_slopes_per_wfs = 2
-n_wfs = 3
-M = n_wfs*n_slopes_per_wfs
-im_full = np.zeros((N,M)) 
-for ii in range(3):
-    for jj in range(3):
-        if jj == 1:
-            continue
-        im_filename = generate_im_filename(yaml_file, wfs_type='ngs', wfs_index=ii+1, dm_index=jj+1)
-        # Full paths for the files
-        im_path = os.path.join(output_im_dir, im_filename)
-        print(f"--> Generated IM filename: {im_filename}")
-        # Load the interaction matrix
-        intmat_obj = Intmat.restore(im_path)
-        # Get the interaction matrix data
-        if jj == 0:
-            mode_idx = [0,1]
-        if jj == 2:
-            mode_idx = [2,3,4]
-        print(f'size of intmat: {intmat_obj._intmat.shape}')
-        im_full[mode_idx, n_slopes_per_wfs*ii:n_slopes_per_wfs*(ii+1)] = intmat_obj._intmat[mode_idx,:]
-        
-import pandas as pd
-print("Full interaction matrix:")
-df = pd.DataFrame(im_full)
-print(df.to_string(float_format=lambda x: f"{x:.6e}"))
+print(f"Weights array: {weights_array}")
 
-# Computation of rec matrix with MMSE
-# 1 Compute atmospheric covariance matrix using the compute_ifs_covmat function
-r0 = 0.2
-L0 = 25
-C_atm_full = np.zeros((im_full.shape[0], im_full.shape[0]))
-n_modes = [2,5,5]
-for i in range(3):
-    if i == 1:
-        continue
-    params = params_mgr.prepare_interaction_matrix_params(wfs_type='ngs', 
-                                                         wfs_index=1, dm_index=i+1)
-    dm2d = dm3d_to_2d(params['dm_array'],params['dm_mask'])
-    dm2d = dm2d[:n_modes[i],:]   # Select only the first n modes
-    print("dm2d shape", dm2d.shape)
-    print("computing covariance matrix for DM", i+1)
-    C_atm = compute_ifs_covmat(
-        params['dm_mask'], params['pup_diam_m'], dm2d, r0, L0, 
-        oversampling=2, verbose=False
-    )
-    # add C_atm to the full covariance matrix as bloack elements on the diagonal
-    if i == 0:
-        C_atm_full[0:C_atm.shape[0], 0:C_atm.shape[1]] = C_atm
-    if i == 2:
-        C_atm = C_atm[2:,2:] # remove tip and tilt
-        C_atm_full[n_modes[0]:n_modes[0]+C_atm.shape[0], n_modes[0]:n_modes[0]+C_atm.shape[1]] = C_atm
-
-display_covmat = False
-if display_covmat: 
-    plt.figure(figsize=(10, 8))
-    plt.imshow(C_atm_full, cmap='viridis')
+# Visualize slices of the 4D matrices
+if pm_full_dm is not None:
+    # Visualize the first mode for first DM across all sources
+    plt.figure(figsize=(10, 6))
+    plt.imshow(pm_full_dm[0, :, 0, :], cmap='viridis')
     plt.colorbar()
-    plt.title(f"Atmospheric Covariance Matrix for all DMs")
+    plt.title(f"DM Projection Matrix - Mode 0, DM 0")
+    plt.xlabel("DM Mode Index")
+    plt.ylabel("Source Index")
+    plt.tight_layout()
+
+    # Visualize first source, first DM for all modes
+    plt.figure(figsize=(10, 6))
+    plt.imshow(pm_full_dm[:, 0, 0, :], cmap='viridis')
+    plt.colorbar()
+    plt.title("DM Projection Matrix - Source 0, DM 0")
+    plt.xlabel("DM Mode Index")
+    plt.ylabel("Mode Index")
     plt.tight_layout()
     plt.show()
 
-# 2 Create the noise covariance matrix
-# computes noise from magnitude and 0-magnitude flux
-magnitude = np.array([10,16,18])
-flux0 = 7.40e-11
-flux = flux0 * 10**(-0.4*magnitude)
-noise_variance = 1/np.sqrt(flux)
-n_slopes_total = im_full.shape[1]
-
-C_noise = np.zeros((n_slopes_total, n_slopes_total))
-for i in range(n_wfs):
-    # Set the diagonal elements for this WFS
-    start_idx = i * n_slopes_per_wfs
-    end_idx = (i + 1) * n_slopes_per_wfs
-    C_noise[start_idx:end_idx, start_idx:end_idx] = noise_variance[i] * np.eye(n_slopes_per_wfs)
-
-if display_covmat: 
-    plt.figure(figsize=(10, 8))
-    plt.imshow(C_noise, cmap='viridis')
+if pm_full_layer is not None:
+    # Visualize the first mode for first layer across all sources
+    plt.figure(figsize=(10, 6))
+    plt.imshow(pm_full_layer[0, :, 0, :], cmap='viridis')
     plt.colorbar()
-    plt.title(f"Noise Covariance Matrix")
+    plt.title(f"Layer Projection Matrix - Mode 0, Layer 0")
+    plt.xlabel("Layer Mode Index")
+    plt.ylabel("Source Index")
+    plt.tight_layout()
+
+    # Visualize first source, first layer for all modes
+    plt.figure(figsize=(10, 6))
+    plt.imshow(pm_full_layer[:, 0, 0, :], cmap='viridis')
+    plt.colorbar()
+    plt.title("Layer Projection Matrix - Source 0, Layer 0")
+    plt.xlabel("Layer Mode Index")
+    plt.ylabel("Mode Index")
     plt.tight_layout()
     plt.show()
-
-# 3 Compute the MMSE reconstructor
-reconstructor = compute_mmse_reconstructor(im_full.T, C_atm_full, noise_variance=None, C_noise=C_noise, 
-                        cinverse=False, verbose=False)
-
-# Print some statistics about the matrices
-print(f"Interaction matrix shape: {im_full.shape}")
-print(f"Interaction matrix dtype: {im_full.dtype}")
-print(f"Interaction matrix min: {im_full.min()}")
-print(f"Interaction matrix max: {im_full.max()}")
-print(f"Interaction matrix mean: {im_full.mean()}")
-# -------------------------------------------------------------------
-
-# Visualize the matrix
-plt.figure(figsize=(10, 8))
-plt.imshow(im_full, cmap='viridis')
-plt.colorbar()
-plt.title(f"Interaction Matrix")
-plt.tight_layout()
-plt.show()
