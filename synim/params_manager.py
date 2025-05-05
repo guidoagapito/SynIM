@@ -556,7 +556,7 @@ class ParamsManager:
     def assemble_interaction_matrices(self, wfs_type='ngs', output_im_dir=None, save=False):
         """
         Assemble interaction matrices for a specific type of WFS into a single full interaction matrix.
-        
+
         Args:
             wfs_type (str): The type of WFS to assemble matrices for ('ngs', 'lgs', 'ref')
             output_im_dir (str, optional): Directory where IM files are stored
@@ -571,11 +571,11 @@ class ParamsManager:
             specula_package_dir = os.path.dirname(specula_init_path)
             specula_repo_path = os.path.dirname(specula_package_dir)
             output_im_dir = os.path.join(specula_repo_path, "main", "scao", "calib", "MCAO", "im")
-        
+
         # Count WFSs of the specified type in the configuration
         wfs_list = [wfs for wfs in self.wfs_list if wfs_type in wfs['name']]
         n_wfs = len(wfs_list)
-        
+
         if self.verbose:
             print(f"Found {n_wfs} {wfs_type.upper()} WFSs")
 
@@ -590,7 +590,7 @@ class ParamsManager:
                     n_slopes_per_wfs = n_slopes_this_wfs
                 elif n_slopes_per_wfs != n_slopes_this_wfs:
                     print(f"Warning: Inconsistent number of slopes across WFSs")
-                    
+      
         if self.verbose:
             print(f"Each WFS has {n_slopes_per_wfs} slopes")
 
@@ -599,7 +599,7 @@ class ParamsManager:
         dm_start_modes = []
         mode_indices = []
         total_modes = 0
-        
+
         if 'modal_combination' in self.params:
             if f'modes_{wfs_type}' in self.params['modal_combination']:
                 modes_config = self.params['modal_combination'][f'modes_{wfs_type}']
@@ -610,24 +610,24 @@ class ParamsManager:
                             dm_start_mode = self.params[f'dm{i+1}']['start_mode']
                         else:
                             dm_start_mode = 0
-                        
+
                         dm_start_modes.append(dm_start_mode)
                         dm_indices.append(i + 1)
                         mode_indices.append(list(range(dm_start_mode, dm_start_mode + n_modes)))
                         total_modes += n_modes
 
         # Calculate total dimensions
-        N = total_modes  # Total number of modes
-        M = n_wfs * n_slopes_per_wfs  # Total number of slopes
-        
+        n_tot_modes = total_modes  # Total number of modes
+        n_tot_slopes = n_wfs * n_slopes_per_wfs  # Total number of slopes
+
         if self.verbose:
-            print(f"Total modes: {N}, Total slopes: {M}")
+            print(f"Total modes: {n_tot_modes}, Total slopes: {n_tot_slopes}")
             print(f"DM indices for {wfs_type}: {dm_indices}")
             print(f"DM start modes: {dm_start_modes}")
             print(f"Mode indices: {mode_indices}")
 
         # Create the full interaction matrix
-        im_full = np.zeros((N, M))
+        im_full = np.zeros((n_tot_modes, n_tot_slopes))
 
         # Load and assemble the interaction matrices
         for ii in range(n_wfs):
@@ -638,13 +638,13 @@ class ParamsManager:
                 # Generate and load the interaction matrix file
                 im_filename = self.generate_im_filename(wfs_type=wfs_type, wfs_index=ii+1, dm_index=dm_ind)
                 im_path = os.path.join(output_im_dir, im_filename)
-                
+
                 if self.verbose:
                     print(f"--> Loading IM: {im_filename}")
-                    
+
                 # Load the interaction matrix
                 intmat_obj = Intmat.restore(im_path)
-                
+
                 if self.verbose:
                     print(f"    IM shape: {intmat_obj._intmat.shape}")
 
@@ -1140,14 +1140,20 @@ class ParamsManager:
                     if self.verbose:
                         print(f"    Filled position [:, {ii}, {jj}, :] with opt{opt_index}, layer{layer_index} projection data")
 
+        # Reshape 4d arrays to 3d arrays by piling the last dimension
+        if pm_full_dm is not None:
+            pm_full_dm = np.reshape(pm_full_dm, (n_modes, len(opt_sources), -1))
+        if pm_full_layer is not None:
+            pm_full_layer = np.reshape(pm_full_layer, (n_modes, len(opt_sources), -1))
+            
         # Display summary information
         if self.verbose:
-            print("\nFinal 4D projection matrices:")
+            print("\nFinal 3D projection matrices:")
             if pm_full_dm is not None:
-                print(f"DM projection matrix shape: {pm_full_dm.shape} (n_modes, n_sources, n_dms, n_dm_modes)")
+                print(f"DM projection matrix shape: {pm_full_dm.shape} (n_modes, n_sources, n_dm_modes)")
             if pm_full_layer is not None:
-                print(f"Layer projection matrix shape: {pm_full_layer.shape} (n_modes, n_sources, n_layers, n_layer_modes)")
-
+                print(f"Layer projection matrix shape: {pm_full_layer.shape} (n_modes, n_sources, n_layer_modes)")
+            
         # Save the matrices if requested
         if save:
             if pm_full_dm is not None:
