@@ -553,6 +553,117 @@ class ParamsManager:
 
         return saved_matrices
 
+    def assemble_interaction_matrices(self, wfs_type='ngs', output_im_dir=None, save=False):
+        """
+        Assemble interaction matrices for a specific type of WFS into a single full interaction matrix.
+        
+        Args:
+            wfs_type (str): The type of WFS to assemble matrices for ('ngs', 'lgs', 'ref')
+            output_im_dir (str, optional): Directory where IM files are stored
+            save (bool): Whether to save the assembled matrix to disk
+            
+        Returns:
+            tuple: (im_full, n_slopes_per_wfs, mode_indices, dm_indices) - Assembled matrix and associated parameters
+        """
+        # Set up output directory
+        if output_im_dir is None:
+            specula_init_path = specula.__file__
+            specula_package_dir = os.path.dirname(specula_init_path)
+            specula_repo_path = os.path.dirname(specula_package_dir)
+            output_im_dir = os.path.join(specula_repo_path, "main", "scao", "calib", "MCAO", "im")
+        
+        # Count WFSs of the specified type in the configuration
+        wfs_list = [wfs for wfs in self.wfs_list if wfs_type in wfs['name']]
+        n_wfs = len(wfs_list)
+        
+        if self.verbose:
+            print(f"Found {n_wfs} {wfs_type.upper()} WFSs")
+
+        # Get the number of slopes per WFS (from idx_valid_sa)
+        n_slopes_per_wfs = 0
+        for wfs in wfs_list:
+            wfs_params = self.get_wfs_params(wfs_type, int(wfs['index']))
+            if wfs_params['idx_valid_sa'] is not None:
+                # Each valid subaperture produces X and Y slopes
+                n_slopes_this_wfs = len(wfs_params['idx_valid_sa']) * 2
+                if n_slopes_per_wfs == 0:
+                    n_slopes_per_wfs = n_slopes_this_wfs
+                elif n_slopes_per_wfs != n_slopes_this_wfs:
+                    print(f"Warning: Inconsistent number of slopes across WFSs")
+                    
+        if self.verbose:
+            print(f"Each WFS has {n_slopes_per_wfs} slopes")
+
+        # DM indices and start modes based on config
+        dm_indices = []
+        dm_start_modes = []
+        mode_indices = []
+        total_modes = 0
+        
+        if 'modal_combination' in self.params:
+            if f'modes_{wfs_type}' in self.params['modal_combination']:
+                modes_config = self.params['modal_combination'][f'modes_{wfs_type}']
+                for i, n_modes in enumerate(modes_config):
+                    if n_modes > 0:
+                        # Check for start_mode in DM config
+                        if f'dm{i+1}' in self.params and 'start_mode' in self.params[f'dm{i+1}']:
+                            dm_start_mode = self.params[f'dm{i+1}']['start_mode']
+                        else:
+                            dm_start_mode = 0
+                        
+                        dm_start_modes.append(dm_start_mode)
+                        dm_indices.append(i + 1)
+                        mode_indices.append(list(range(dm_start_mode, dm_start_mode + n_modes)))
+                        total_modes += n_modes
+
+        # Calculate total dimensions
+        N = total_modes  # Total number of modes
+        M = n_wfs * n_slopes_per_wfs  # Total number of slopes
+        
+        if self.verbose:
+            print(f"Total modes: {N}, Total slopes: {M}")
+            print(f"DM indices for {wfs_type}: {dm_indices}")
+            print(f"DM start modes: {dm_start_modes}")
+            print(f"Mode indices: {mode_indices}")
+
+        # Create the full interaction matrix
+        im_full = np.zeros((N, M))
+
+        # Load and assemble the interaction matrices
+        for ii in range(n_wfs):
+            for jj, dm_ind in enumerate(dm_indices):
+                # Get the appropriate mode indices for this DM
+                mode_idx = mode_indices[jj]
+
+                # Generate and load the interaction matrix file
+                im_filename = self.generate_im_filename(wfs_type=wfs_type, wfs_index=ii+1, dm_index=dm_ind)
+                im_path = os.path.join(output_im_dir, im_filename)
+                
+                if self.verbose:
+                    print(f"--> Loading IM: {im_filename}")
+                    
+                # Load the interaction matrix
+                intmat_obj = Intmat.restore(im_path)
+                
+                if self.verbose:
+                    print(f"    IM shape: {intmat_obj._intmat.shape}")
+
+                # Fill the appropriate section of the full interaction matrix
+                im_full[mode_idx, n_slopes_per_wfs*ii:n_slopes_per_wfs*(ii+1)] = intmat_obj._intmat[mode_idx, :]
+
+        # Display summary
+        if self.verbose:
+            print(f"\nAssembled interaction matrix shape: {im_full.shape}")
+
+        # Save the full interaction matrix if requested
+        if save:
+            output_filename = f"im_full_{wfs_type}.npy"
+            np.save(os.path.join(output_im_dir, output_filename), im_full)
+            if self.verbose:
+                print(f"Saved full interaction matrix to {output_filename}")
+
+        return im_full, n_slopes_per_wfs, mode_indices, dm_indices
+
     def compute_projection_matrices(self, output_dir=None, overwrite=False,
                                 verbose=None, display=False):
         """
@@ -877,10 +988,8 @@ class ParamsManager:
         for i, source in enumerate(opt_sources):
             source_idx = source['index']
             source_config = source['config']
-
             # Get weight (default to 1.0 if not specified)
             weight = source_config.get('weight', 1.0)
-            
             weights_array[i] = weight
 
         # Dictionary to store loaded matrices
