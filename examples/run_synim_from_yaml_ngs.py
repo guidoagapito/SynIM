@@ -4,7 +4,7 @@ import pandas as pd
 
 import matplotlib.pyplot as plt
 from synim.params_manager import ParamsManager
-from synim.utils import generate_im_filename, compute_mmse_reconstructor, dm3d_to_2d
+from synim.utils import compute_mmse_reconstructor, dm3d_to_2d
 import specula
 specula.init(device_idx=-1, precision=1)
 
@@ -55,29 +55,23 @@ print(df.to_string(float_format=lambda x: f"{x:.6e}"))
 r0 = 0.2
 L0 = 25
 C_atm_full = np.zeros((im_full.shape[0], im_full.shape[0]))
-n_modes = [2,5,5]
-for i in range(3):
-    if i == 1:
-        continue
+for i, dm in enumerate(dm_indices):
     params = params_mgr.prepare_interaction_matrix_params(wfs_type='ngs', 
-                                                         wfs_index=1, dm_index=i+1)
+                                                         wfs_index=1, dm_index=dm)
     dm2d = dm3d_to_2d(params['dm_array'],params['dm_mask'])
-    dm2d = dm2d[:n_modes[i],:]   # Select only the first n modes
+    dm2d = dm2d[mode_indices[i],:]   # Select only the first n modes
     print("dm2d shape", dm2d.shape)
     print("computing covariance matrix for DM", i+1)
     C_atm = compute_ifs_covmat(
         params['dm_mask'], params['pup_diam_m'], dm2d, r0, L0, 
         oversampling=2, verbose=False
     )
-    # add C_atm to the full covariance matrix as bloack elements on the diagonal
-    if i == 0:
-        C_atm_full[0:C_atm.shape[0], 0:C_atm.shape[1]] = C_atm
-    if i == 2:
-        C_atm = C_atm[2:,2:] # remove tip and tilt
-        C_atm_full[n_modes[0]:n_modes[0]+C_atm.shape[0], n_modes[0]:n_modes[0]+C_atm.shape[1]] = C_atm
+    # Create proper indexing for block assignment using np.ix_
+    idx = np.ix_(mode_indices[i], mode_indices[i])
+    C_atm_full[idx] = C_atm
 
 display_covmat = False
-if display_covmat: 
+if display_covmat:
     plt.figure(figsize=(10, 8))
     plt.imshow(C_atm_full, cmap='viridis')
     plt.colorbar()
@@ -99,6 +93,8 @@ for i in range(n_wfs):
     start_idx = i * n_slopes_per_wfs
     end_idx = (i + 1) * n_slopes_per_wfs
     C_noise[start_idx:end_idx, start_idx:end_idx] = noise_variance[i] * np.eye(n_slopes_per_wfs)
+    
+print("C_noise", C_noise)
 
 if display_covmat: 
     plt.figure(figsize=(10, 8))
