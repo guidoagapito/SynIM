@@ -37,33 +37,14 @@ output_rec_dir = os.path.join(specula_repo_path, "main", "scao", "calib", "MCAO"
 print(f"Output directory: {output_im_dir}")
 
 # -------------------------------------------------------------------
-# Load from disk the full set of interaction matrices
-# then put them in a singla 2D array NXM
-# where N is the number of modes, 2 for the first DM and 3 for the third DM
-# and M is the number of slopes, 8 multiplied by 3 WFSs
-N = 5
-n_slopes_per_wfs = 2
-n_wfs = 3
-M = n_wfs*n_slopes_per_wfs
-im_full = np.zeros((N,M)) 
-for ii in range(3):
-    for jj in range(3):
-        if jj == 1:
-            continue
-        im_filename = generate_im_filename(yaml_file, wfs_type='ngs', wfs_index=ii+1, dm_index=jj+1)
-        # Full paths for the files
-        im_path = os.path.join(output_im_dir, im_filename)
-        print(f"--> Generated IM filename: {im_filename}")
-        # Load the interaction matrix
-        intmat_obj = Intmat.restore(im_path)
-        # Get the interaction matrix data
-        if jj == 0:
-            mode_idx = [0,1]
-        if jj == 2:
-            mode_idx = [2,3,4]
-        print(f'size of intmat: {intmat_obj._intmat.shape}')
-        im_full[mode_idx, n_slopes_per_wfs*ii:n_slopes_per_wfs*(ii+1)] = intmat_obj._intmat[mode_idx,:]
-        
+# Count NGS WFSs in the configuration
+ngs_wfs_list = [wfs for wfs in params_mgr.wfs_list if 'ngs' in wfs['name']]
+n_wfs = len(ngs_wfs_list)
+print(f"Found {n_wfs} NGS WFSs")
+
+im_full, n_slopes_per_wfs, mode_indices, dm_indices = params_mgr.assemble_interaction_matrices(
+    wfs_type='ngs', output_im_dir=output_im_dir, save=False)
+
 import pandas as pd
 print("Full interaction matrix:")
 df = pd.DataFrame(im_full)
