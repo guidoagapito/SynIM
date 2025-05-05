@@ -316,6 +316,8 @@ avc_lgs:
 
 modal_combination:
   class:        'LinearCombination'
+  modes_ngs: [2,0,3]
+  modes_lgs: [98,95,98]
   inputs:
     in_vectors_list: ['iir_lgs.out_comm', 'iir_focus.out_comm', 'iir_lift.out_comm', 'iir_ngs.out_comm']
   outputs:
