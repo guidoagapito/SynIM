@@ -30,10 +30,10 @@ def rebin(array, new_shape, method='average'):
     Returns:
     - rebinned_array: numpy 2D or 3D array
     """
-        
+
     if array.ndim == 1:
         array = array.reshape((-1, 1))  # Convert 1D array to 2D
-        
+
     shape = array.shape
     m, n = shape[0:2]
     M, N = new_shape      
@@ -62,7 +62,7 @@ def rebin(array, new_shape, method='average'):
                 rebinned_array = array[:M*(m//M), :N*(n//N)].reshape((M, m//M, N, n//N)).mean(axis=(1, 3))
         else:
             raise ValueError("Unsupported rebin method. Use 'sum' or 'average'.")  
-        
+
     return rebinned_array
 
 def polar_to_xy(r,theta):
@@ -167,7 +167,7 @@ def make_mask(npoints, obsratio=None, diaratio=1.0, xc=0.0, yc=0.0, square=False
     Returns:
     - mask: numpy 2D array
     """
-    
+
     x, y = np.meshgrid(np.linspace(-1, 1, npoints), np.linspace(-1, 1, npoints))
 
     if xc is None:
@@ -203,7 +203,7 @@ def make_mask(npoints, obsratio=None, diaratio=1.0, xc=0.0, yc=0.0, square=False
 
 def make_orto_modes(array):
     # return an othogonal 2D array
-    
+
     size_array = np.shape(array)
 
     if len(size_array) != 2:
@@ -214,7 +214,7 @@ def make_orto_modes(array):
         Q = Q.T
     else:
         Q, R = np.linalg.qr(array)
-    
+
     return Q
 
 def zern_degree(j):
@@ -453,7 +453,7 @@ def extract_source_coordinates(config, wfs_key):
     # First check if coordinates are in WFS parameters
     if wfs_key in config and 'gs_pol_coo' in config[wfs_key]:
         return config[wfs_key]['gs_pol_coo']
-    
+
     # Try to find source corresponding to this WFS
     source_match = re.search(r'((?:lgs|ngs|ref)\d+)', wfs_key)
     if source_match:
@@ -590,7 +590,7 @@ def load_influence_functions(cm, dm_params, pixel_pupil, verbose=False):
         else:
             mask = None
             print("     No mask provided. Using default mask.")
-        
+
         # Compute Zernike influence functions
         z_ifunc, z_mask = compute_zern_ifunc(npixels, nmodes, xp=np, dtype=float,
                                              obsratio=obsratio, diaratio=1.0,
