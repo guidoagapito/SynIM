@@ -101,7 +101,7 @@ class ParamsManager:
  
         return pup_mask
 
-    def get_dm_params(self, component_idx, is_layer=False):
+    def get_dm_params(self, component_idx, is_layer=False, cut_start_mode=False):
         """
         Get DM or layer parameters, loading from cache if available.
 
@@ -133,6 +133,10 @@ class ParamsManager:
 
         # Load influence functions
         dm_array, dm_mask = load_influence_functions(self.cm, component_params, self.pixel_pupil, verbose=self.verbose)
+
+        if cut_start_mode:
+            if 'start_mode' in component_params:
+                dm_array = dm_array[:,:,component_params['start_mode']:]
 
         # Extract other parameters
         dm_height = component_params.get('height', 0.0)
@@ -784,7 +788,7 @@ class ParamsManager:
                     continue
 
                 # Get DM parameters
-                dm_params = self.get_dm_params(dm_idx)
+                dm_params = self.get_dm_params(dm_idx,cut_start_mode=True)
 
                 # Set default Basis parameters (no rotation/translation/magnification)
                 base_rotation = 0.0
@@ -881,7 +885,7 @@ class ParamsManager:
                     continue
 
                 # Get layer parameters (using the same method as for DMs since structure is similar)
-                layer_params = self.get_dm_params(layer_idx, is_layer=True)
+                layer_params = self.get_dm_params(layer_idx, is_layer=True, cut_start_mode=True)
 
                 # Set default Basis parameters (no rotation/translation/magnification)
                 base_rotation = 0.0
@@ -986,166 +990,74 @@ class ParamsManager:
 
         weights_array = np.zeros(len(opt_sources))
         for i, source in enumerate(opt_sources):
-            source_idx = source['index']
             source_config = source['config']
             # Get weight (default to 1.0 if not specified)
             weight = source_config.get('weight', 1.0)
             weights_array[i] = weight
 
-        # Dictionary to store loaded matrices
-        loaded_matrices = {}
-        n_modes = 0
-        n_dm_modes = 0
-        n_layer_modes = 0
-
-        # Get dimensions and initialize matrices
-        dm_sample_loaded = False
-        layer_sample_loaded = False
-
-        # Try to load one PM to get the number of modes for DMs
-        for opt_source in opt_sources:
+        # Build the full projection matrices for DMs and layers
+        for ii, opt_source in enumerate(opt_sources):
             opt_index = opt_source['index']
 
-            # Try to load a DM matrix if possible
-            if dm_list and not dm_sample_loaded:
-                dm_index = dm_list[0]['index']
-                try:
-                    pm_filename = generate_pm_filename(self.params_file, opt_index=opt_index, dm_index=dm_index)
-                    if pm_filename is not None:
-                        pm_path = os.path.join(output_dir, pm_filename)
-                        intmat_obj = Intmat.restore(pm_path)
-                        n_modes = intmat_obj._intmat.shape[0]
-                        n_dm_modes = intmat_obj._intmat.shape[1]  # Get the number of DM modes
-                        dm_sample_loaded = True
-                        if self.verbose:
-                            print(f"Loaded DM PM sample with {n_modes} modes, {n_dm_modes} DM modes")
-                        break
-                except Exception as e:
-                    if self.verbose:
-                        print(f"Could not load DM PM for source_opt{opt_index}, dm{dm_index}: {e}")
+            for jj, dm in enumerate(dm_list):
+                dm_index = dm['index']
 
-        # Try to load one PM to get the number of modes for Layers
-        for opt_source in opt_sources:
+                pm_filename = generate_pm_filename(self.params_file, opt_index=opt_index, dm_index=dm_index)
+                if pm_filename is None:
+                    raise ValueError(f"Could not generate filename for opt{opt_index}, dm{dm_index}")
+
+                pm_path = os.path.join(output_dir, pm_filename)
+                if self.verbose:
+                    print(f"--> Loading DM PM: {pm_filename}")
+                intmat_obj = Intmat.restore(pm_path)
+                intmat_data = intmat_obj._intmat
+
+                # Pile the arrays on the second dimension
+                if jj == 0:
+                    pm_full_i = intmat_data
+                else:
+                    pm_full_i = np.concatenate((pm_full_i, intmat_data), axis=1)
+                
+                if self.verbose:
+                    print(f"    Filled array with opt{opt_index}, dm{dm_index} projection data")
+
+            if ii == 0:
+                pm_full_dm = pm_full_i[np.newaxis, :, :]
+            else:
+                pm_full_dm = np.concatenate((pm_full_dm, pm_full_i[np.newaxis, :, :]), axis=0)
+
+        for ii, opt_source in enumerate(opt_sources):
             opt_index = opt_source['index']
 
-            # Try to load a Layer matrix if possible
-            if layer_list and not layer_sample_loaded:
-                layer_index = layer_list[0]['index']
-                try:
-                    pm_filename = generate_pm_filename(self.params_file, opt_index=opt_index, layer_index=layer_index)
-                    if pm_filename is not None:
-                        pm_path = os.path.join(output_dir, pm_filename)
-                        intmat_obj = Intmat.restore(pm_path)
-                        if not dm_sample_loaded:  # If DM wasn't loaded, use layer for n_modes
-                            n_modes = intmat_obj._intmat.shape[0]
-                        n_layer_modes = intmat_obj._intmat.shape[1]  # Get the number of layer modes
-                        layer_sample_loaded = True
-                        if self.verbose:
-                            print(f"Loaded Layer PM sample with {n_modes} modes, {n_layer_modes} layer modes")
-                        break
-                except Exception as e:
+            for jj, layer in enumerate(layer_list):
+                layer_index = layer['index']
+
+                pm_filename = generate_pm_filename(self.params_file, opt_index=opt_index, layer_index=layer_index)
+                if pm_filename is None:
                     if self.verbose:
-                        print(f"Could not load Layer PM for source_opt{opt_index}, layer{layer_index}: {e}")
+                        print(f"Could not generate filename for opt{opt_index}, layer{layer_index}")
+                    continue
 
-        if not dm_sample_loaded and not layer_sample_loaded:
-            raise ValueError("Could not load any projection matrices to determine dimensions")
+                pm_path = os.path.join(output_dir, pm_filename)
+                if self.verbose:
+                    print(f"--> Loading Layer PM: {pm_filename}")
+                intmat_obj = Intmat.restore(pm_path)
+                intmat_data = intmat_obj._intmat
 
-        # Create the two separate 4D matrices
-        pm_full_dm = np.zeros((n_modes, len(opt_sources), len(dm_list), n_dm_modes)) if dm_list and n_dm_modes > 0 else None
-        pm_full_layer = np.zeros((n_modes, len(opt_sources), len(layer_list), n_layer_modes)) if layer_list and n_layer_modes > 0 else None
+                # Build a 3D array piling the arrays on the second dimension
+                if jj == 0:
+                    pm_full_i = intmat_data
+                else:
+                    pm_full_i = np.concatenate((pm_full_i, intmat_data), axis=1)
 
-        if self.verbose:
-            print(f"Created 4D PM matrices: \nDM shape = {pm_full_dm.shape if pm_full_dm is not None else 'None'} (n_modes, n_sources, n_dms, n_dm_modes), \n"
-                f"Layer shape = {pm_full_layer.shape if pm_full_layer is not None else 'None'} (n_modes, n_sources, n_layers, n_layer_modes)")
+                if self.verbose:
+                    print(f"    Filled array with opt{opt_index}, dm{dm_index} projection data")
 
-        # Fill the DM matrix
-        if pm_full_dm is not None:
-            if self.verbose:
-                print("\nFilling DM projection matrix...")
-            for ii, opt_source in enumerate(opt_sources):
-                opt_index = opt_source['index']
+            if ii == 0:
+                pm_full_layer = pm_full_i[np.newaxis, :, :]
+            else:
+                pm_full_layer = np.concatenate((pm_full_layer, pm_full_i[np.newaxis, :, :]), axis=0)
 
-                for jj, dm in enumerate(dm_list):
-                    dm_index = dm['index']
-                    key = f"opt{opt_index}_dm{dm_index}"
-
-                    # Check if we already loaded this matrix
-                    if key in loaded_matrices:
-                        intmat_data = loaded_matrices[key]
-                    else:
-                        # Load the matrix if we haven't already
-                        try:
-                            pm_filename = generate_pm_filename(self.params_file, opt_index=opt_index, dm_index=dm_index)
-                            if pm_filename is None:
-                                if self.verbose:
-                                    print(f"Could not generate filename for opt{opt_index}, dm{dm_index}")
-                                continue
-
-                            pm_path = os.path.join(output_dir, pm_filename)
-                            if self.verbose:
-                                print(f"--> Loading DM PM: {pm_filename}")
-                            intmat_obj = Intmat.restore(pm_path)
-                            intmat_data = intmat_obj._intmat
-
-                            # Store for potential reuse
-                            loaded_matrices[key] = intmat_data
-                        except Exception as e:
-                            if self.verbose:
-                                print(f"Error loading DM PM for source_opt{opt_index}, dm{dm_index}: {e}")
-                            continue
-
-                    # Fill the 4D matrix at the appropriate position
-                    pm_full_dm[:, ii, jj, :] = intmat_data
-                    if self.verbose:
-                        print(f"    Filled position [:, {ii}, {jj}, :] with opt{opt_index}, dm{dm_index} projection data")
-
-        # Fill the Layer matrix
-        if pm_full_layer is not None:
-            if self.verbose:
-                print("\nFilling Layer projection matrix...")
-            for ii, opt_source in enumerate(opt_sources):
-                opt_index = opt_source['index']
-
-                for jj, layer in enumerate(layer_list):
-                    layer_index = layer['index']
-                    key = f"opt{opt_index}_layer{layer_index}"
-
-                    # Check if we already loaded this matrix
-                    if key in loaded_matrices:
-                        intmat_data = loaded_matrices[key]
-                    else:
-                        # Load the matrix if we haven't already
-                        try:
-                            pm_filename = generate_pm_filename(self.params_file, opt_index=opt_index, layer_index=layer_index)
-                            if pm_filename is None:
-                                if self.verbose:
-                                    print(f"Could not generate filename for opt{opt_index}, layer{layer_index}")
-                                continue
-
-                            pm_path = os.path.join(output_dir, pm_filename)
-                            if self.verbose:
-                                print(f"--> Loading Layer PM: {pm_filename}")
-                            intmat_obj = Intmat.restore(pm_path)
-                            intmat_data = intmat_obj._intmat
-
-                            # Store for potential reuse
-                            loaded_matrices[key] = intmat_data
-                        except Exception as e:
-                            if self.verbose:
-                                print(f"Error loading Layer PM for source_opt{opt_index}, layer{layer_index}: {e}")
-                            continue
-
-                    # Fill the 4D matrix at the appropriate position
-                    pm_full_layer[:, ii, jj, :] = intmat_data
-                    if self.verbose:
-                        print(f"    Filled position [:, {ii}, {jj}, :] with opt{opt_index}, layer{layer_index} projection data")
-
-        # Reshape 4d arrays to 3d arrays by piling the last dimension
-        if pm_full_dm is not None:
-            pm_full_dm = np.reshape(pm_full_dm, (n_modes, len(opt_sources), -1))
-        if pm_full_layer is not None:
-            pm_full_layer = np.reshape(pm_full_layer, (n_modes, len(opt_sources), -1))
-            
         # Display summary information
         if self.verbose:
             print("\nFinal 3D projection matrices:")
@@ -1153,7 +1065,7 @@ class ParamsManager:
                 print(f"DM projection matrix shape: {pm_full_dm.shape} (n_modes, n_sources, n_dm_modes)")
             if pm_full_layer is not None:
                 print(f"Layer projection matrix shape: {pm_full_layer.shape} (n_modes, n_sources, n_layer_modes)")
-            
+
         # Save the matrices if requested
         if save:
             if pm_full_dm is not None:
