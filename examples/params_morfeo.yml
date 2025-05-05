@@ -2,7 +2,7 @@
 # This is a YAML configuration file for the SPECULA MCAO simulation.
 
 main:
-  root_dir:          'C:\Users\guido\OneDrive\Documenti\GitHub\SPECULA\main\scao\calib\MCAO'         # Root directory for calibration manager
+  root_dir:          '/Users/guido/GitHub/SPECULA/main/scao/calib/MCAO'         # Root directory for calibration manager
   store_dir:         './output'             # Data result directory: 'store_dir'/TN/
   pixel_pupil:       480                    # Linear dimension of pupil phase array
   pixel_pitch:       0.0802                 # [m] Pitch of the pupil phase array2
@@ -316,6 +316,8 @@ avc_lgs:
 
 modal_combination:
   class:        'LinearCombination'
+  modes_ngs: [2,0,3]
+  modes_lgs: [98,95,98]
   inputs:
     in_vectors_list: ['iir_lgs.out_comm', 'iir_focus.out_comm', 'iir_lift.out_comm', 'iir_ngs.out_comm']
   outputs:

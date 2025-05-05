@@ -4,7 +4,7 @@ import pandas as pd
 
 import matplotlib.pyplot as plt
 from synim.params_manager import ParamsManager
-from synim.utils import generate_im_filename, compute_mmse_reconstructor, dm3d_to_2d
+from synim.utils import compute_mmse_reconstructor, dm3d_to_2d
 import specula
 specula.init(device_idx=-1, precision=1)
 
@@ -37,33 +37,14 @@ output_rec_dir = os.path.join(specula_repo_path, "main", "scao", "calib", "MCAO"
 print(f"Output directory: {output_im_dir}")
 
 # -------------------------------------------------------------------
-# Load from disk the full set of interaction matrices
-# then put them in a singla 2D array NXM
-# where N is the number of modes, 2 for the first DM and 3 for the third DM
-# and M is the number of slopes, 8 multiplied by 3 WFSs
-N = 5
-n_slopes_per_wfs = 2
-n_wfs = 3
-M = n_wfs*n_slopes_per_wfs
-im_full = np.zeros((N,M)) 
-for ii in range(3):
-    for jj in range(3):
-        if jj == 1:
-            continue
-        im_filename = generate_im_filename(yaml_file, wfs_type='ngs', wfs_index=ii+1, dm_index=jj+1)
-        # Full paths for the files
-        im_path = os.path.join(output_im_dir, im_filename)
-        print(f"--> Generated IM filename: {im_filename}")
-        # Load the interaction matrix
-        intmat_obj = Intmat.restore(im_path)
-        # Get the interaction matrix data
-        if jj == 0:
-            mode_idx = [0,1]
-        if jj == 2:
-            mode_idx = [2,3,4]
-        print(f'size of intmat: {intmat_obj._intmat.shape}')
-        im_full[mode_idx, n_slopes_per_wfs*ii:n_slopes_per_wfs*(ii+1)] = intmat_obj._intmat[mode_idx,:]
-        
+# Count NGS WFSs in the configuration
+ngs_wfs_list = [wfs for wfs in params_mgr.wfs_list if 'ngs' in wfs['name']]
+n_wfs = len(ngs_wfs_list)
+print(f"Found {n_wfs} NGS WFSs")
+
+im_full, n_slopes_per_wfs, mode_indices, dm_indices = params_mgr.assemble_interaction_matrices(
+    wfs_type='ngs', output_im_dir=output_im_dir, save=False)
+
 import pandas as pd
 print("Full interaction matrix:")
 df = pd.DataFrame(im_full)
@@ -74,29 +55,23 @@ print(df.to_string(float_format=lambda x: f"{x:.6e}"))
 r0 = 0.2
 L0 = 25
 C_atm_full = np.zeros((im_full.shape[0], im_full.shape[0]))
-n_modes = [2,5,5]
-for i in range(3):
-    if i == 1:
-        continue
+for i, dm in enumerate(dm_indices):
     params = params_mgr.prepare_interaction_matrix_params(wfs_type='ngs', 
-                                                         wfs_index=1, dm_index=i+1)
+                                                         wfs_index=1, dm_index=dm)
     dm2d = dm3d_to_2d(params['dm_array'],params['dm_mask'])
-    dm2d = dm2d[:n_modes[i],:]   # Select only the first n modes
+    dm2d = dm2d[mode_indices[i],:]   # Select only the first n modes
     print("dm2d shape", dm2d.shape)
     print("computing covariance matrix for DM", i+1)
     C_atm = compute_ifs_covmat(
         params['dm_mask'], params['pup_diam_m'], dm2d, r0, L0, 
         oversampling=2, verbose=False
     )
-    # add C_atm to the full covariance matrix as bloack elements on the diagonal
-    if i == 0:
-        C_atm_full[0:C_atm.shape[0], 0:C_atm.shape[1]] = C_atm
-    if i == 2:
-        C_atm = C_atm[2:,2:] # remove tip and tilt
-        C_atm_full[n_modes[0]:n_modes[0]+C_atm.shape[0], n_modes[0]:n_modes[0]+C_atm.shape[1]] = C_atm
+    # Create proper indexing for block assignment using np.ix_
+    idx = np.ix_(mode_indices[i], mode_indices[i])
+    C_atm_full[idx] = C_atm
 
 display_covmat = False
-if display_covmat: 
+if display_covmat:
     plt.figure(figsize=(10, 8))
     plt.imshow(C_atm_full, cmap='viridis')
     plt.colorbar()
@@ -118,6 +93,8 @@ for i in range(n_wfs):
     start_idx = i * n_slopes_per_wfs
     end_idx = (i + 1) * n_slopes_per_wfs
     C_noise[start_idx:end_idx, start_idx:end_idx] = noise_variance[i] * np.eye(n_slopes_per_wfs)
+    
+print("C_noise", C_noise)
 
 if display_covmat: 
     plt.figure(figsize=(10, 8))

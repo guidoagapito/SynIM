@@ -30,10 +30,10 @@ def rebin(array, new_shape, method='average'):
     Returns:
     - rebinned_array: numpy 2D or 3D array
     """
-        
+
     if array.ndim == 1:
         array = array.reshape((-1, 1))  # Convert 1D array to 2D
-        
+
     shape = array.shape
     m, n = shape[0:2]
     M, N = new_shape      
@@ -62,7 +62,7 @@ def rebin(array, new_shape, method='average'):
                 rebinned_array = array[:M*(m//M), :N*(n//N)].reshape((M, m//M, N, n//N)).mean(axis=(1, 3))
         else:
             raise ValueError("Unsupported rebin method. Use 'sum' or 'average'.")  
-        
+
     return rebinned_array
 
 def polar_to_xy(r,theta):
@@ -167,7 +167,7 @@ def make_mask(npoints, obsratio=None, diaratio=1.0, xc=0.0, yc=0.0, square=False
     Returns:
     - mask: numpy 2D array
     """
-    
+
     x, y = np.meshgrid(np.linspace(-1, 1, npoints), np.linspace(-1, 1, npoints))
 
     if xc is None:
@@ -203,7 +203,7 @@ def make_mask(npoints, obsratio=None, diaratio=1.0, xc=0.0, yc=0.0, square=False
 
 def make_orto_modes(array):
     # return an othogonal 2D array
-    
+
     size_array = np.shape(array)
 
     if len(size_array) != 2:
@@ -214,7 +214,7 @@ def make_orto_modes(array):
         Q = Q.T
     else:
         Q, R = np.linalg.qr(array)
-    
+
     return Q
 
 def zern_degree(j):
@@ -279,7 +279,7 @@ def zern_jpolar(j, rho, theta):
     Returns:
     - jpol: numpy 2D array, j-th Zernike polynomial in the point of polar coordinates r, theta
     """
-    
+
     if j < 1:
         print("zern_jpolar -- must have j >= 1")
         return 0.0
@@ -330,7 +330,7 @@ def zern2phi(dim, maxZernNumber, mask=None, no_round_mask=False, xsign=1, ysign=
     Returns:
     - z2phi: numpy 3D array, set of maxZernNumber zernike modes
     """
-    
+
     if not no_round_mask:
         round_mask = np.array(make_mask(dim))
     else:
@@ -341,7 +341,7 @@ def zern2phi(dim, maxZernNumber, mask=None, no_round_mask=False, xsign=1, ysign=
 
     xx, yy = make_xy(dim, 1, is_polar=False, is_double=False, is_vector=False,
             use_zero=False, quarter=False, fft=False)
-    
+
     z2phi = np.zeros((dim, dim, maxZernNumber + 1), dtype=float)
 
     for i in range(maxZernNumber + 1):
@@ -363,12 +363,12 @@ def zern2phi(dim, maxZernNumber, mask=None, no_round_mask=False, xsign=1, ysign=
         z2phi_temp = z2phi.reshape(-1, maxZernNumber + 1)
         z2phi_on_pupil = z2phi_temp[idx1D,:]
         z2phi_on_pupil = z2phi_on_pupil.reshape(-1,maxZernNumber + 1)
-        
+
         z2phi_matrix_ortho = make_orto_modes(z2phi_on_pupil)
 
         #z2phi = np.zeros((dim, dim, maxZernNumber + 1), dtype=float)
         z2phi = np.full((dim,dim, maxZernNumber + 1),np.nan)
-        
+
         for i in range(maxZernNumber + 1):
             temp = np.zeros((dim, dim), dtype=float)
             temp[idx2D[0],idx2D[1]] = z2phi_matrix_ortho[:, i] * 1/np.std(z2phi_matrix_ortho[:, i])
@@ -394,11 +394,11 @@ def is_simple_config(config):
     """
     # Check for multiple DMs
     dm_count = sum(1 for key in config if key.startswith('dm') and key != 'dm')
-    
+
     # Check for multiple WFSs
     wfs_count = sum(1 for key in config if 
                    (key.startswith('sh_') or key.startswith('pyramid')) and key != 'pyramid')
-    
+
     return dm_count == 0 and wfs_count == 0
 
 def wfs_fov_from_config(wfs_params):
@@ -453,7 +453,7 @@ def extract_source_coordinates(config, wfs_key):
     # First check if coordinates are in WFS parameters
     if wfs_key in config and 'gs_pol_coo' in config[wfs_key]:
         return config[wfs_key]['gs_pol_coo']
-    
+
     # Try to find source corresponding to this WFS
     source_match = re.search(r'((?:lgs|ngs|ref)\d+)', wfs_key)
     if source_match:
@@ -463,14 +463,14 @@ def extract_source_coordinates(config, wfs_key):
                 return config[source_key]['polar_coordinates']
             elif 'polar_coordinate' in config[source_key]:
                 return config[source_key]['polar_coordinate']
-    
+
     # Try on_axis_source for simple configs
     if 'on_axis_source' in config:
         if 'polar_coordinates' in config['on_axis_source']:
             return config['on_axis_source']['polar_coordinates']
         elif 'polar_coordinate' in config['on_axis_source']:
             return config['on_axis_source']['polar_coordinate']
-    
+
     # Default to on-axis
     return [0.0, 0.0]
 
@@ -504,7 +504,7 @@ def load_pupilstop(cm, pupilstop_params, pixel_pupil, pixel_pitch, verbose=False
         # Create pupilstop from parameters
         mask_diam = pupilstop_params.get('mask_diam', 1.0)
         obs_diam = pupilstop_params.get('obs_diam', 0.0)
-        
+
         # Create a new Pupilstop instance with the given parameters
         pupilstop = Pupilstop(
             pixel_pupil=pixel_pupil,
@@ -529,7 +529,7 @@ def load_influence_functions(cm, dm_params, pixel_pupil, verbose=False):
     Returns:
         tuple: (dm_array, dm_mask) - 3D array of DM influence functions and mask
     """
-    if 'ifunc_object' in dm_params or 'ifunc_tag' in dm_params:
+    if 'ifunc_object' in dm_params or 'ifunc_tag' in dm_params:        
         if 'ifunc_tag' in dm_params:
             ifunc_tag = dm_params['ifunc_tag']
             if verbose:
@@ -540,7 +540,7 @@ def load_influence_functions(cm, dm_params, pixel_pupil, verbose=False):
                 print(f"     Loading influence function from file, tag: {ifunc_tag}")
         ifunc_path = cm.filename('ifunc', ifunc_tag)
         ifunc = IFunc.restore(ifunc_path)
-        
+
         m2c_tag = None
         if 'm2c_tag' in dm_params:
             m2c_tag = dm_params['m2c_tag']
@@ -555,7 +555,7 @@ def load_influence_functions(cm, dm_params, pixel_pupil, verbose=False):
             m2c = M2C.restore(m2c_path)
             # multiply the influence function by the M2C
             ifunc.influence_function = ifunc.influence_function @ m2c.m2c
-              
+
         # Convert influence function from 2D to 3D
         if ifunc.mask_inf_func is not None:           
             # Create empty 3D array (height, width, n_modes)
@@ -580,12 +580,22 @@ def load_influence_functions(cm, dm_params, pixel_pupil, verbose=False):
         nmodes = dm_params.get('nmodes', 100)
         obsratio = dm_params.get('obsratio', 0.0)
         npixels = dm_params.get('npixels', pixel_pupil)
-        
+
+        if 'mask_object' in dm_params:
+            mask_tag = dm_params['mask_object']
+            mask_path = cm.filename('pupilstop', mask_tag)
+            print(f"     Loading mask from file, tag: {mask_tag}")
+            pupilstop = Pupilstop.restore(mask_path)
+            mask = pupilstop.A
+        else:
+            mask = None
+            print("     No mask provided. Using default mask.")
+
         # Compute Zernike influence functions
-        z_ifunc, z_mask = compute_zern_ifunc(npixels, nmodes, xp=np, dtype=float, 
-                                             obsratio=obsratio, diaratio=1.0, 
-                                             start_mode=0, mask=None)
-        
+        z_ifunc, z_mask = compute_zern_ifunc(npixels, nmodes, xp=np, dtype=float,
+                                             obsratio=obsratio, diaratio=1.0,
+                                             start_mode=0, mask=mask)
+
         # Create empty 3D array (height, width, n_modes)
         dm_array = dm2d_to_3d(z_ifunc, z_mask)
         if verbose:
@@ -1015,29 +1025,29 @@ def prepare_interaction_matrix_params(params, wfs_type=None, wfs_index=None, dm_
     Returns:
         dict: Parameters ready to be passed to synim.interaction_matrix
     """
-    
+
     # Prepare the CalibManager
     main_params = params['main']
     cm = CalibManager(main_params['root_dir'])
-    
+
     # Extract general parameters
     pixel_pupil = main_params['pixel_pupil']
     pixel_pitch = main_params['pixel_pitch']
     pup_diam_m = pixel_pupil * pixel_pitch
-    
+
     # Determine if this is a simple or complex configuration
     simple_config = is_simple_config(params)
-    
+
     # Extract all WFS and DM configurations
     wfs_list = extract_wfs_list(params)
     dm_list = extract_dm_list(params)
-    
+
     # Load pupilstop and create pupil mask
     pup_mask = None
     if 'pupilstop' in params:
         pupilstop_params = params['pupilstop']
         pup_mask = load_pupilstop(cm, pupilstop_params, pixel_pupil, pixel_pitch, verbose=True)
-    
+
     # If no pupilstop defined, create a default circular pupil
     if pup_mask is None:
         pupilstop = Pupilstop(
@@ -1049,10 +1059,10 @@ def prepare_interaction_matrix_params(params, wfs_type=None, wfs_index=None, dm_
             precision=0
         )
         pup_mask = pupilstop.A
-    
+
     # Find the appropriate DM based on dm_index
     selected_dm = None
-    
+
     if dm_index is not None:
         # Try to find DM with specified index
         for dm in dm_list:
@@ -1060,22 +1070,22 @@ def prepare_interaction_matrix_params(params, wfs_type=None, wfs_index=None, dm_
                 selected_dm = dm
                 print(f"DM -- Using specified DM: {dm['name']}")
                 break
-    
+
     # If no DM found with specified index or no index specified, use first DM
     if selected_dm is None and dm_list:
         selected_dm = dm_list[0]
         print(f"DM -- Using first available DM: {selected_dm['name']}")
-    
+
     if selected_dm is None:
         raise ValueError("No DM configuration found in the YAML file.")
-    
+
     dm_key = selected_dm['name']
     dm_params = selected_dm['config']
-    
+
     # Extract DM parameters
     dm_height = dm_params.get('height', 0)
     dm_rotation = dm_params.get('rotation', 0.0)
-    
+
     # Load influence functions
     dm_array, dm_mask = load_influence_functions(cm, dm_params, pixel_pupil, verbose=True)
 
@@ -1088,9 +1098,9 @@ def prepare_interaction_matrix_params(params, wfs_type=None, wfs_index=None, dm_
     # WFS selection logic
     selected_wfs = None
     source_type = None
-    
+
     print("WFS -- Looking for WFS parameters...")
-    
+
     # Simple SCAO configuration case
     if simple_config:
         print("     Simple SCAO configuration detected")
@@ -1103,12 +1113,12 @@ def prepare_interaction_matrix_params(params, wfs_type=None, wfs_index=None, dm_
     else:
         # Complex MCAO configuration
         print("     Complex MCAO configuration detected")
-        
+
         # Case 1: wfs_type specifies the sensor type ('sh', 'pyr')
         if wfs_type in ['sh', 'pyr']:
             print(f"     Looking for WFS of type: {wfs_type}")
             matching_wfs = [wfs for wfs in wfs_list if wfs['type'] == wfs_type]
-            
+
             if wfs_index is not None:
                 # Try to find specific index
                 for wfs in matching_wfs:
@@ -1116,21 +1126,21 @@ def prepare_interaction_matrix_params(params, wfs_type=None, wfs_index=None, dm_
                         selected_wfs = wfs
                         print(f"     Found WFS with specified index: {wfs['name']}")
                         break
-            
+
             # If no specific index found, use the first one
             if selected_wfs is None and matching_wfs:
                 selected_wfs = matching_wfs[0]
                 print(f"     Using first WFS of type {wfs_type}: {selected_wfs['name']}")
-        
+
         # Case 2: wfs_type specifies the source type ('lgs', 'ngs', 'ref')
         elif wfs_type in ['lgs', 'ngs', 'ref']:
             source_type = wfs_type
             print(f"     Looking for WFS associated with {wfs_type} source")
-            
+
             # Pattern for WFS names corresponding to the source type
             pattern = f"sh_{source_type}"
             matching_wfs = [wfs for wfs in wfs_list if pattern in wfs['name']]
-            
+
             if wfs_index is not None:
                 # Try to find specific index within the source type
                 target_name = f"{pattern}{wfs_index}"
@@ -1139,12 +1149,12 @@ def prepare_interaction_matrix_params(params, wfs_type=None, wfs_index=None, dm_
                         selected_wfs = wfs
                         print(f"     Found WFS with specified index: {wfs['name']}")
                         break
-            
+
             # If no specific index found, use the first one
             if selected_wfs is None and matching_wfs:
                 selected_wfs = matching_wfs[0]
                 print(f"     Using first WFS for {wfs_type}: {selected_wfs['name']}")
-        
+
         # Case 3: Only wfs_index is specified (no wfs_type)
         elif wfs_index is not None:
             print(f"     Looking for WFS with index: {wfs_index}")
@@ -1153,16 +1163,16 @@ def prepare_interaction_matrix_params(params, wfs_type=None, wfs_index=None, dm_
                     selected_wfs = wfs
                     print(f"     Found WFS with specified index: {wfs['name']}")
                     break
-        
+
         # Case 4: No specific criteria, use the first available WFS
         if selected_wfs is None and wfs_list:
             selected_wfs = wfs_list[0]
             print(f"     Using first available WFS: {selected_wfs['name']}")
-    
+
     # If no WFS found, raise error
     if selected_wfs is None:
         raise ValueError("No matching WFS configuration found in the YAML file.")
-    
+
     wfs_key = selected_wfs['name']
     wfs_params = selected_wfs['config']
     wfs_type_detected = selected_wfs['type']
@@ -1170,38 +1180,38 @@ def prepare_interaction_matrix_params(params, wfs_type=None, wfs_index=None, dm_
     # Determine source type from WFS name if not already set
     if source_type is None:
         source_type = determine_source_type(wfs_key)
-    
+
     print(f"     Source type determined: {source_type}")
-    
+
     # Extract WFS parameters
     wfs_rotation = wfs_params.get('rotation', 0.0)
     wfs_translation = wfs_params.get('translation', [0.0, 0.0])
     wfs_magnification = wfs_params.get('magnification', 1.0)
     wfs_fov_arcsec = wfs_fov_from_config(wfs_params)
-    
+
     if wfs_type_detected == 'sh':
         # Shack-Hartmann specific parameters
         wfs_nsubaps = wfs_params.get('subap_on_diameter', 0)
     else:
         # Pyramid specific parameters
         wfs_nsubaps = wfs_params.get('pup_diam', 0)
-    
+
     # Load SubapData for valid subapertures
     idx_valid_sa = find_subapdata(cm, wfs_params, wfs_key, params, verbose=True)
-    
+
     # Guide star parameters
     if source_type == 'lgs':
         # LGS is at finite height
         # Try to get height from source or use typical LGS height
         gs_height = None
-        
+
         # Check if there's a specific source for this WFS and try to get height
         source_match = re.search(r'(lgs\d+)', wfs_key)
         if source_match:
             source_key = f'source_{source_match.group(1)}'
             if source_key in params:
                 gs_height = params[source_key].get('height', None)
-        
+
         # If still no height, use default
         if gs_height is None:
             gs_height = 90000.0  # Default LGS height in meters
@@ -1234,10 +1244,31 @@ def prepare_interaction_matrix_params(params, wfs_type=None, wfs_index=None, dm_
         'source_type': source_type
     }
 
+def extract_opt_list(config):
+    """ Find all optical sources in the config """
+    opt_sources = []
+    for key, value in config.items():
+        if key.startswith('source_opt'):
+            try:
+                index = int(key.replace('source_opt', ''))
+                opt_sources.append({
+                    'name': key,
+                    'index': index,
+                    'config': value
+                })
+            except ValueError:
+                # Skip if we can't extract a valid index
+                pass
+
+    # Sort by index
+    opt_sources.sort(key=lambda x: x['index'])
+
+    return opt_sources
+
 def extract_wfs_list(config):
     """Extract all WFS configurations from config"""
     wfs_list = []
-    
+
     # Find Pyramid WFSs
     for key in config:
         if key == 'pyramid' or (isinstance(key, str) and (key.startswith('pyramid') or key == 'pyr')):
@@ -1247,7 +1278,7 @@ def extract_wfs_list(config):
                 'index': re.findall(r'\d+', key)[0] if re.findall(r'\d+', key) else '1',
                 'config': config[key]
             })
-    
+
     # Find Shack-Hartmann WFSs
     for key in config:
         if key == 'sh' or key.startswith('sh_') or key.startswith('sh'):
@@ -1257,13 +1288,13 @@ def extract_wfs_list(config):
                 'index': re.findall(r'\d+', key)[0] if re.findall(r'\d+', key) else '1',
                 'config': config[key]
             })
-    
+
     return wfs_list
 
 def extract_dm_list(config):
     """Extract all DM configurations from config"""
     dm_list = []
-    
+
     for key in config:
         if key == 'dm' or (isinstance(key, str) and key.startswith('dm')):
             dm_list.append({
@@ -1271,7 +1302,7 @@ def extract_dm_list(config):
                 'index': re.findall(r'\d+', key)[0] if re.findall(r'\d+', key) else '1',
                 'config': config[key]
             })
-    
+
     # If no DMs found, create a default one
     if len(dm_list) == 0 and 'dm' in config:
         dm_list.append({
@@ -1279,22 +1310,36 @@ def extract_dm_list(config):
             'index': '1',
             'config': config['dm']
         })
-    
+
     return dm_list
+
+def extract_layer_list(config):
+    """Extract all layer configurations from config"""
+    layer_list = []
+
+    for key in config:
+        if isinstance(key, str) and key.startswith('layer'):
+            layer_list.append({
+                'name': key,
+                'index': re.findall(r'\d+', key)[0] if re.findall(r'\d+', key) else '1',
+                'config': config[key]
+            })
+
+    return layer_list
 
 def extract_source_info(config, wfs_name):
     """Extract source information related to a specific WFS"""
     source_info = {}
-    
+
     # Check both formats: direct reference or connection through prop
     if 'inputs' in config[wfs_name] and 'in_ef' in config[wfs_name]['inputs']:
         source_ref = config[wfs_name]['inputs']['in_ef']
-        
+
         # Format might be 'prop.out_source_lgs1_ef' or direct 'out_source_lgs1_ef'
         match = re.search(r'out_(\w+)_ef', source_ref)
         if match:
             source_name = match.group(1)
-            
+
             # Find the source in the config
             if source_name in config:
                 source = config[source_name]
@@ -1306,7 +1351,7 @@ def extract_source_info(config, wfs_name):
                     source_info['height'] = source['height']
                 if 'wavelengthInNm' in source:
                     source_info['wavelength'] = source['wavelengthInNm']
-    
+
     # Direct reference within source objects (for simple YAML)
     if not source_info and 'on_axis_source' in config:
         source_info['type'] = 'ngs'
@@ -1318,17 +1363,17 @@ def extract_source_info(config, wfs_name):
         else:
             source_info['pol_coords'] = [0, 0]
         source_info['wavelength'] = config['on_axis_source'].get('wavelengthInNm', 750)
-    
+
     return source_info
 
 def is_simple_config(config):
     """Detect if this is a simple SCAO config or a complex MCAO config"""
     # Check for multiple DMs
     dm_count = sum(1 for key in config if key.startswith('dm') and key != 'dm')
-    
+
     # Check for multiple WFSs
     wfs_count = sum(1 for key in config if key.startswith('sh_') or key.startswith('pyramid') and key != 'pyramid')
-    
+
     return dm_count == 0 and wfs_count == 0
 
 def generate_im_filename(config_file, wfs_type=None, wfs_index=None, dm_index=None, timestamp=False, verbose=False):
@@ -1352,21 +1397,21 @@ def generate_im_filename(config_file, wfs_type=None, wfs_index=None, dm_index=No
     else:
         # Assume it's already a parsed config dictionary
         config = config_file
-    
+
     # Convert indices to strings for comparison
     wfs_index_str = str(wfs_index) if wfs_index is not None else None
     dm_index_str = str(dm_index) if dm_index is not None else None
-    
+
     # Determine if this is a simple or complex configuration
     simple_config = is_simple_config(config)
-    
+
     # For simple configuration, there's typically only one WFS and DM
     if simple_config:
         if verbose:
             print("Simple SCAO configuration detected")
         # Just generate the single filename that would be created
         filenames = generate_im_filenames(config)
-        
+
         # Simple configs typically use NGS
         if 'ngs' in filenames and filenames['ngs']:
             return filenames['ngs'][0]
@@ -1374,18 +1419,18 @@ def generate_im_filename(config_file, wfs_type=None, wfs_index=None, dm_index=No
         for source_type in ['lgs', 'ref']:
             if source_type in filenames and filenames[source_type]:
                 return filenames[source_type][0]
-        
+
         # No valid filename found
         return None
-    
+
     # For complex configuration, we need to find the matching WFS and DM
     if verbose:
         print("Complex MCAO configuration detected")
-    
+
     # Get lists of all WFSs and DMs
     wfs_list = extract_wfs_list(config)
     dm_list = extract_dm_list(config)
-    
+
     # Filter WFS list based on wfs_type and wfs_index
     filtered_wfs = wfs_list
     if wfs_type:
@@ -1395,62 +1440,62 @@ def generate_im_filename(config_file, wfs_type=None, wfs_index=None, dm_index=No
         # Check if wfs_type is a source type ('lgs', 'ngs', 'ref')
         elif wfs_type in ['lgs', 'ngs', 'ref']:
             filtered_wfs = [wfs for wfs in filtered_wfs if wfs_type in wfs['name']]
-    
+
     if wfs_index_str:
         filtered_wfs = [wfs for wfs in filtered_wfs if wfs['index'] == wfs_index_str]
-    
+
     # Filter DM list based on dm_index
     filtered_dm = dm_list
     if dm_index_str:
         filtered_dm = [dm for dm in filtered_dm if dm['index'] == dm_index_str]
-    
+
     # If we couldn't find matching WFS or DM, return None
     if not filtered_wfs or not filtered_dm:
         if verbose:
             print("No matching WFS or DM found with the specified parameters")
         return None
-    
+
     # Select the first WFS and DM from the filtered lists
     selected_wfs = filtered_wfs[0]
     selected_dm = filtered_dm[0]
-    
+
     if verbose:
         print(f"Selected WFS: {selected_wfs['name']} (type: {selected_wfs['type']}, index: {selected_wfs['index']})")
         print(f"Selected DM: {selected_dm['name']} (index: {selected_dm['index']})")
-    
+
     # Determine the source type from the WFS name
     source_type = determine_source_type(selected_wfs['name'])
-    
+
     # Extract source information
     source_coords = extract_source_coordinates(config, selected_wfs['name'])
-    
+
     # Extract DM height
     dm_height = selected_dm['config'].get('height', 0)
-    
+
     # Generate filename parts
     base_name = "IM_syn"
     parts = [base_name]
-    
+
     # Source info
     if source_coords is not None:
         dist, angle = source_coords
         parts.append(f"pd{dist:.1f}a{angle:.0f}")
-    
+
     # WFS info
     wfs_config = selected_wfs['config']
     parts.extend(build_wfs_filename_part(wfs_config, selected_wfs['type']))
-    
+
     # DM info
     parts.append(f"dmH{dm_height}")
-    
+
     # Add DM-specific parts
     parts.extend(build_dm_filename_part(selected_dm['config']))
-    
+
     # Add timestamp if requested
     if timestamp:
         ts = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
         parts.append(ts)
-    
+
     # Join all parts with underscores and add extension
     filename = "_".join(parts) + ".fits"
     return filename
@@ -1471,32 +1516,31 @@ def generate_im_filenames(config_file, timestamp=False):
         config = parse_params_file(config_file)
     else:
         config = config_file
-    
+
     # Detect if simple or complex configuration
     simple_config = is_simple_config(config)
-    
+
     # Basic system info
     base_name = 'IM_syn'
-    
+
     # Pupil parameters
     pupil_params = {}
     if 'main' in config:
         pupil_params['pixel_pupil'] = config['main'].get('pixel_pupil', 0)
         pupil_params['pixel_pitch'] = config['main'].get('pixel_pitch', 0)
-    
+
     if 'pupilstop' in config:
         pupstop = config['pupilstop']
         if isinstance(pupstop, dict):
             pupil_params['obsratio'] = pupstop.get('obsratio', 0.0)
             pupil_params['tag'] = pupstop.get('tag', '')
-    
+
     # Output dictionary: key=star type, value=list of filenames
     filenames_by_type = {
         'lgs': [],
         'ngs': [],
         'ref': []
     }
-    
     # Extract all DM configurations
     dm_list = extract_dm_list(config)
 
@@ -1505,35 +1549,35 @@ def generate_im_filenames(config_file, timestamp=False):
         # Simple SCAO configuration
         wfs_type = None
         wfs_params = {}
-        
+
         if 'pyramid' in config:
             wfs_type = 'pyr'
             wfs_params = config['pyramid']
         elif 'sh' in config:
             wfs_type = 'sh'
             wfs_params = config['sh']
-            
+
         # Source info
         source_config = config.get('on_axis_source', {})
-        
+
         # Build filename parts
         parts = [base_name]
-        
+
         # Add source parts
         parts.extend(build_source_filename_part(source_config))
-        
+
         # Add pupil parts
         parts.extend(build_pupil_filename_part(pupil_params))
-        
+
         # Add WFS parts
         if wfs_type:
             parts.extend(build_wfs_filename_part(wfs_params, wfs_type))
-        
+
         # Add DM parts - use config for simple configs
         for dm in dm_list:
             dm_parts = build_dm_filename_part(dm['config'], config)
             parts.extend(dm_parts)
-            
+
             # Add timestamp if requested
             if timestamp:
                 ts = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
@@ -1546,15 +1590,15 @@ def generate_im_filenames(config_file, timestamp=False):
     else:
         # Complex MCAO configuration
         wfs_list = extract_wfs_list(config)
-        
+
         # Generate filenames for all WFS-DM combinations
         for wfs in wfs_list:
             wfs_type = wfs['type']
             wfs_params = wfs['config']
-            
+
             # Determine source type from WFS name
             source_type = determine_source_type(wfs['name'])
-            
+
             # Get source information
             source_config = {}
             source_match = re.search(r'((?:lgs|ngs|ref)\d+)', wfs['name'])
@@ -1562,36 +1606,218 @@ def generate_im_filenames(config_file, timestamp=False):
                 source_key = f'source_{source_match.group(1)}'
                 if source_key in config:
                     source_config = config[source_key]
-            
+
             # For each DM, generate a filename
             for dm in dm_list:
                 dm_params = dm['config']
-                
+
                 # Build filename parts
                 parts = [base_name]
-                
+
                 # Add source parts
                 parts.extend(build_source_filename_part(source_config))
-                
+
                 # Add pupil parts
                 parts.extend(build_pupil_filename_part(pupil_params))
-                
+
                 # Add WFS parts
                 parts.extend(build_wfs_filename_part(wfs_params, wfs_type))
-                
+
                 # Add DM parts
                 parts.extend(build_dm_filename_part(dm_params))
-                
+
                 # Add timestamp if requested
                 if timestamp:
                     ts = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
                     parts.append(ts)
-                
+
                 # Join all parts with underscores and add extension
                 filename = "_".join(parts) + ".fits"
                 filenames_by_type[source_type].append(filename)
-    
+
     return filenames_by_type
+
+def generate_pm_filename(config_file, opt_index=None, dm_index=None, layer_index=None,
+                        timestamp=False, verbose=False):
+    """
+    Generate a specific projection matrix filename based on optical source and DM/layer indices.
+
+    Args:
+        config_file (str or dict): Path to YAML/PRO configuration file or config dictionary
+        opt_index (int, optional): Index of the optical source to use (1-based)
+        dm_index (int, optional): Index of the DM to use (1-based)
+        layer_index (int, optional): Index of the layer to use (1-based)
+        timestamp (bool, optional): Whether to include timestamp in the filename
+        verbose (bool, optional): Whether to print verbose output
+
+    Returns:
+        str: Filename for the projection matrix with the specified parameters
+    """
+    # Check if both dm_index and layer_index are provided
+    if dm_index is not None and layer_index is not None:
+        raise ValueError("Cannot specify both dm_index and layer_index at the same time")
+
+    # Load configuration
+    if isinstance(config_file, str):
+        config = parse_params_file(config_file)
+    else:
+        config = config_file
+
+    # Convert indices to strings for comparison
+    opt_index_str = str(opt_index) if opt_index is not None else None
+    dm_index_str = str(dm_index) if dm_index is not None else None
+    layer_index_str = str(layer_index) if layer_index is not None else None
+
+    # Find all optical sources
+    opt_sources = extract_opt_list(config)
+
+    # Extract DM and layer configurations
+    dm_list = extract_dm_list(config) if dm_index is not None else []
+    layer_list = extract_layer_list(config) if layer_index is not None else []
+
+    # Filter optical sources based on opt_index
+    if opt_index_str:
+        filtered_sources = [src for src in opt_sources if src['index'] == int(opt_index_str)]
+    else:
+        filtered_sources = opt_sources
+
+    # Filter DM or layer list based on provided index
+    if dm_index_str:
+        filtered_components = [dm for dm in dm_list if dm['index'] == dm_index_str]
+        component_type = "dm"
+    elif layer_index_str:
+        filtered_components = [layer for layer in layer_list if layer['index'] == layer_index_str]
+        component_type = "layer"
+    else:
+        # Default to first DM if no specific component requested
+        filtered_components = dm_list
+        component_type = "dm"
+
+    # If we couldn't find matching source or component, return None
+    if not filtered_sources or not filtered_components:
+        if not filtered_sources:
+            print("Warning: No matching optical source found with the specified parameters")
+        if not filtered_components:
+            print("Warning: No matching DM or layer found with the specified parameters")
+        return None
+
+    # Select the first source and component from the filtered lists
+    selected_source = filtered_sources[0]
+    selected_component = filtered_components[0]
+
+    if verbose:
+        print(f"Selected optical source: {selected_source['name']} (index: {selected_source['index']})")
+        print(f"Selected {component_type}: {selected_component['name']} (index: {selected_component['index']})")
+
+    # Extract source information
+    source_config = selected_source['config']
+    source_coords = source_config.get('polar_coordinates', [0.0, 0.0])
+    source_height = source_config.get('height', float('inf'))
+
+    # Extract component height
+    component_height = selected_component['config'].get('height', 0)
+
+    # Generate filename parts
+    base_name = "PM_syn"
+    parts = [base_name]
+
+    # Specific source identifier
+    parts.append(f"opt{selected_source['index']}")
+
+    # Source coordinates
+    if source_coords:
+        dist, angle = source_coords
+        parts.append(f"pd{dist:.1f}a{angle:.0f}")
+
+    # Source height (only include if not infinite)
+    if not np.isinf(source_height):
+        parts.append(f"h{source_height:.0f}")
+
+    # Component info
+    parts.append(f"{component_type}{selected_component['index']}")
+    parts.append(f"H{component_height}")
+
+    # Add component-specific parts
+    parts.extend(build_dm_filename_part(selected_component['config']))
+
+    # Add timestamp if requested
+    if timestamp:
+        ts = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
+        parts.append(ts)
+
+    # Join all parts with underscores and add extension
+    filename = "_".join(parts) + ".fits"
+    return filename
+
+def generate_pm_filenames(config_file, timestamp=False):
+    """
+    Generate projection matrix filenames for all optical source and DM combinations.
+    
+    Args:
+        config_file (str or dict): Path to YAML/PRO file or config dictionary
+        timestamp (bool, optional): Whether to include timestamp in filenames
+        
+    Returns:
+        list: List of projection matrix filenames
+    """
+    # Load configuration
+    if isinstance(config_file, str):
+        config = parse_params_file(config_file)
+    else:
+        config = config_file
+
+    # Find all optical sources
+    opt_sources = extract_opt_list(config)
+
+    # Extract all DM configurations
+    dm_list = extract_dm_list(config)
+
+    # Output list of filenames
+    filenames = []
+
+    # Generate filenames for all optical source and DM combinations
+    for source in opt_sources:
+        source_config = source['config']
+        source_coords = source_config.get('polar_coordinates', [0.0, 0.0])
+        source_height = source_config.get('height', float('inf'))
+
+        for dm in dm_list:
+            dm_config = dm['config']
+            dm_height = dm_config.get('height', 0)
+
+            # Generate filename parts
+            base_name = "PM_syn"
+            parts = [base_name]
+
+            # Specific source identifier
+            parts.append(f"opt{source['index']}")
+
+            # Source coordinates
+            if source_coords:
+                dist, angle = source_coords
+                parts.append(f"pd{dist:.1f}a{angle:.0f}")
+
+            # Source height (only include if not infinite)
+            if not np.isinf(source_height):
+                parts.append(f"h{source_height:.0f}")
+
+            # DM info
+            parts.append(f"dm{dm['index']}")
+            parts.append(f"dmH{dm_height}")
+
+            # Add DM-specific parts
+            parts.extend(build_dm_filename_part(dm_config))
+
+            # Add timestamp if requested
+            if timestamp:
+                ts = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
+                parts.append(ts)
+
+            # Join all parts with underscores and add extension
+            filename = "_".join(parts) + ".fits"
+            filenames.append(filename)
+
+    return filenames
 
 def compute_mmse_reconstructor(interaction_matrix, C_atm, noise_variance=None, C_noise=None, 
                               cinverse=False, verbose=False):

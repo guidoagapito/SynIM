@@ -242,22 +242,22 @@ def apply_extrapolation(data, edge_pixels, reference_indices, coefficients, debu
     result = data.copy()
     flat_result = result.ravel()
     flat_data = data.ravel()
-    
+
     # Iterate over each edge pixel
     for i, edge_idx in enumerate(edge_pixels):
         is_problem_pixel = problem_indices is not None and i in problem_indices
-        
+
         # Compute the 2D coordinates of the pixel
         edge_y = edge_idx // data.shape[1]
         edge_x = edge_idx % data.shape[1]
-        
+
         if is_problem_pixel:
             print(f"\n[DEBUG] Calculating extrapolated value for pixel [{edge_y},{edge_x}]:")
             print(f"  Original value: {flat_data[edge_idx]}")
-        
+
         # Initialize the extrapolated value
         extrap_value = 0.0
-        
+
         # Sum contributions from all references
         for j in range(reference_indices.shape[1]):
             ref_idx = reference_indices[i, j]
@@ -266,14 +266,13 @@ def apply_extrapolation(data, edge_pixels, reference_indices, coefficients, debu
                 ref_x = ref_idx % data.shape[1]
                 contrib = coefficients[i, j] * flat_data[ref_idx]
                 extrap_value += contrib
-                
+
                 if is_problem_pixel:
                     print(f"  Ref [{ref_y},{ref_x}] = {flat_data[ref_idx]} × {coefficients[i, j]:.4f} = {contrib:.4f}")
-        
+
         # Assign the extrapolated value
         flat_result[edge_idx] = extrap_value
 
-    
     return result
 
 
@@ -293,7 +292,7 @@ def shiftzoom_from_source_dm_params(source_pol_coo, source_height, dm_height, pi
     """
 
     arcsec2rad = np.pi/180/3600
-    
+
     if np.isinf(source_height):
         mag_factor = 1.0
     else:
@@ -305,7 +304,7 @@ def shiftzoom_from_source_dm_params(source_pol_coo, source_height, dm_height, pi
 
     shift = tuple(source_rec_coo_pix)
     zoom = (mag_factor, mag_factor)
-    
+
     return shift, zoom
 
 def rotshiftzoom_array_noaffine(input_array, dm_translation=(0.0, 0.0),  dm_rotation=0.0,   dm_magnification=(1.0, 1.0),
@@ -326,10 +325,10 @@ def rotshiftzoom_array_noaffine(input_array, dm_translation=(0.0, 0.0),  dm_rota
     Returns:
     - output: numpy array, transformed data
     """
-    
+
     if np.isnan(input_array).any():
         np.nan_to_num(input_array, copy=False, nan=0.0, posinf=None, neginf=None)
-    
+
     # Check if phase is 2D or 3D
     if len(input_array.shape) == 3:
         dm_translation_ = dm_translation + (0,)
@@ -341,7 +340,7 @@ def rotshiftzoom_array_noaffine(input_array, dm_translation=(0.0, 0.0),  dm_rota
         dm_magnification_ = dm_magnification
         wfs_translation_ = wfs_translation
         wfs_magnification_ = wfs_magnification
-        
+
     # resize
     if output_size == None:
         output_size = input_array.shape
@@ -351,7 +350,7 @@ def rotshiftzoom_array_noaffine(input_array, dm_translation=(0.0, 0.0),  dm_rota
         array_mag = input_array
     else:
         array_mag = zoom(input_array, dm_magnification_)
-    
+
     # (2) DM rotation
     if dm_rotation == 0:
         array_rot = array_mag
@@ -423,20 +422,20 @@ def rotshiftzoom_array(input_array, dm_translation=(0.0, 0.0), dm_rotation=0.0, 
     Returns:
     - output: numpy array, transformed data
     """
-   
+
     # Parameter handling: conversion of single values to tuples
     try:
         if not hasattr(dm_translation, '__len__') or len(dm_translation) != 2:
             dm_translation = (float(dm_translation), float(dm_translation))
     except (TypeError, ValueError):
         dm_translation = (0.0, 0.0)
-        
+
     try:
         if not hasattr(wfs_translation, '__len__') or len(wfs_translation) != 2:
             wfs_translation = (float(wfs_translation), float(wfs_translation))
     except (TypeError, ValueError):
         wfs_translation = (0.0, 0.0)
-        
+
     try:
         if not hasattr(dm_magnification, '__len__'):
             # If it is a single value, we create a tuple with two identical elements
@@ -446,7 +445,7 @@ def rotshiftzoom_array(input_array, dm_translation=(0.0, 0.0), dm_rotation=0.0, 
             dm_magnification = (float(dm_magnification[0]), float(dm_magnification[0]))
     except (TypeError, ValueError):
         dm_magnification = (1.0, 1.0)
-        
+
     try:
         if not hasattr(wfs_magnification, '__len__'):
             # If it is a single value, we create a tuple with two identical elements
@@ -459,46 +458,45 @@ def rotshiftzoom_array(input_array, dm_translation=(0.0, 0.0), dm_rotation=0.0, 
 
     if np.isnan(input_array).any():
         input_array = np.nan_to_num(input_array, copy=True, nan=0.0, posinf=None, neginf=None)
-    
+
     # Check if array is 2D or 3D
     is_3d = len(input_array.shape) == 3
-    
+
     # resize
     if output_size is None:
         output_size = input_array.shape[:2]  # Only take the first two dimensions
-    
+
     # Center of the input array
     center = np.array(input_array.shape[:2]) / 2.0
-    
     # Convert rotations to radians
     # Note: Inverting the sign of rotation to match the first function's direction
     dm_rot_rad = np.deg2rad(-dm_rotation)  # Negative sign to reverse direction
     wfs_rot_rad = np.deg2rad(-wfs_rotation)  # Negative sign to reverse direction
-    
+
     # Initialize the output array
     if is_3d:
         output = np.zeros((output_size[0], output_size[1], input_array.shape[2]), dtype=input_array.dtype)
     else:
         output = np.zeros(output_size, dtype=input_array.dtype)
-    
+
     # Create the transformation matrices
     # For DM transformation
     dm_scale_matrix = np.array([[1.0/dm_magnification[0], 0], [0, 1.0/dm_magnification[1]]])
     dm_rot_matrix = np.array([[np.cos(dm_rot_rad), -np.sin(dm_rot_rad)], [np.sin(dm_rot_rad), np.cos(dm_rot_rad)]])
     dm_matrix = np.dot(dm_rot_matrix, dm_scale_matrix)
-    
+
     # For WFS transformation
     wfs_scale_matrix = np.array([[1.0/wfs_magnification[0], 0], [0, 1.0/wfs_magnification[1]]])
     wfs_rot_matrix = np.array([[np.cos(wfs_rot_rad), -np.sin(wfs_rot_rad)], [np.sin(wfs_rot_rad), np.cos(wfs_rot_rad)]])
     wfs_matrix = np.dot(wfs_rot_matrix, wfs_scale_matrix)
-    
+
     # Combine transformations (first DM, then WFS)
     combined_matrix = np.dot(wfs_matrix, dm_matrix)
-    
+
     # Calculate offset
     output_center = np.array(output_size) / 2.0
     offset = center - np.dot(combined_matrix, output_center) - np.dot(dm_matrix, dm_translation) - wfs_translation
-    
+
     # Apply transformation
     if is_3d:
         # For 3D arrays, apply transformation to each slice
@@ -519,13 +517,14 @@ def rotshiftzoom_array(input_array, dm_translation=(0.0, 0.0), dm_rotation=0.0, 
             output_shape=output_size,
             order=1
         )
-    
+
     return output
 
-def interaction_matrix(pup_diam_m,pup_mask,dm_array,dm_mask,dm_height,dm_rotation,wfs_nsubaps,wfs_rotation,wfs_translation,wfs_magnification,
-                       wfs_fov_arcsec,gs_pol_coo,gs_height,idx_valid_sa=None,verbose=False,display=False,specula_convention=True):
+def update_dm_pup(pup_diam_m, pup_mask, dm_array, dm_mask, dm_height, dm_rotation,
+                  wfs_rotation, wfs_translation, wfs_magnification,
+                  gs_pol_coo, gs_height, verbose=False, specula_convention=True):
     """
-    Computes a single interaction matrix.
+    Update the DM and pupil array to be used in the computation of interaction matrix.
     From Guido Agapito.
 
     Parameters:
@@ -535,25 +534,23 @@ def interaction_matrix(pup_diam_m,pup_mask,dm_array,dm_mask,dm_height,dm_rotatio
     - dm_mask: numpy 2D array, mask
     - dm_height: float, conjugation altitude of the Deformable Mirror
     - dm_rotation: float, rotation in deg of the Deformable Mirror with respect to the pupil
-    - wfs_nsubaps: int, number of sub-aperture of the wavefront sensor
     - wfs_rotation
     - wfs_translation
     - wfs_magnification
-    - wfs_fov_arcsec: float, field of view of the wavefront sensor in arcsec
     - gs_pol_coo: tuple, polar coordinates of the gudie star radius in arcsec and angle in deg
     - gs_height: float, altitude of the guide star
-    - idx_valid_sa: numpy 1D array, indices of the valid sub-apertures
     - verbose, optional
-    - display, optional
     - specula_convention, optional
 
     Returns:
-    - im: numpy 2D array, set of signals
+    - trans_dm_array: DM array
+    - trans_dm_mask: DM mask
+    - trans_pup_mask: pupil mask
     """
 
     pup_diam_pix = pup_mask.shape[0]
     pixel_pitch = pup_diam_m/pup_diam_pix
-    dm_diam_pix = dm_mask.shape[0]
+
     if dm_mask.shape[0] != dm_array.shape[0]:
         raise ValueError('Error in input data, the dm and mask array must have the same dimensions.')
 
@@ -601,7 +598,142 @@ def interaction_matrix(pup_diam_m,pup_mask,dm_array,dm_mask,dm_height,dm_rotatio
         trans_dm_array = np.transpose(trans_dm_array, (1, 0, 2))
         trans_dm_mask = np.transpose(trans_dm_mask)
         trans_pup_mask = np.transpose(trans_pup_mask)
+    
+    return trans_dm_array, trans_dm_mask, trans_pup_mask
 
+def projection_matrix(pup_diam_m, pup_mask, dm_array, dm_mask, base_inv_array,
+                      dm_height, dm_rotation, base_rotation, base_translation, base_magnification,
+                      gs_pol_coo, gs_height, verbose=False, display=False, specula_convention=True):
+    """
+    Computes a projection matrix for DM modes onto a desired basis.
+    From Guido Agapito.
+
+    Parameters:
+    - pup_diam_m: float, size in m of the side of the pupil
+    - pup_mask: numpy 2D array, pupil mask (n_pup x n_pup)
+    - dm_array: numpy 3D array, Deformable Mirror 2D shapes (n x n x n_dm_modes)
+    - dm_mask: numpy 2D array, DM mask (n x n)
+    - base_inv_array: numpy 3D array, inverted basis for projection (n_pup x n_pup x n_base_modes)
+    - dm_height: float, conjugation altitude of the Deformable Mirror
+    - dm_rotation: float, rotation in deg of the Deformable Mirror with respect to the pupil
+    - base_rotation: float, rotation of the basis in deg
+    - base_translation: tuple, translation of the basis
+    - base_magnification: tuple, magnification of the basis
+    - gs_pol_coo: tuple, polar coordinates of the guide star radius in arcsec and angle in deg
+    - gs_height: float, altitude of the guide star
+    - verbose: bool, optional, display verbose output
+    - display: bool, optional, display plots
+    - specula_convention: bool, optional, use SPECULA convention
+
+    Returns:
+    - pm: numpy 2D array, projection matrix (n_base_modes x n_dm_modes)
+    """
+
+    trans_dm_array, trans_dm_mask, trans_pup_mask = update_dm_pup(
+                  pup_diam_m, pup_mask, dm_array, dm_mask, dm_height, dm_rotation,
+                  base_rotation, base_translation, base_magnification,
+                  gs_pol_coo,gs_height, verbose=verbose, specula_convention=specula_convention)
+
+    # Create mask for valid pixels (both in DM and pupil)
+    valid_mask = trans_dm_mask * trans_pup_mask
+    valid_pixels = valid_mask > 0.5
+
+    # Extract valid pixels from dm_array
+    n_valid_pixels = np.sum(valid_pixels)
+    height, width, n_modes = trans_dm_array.shape
+    dm_valid_values = np.zeros((n_valid_pixels, n_modes))
+
+    for i in range(n_modes):
+        dm_valid_values[:, i] = trans_dm_array[:, :, i][valid_pixels]
+
+    height_base, width_base, n_modes_base = base_inv_array.shape
+    base_valid_values = np.zeros((n_valid_pixels, n_modes_base))
+
+    for i in range(n_modes_base):
+        base_valid_values[:, i] = base_inv_array[:, :, i][valid_pixels]
+
+    # Perform matrix multiplication with base_inv_array to get projection coefficients
+    projection = np.dot(base_valid_values.T, dm_valid_values)
+
+    if verbose:
+        print('Matrix multiplication done, projection shape:', projection.shape)
+
+    if display:
+        # Display valid pixels mask
+        plt.figure()
+        plt.imshow(valid_mask)
+        plt.title('Valid pixels mask')
+        plt.colorbar()
+
+        # Display a couple of DM modes
+        plt.figure(figsize=(10, 5))
+        plt.subplot(1, 2, 1)
+        plt.imshow(trans_dm_array[:, :, 0], cmap='seismic')
+        plt.title('DM Mode 0')
+        plt.colorbar()
+        plt.subplot(1, 2, 2)
+        plt.imshow(trans_dm_array[:, :, 1], cmap='seismic')
+        plt.title('DM Mode 1')
+        plt.colorbar()
+
+        # Display projection coefficients
+        plt.figure()
+        for i in range(min(5, projection.shape[0])):
+            plt.plot(projection[i, :], label=f'Basis mode {i}')
+        plt.legend()
+        plt.title('Projection coefficients')
+        plt.xlabel('DM mode index')
+        plt.ylabel('Coefficient')
+        plt.grid(True)
+
+        # Display projection array
+        plt.figure()
+        plt.imshow(projection, cmap='seismic', origin='lower')
+        plt.legend()
+        plt.title('Projection coefficients')
+        plt.xlabel('DM mode index')
+        plt.ylabel('Basis mode index')
+        plt.grid(True)
+        plt.show()
+
+    return projection
+
+def interaction_matrix(pup_diam_m, pup_mask, dm_array, dm_mask, dm_height, dm_rotation,
+                       wfs_nsubaps, wfs_rotation, wfs_translation, wfs_magnification,
+                       wfs_fov_arcsec, gs_pol_coo, gs_height, idx_valid_sa=None,
+                       verbose=False, display=False, specula_convention=True):
+    """
+    Computes a single interaction matrix.
+    From Guido Agapito.
+
+    Parameters:
+    - pup_diam_m: float, size in m of the side of the pupil
+    - pup_mask: numpy 2D array, mask
+    - dm_array: numpy 3D array, Deformable Mirror 2D shapes
+    - dm_mask: numpy 2D array, mask
+    - dm_height: float, conjugation altitude of the Deformable Mirror
+    - dm_rotation: float, rotation in deg of the Deformable Mirror with respect to the pupil
+    - wfs_nsubaps: int, number of sub-aperture of the wavefront sensor
+    - wfs_rotation
+    - wfs_translation
+    - wfs_magnification
+    - wfs_fov_arcsec: float, field of view of the wavefront sensor in arcsec
+    - gs_pol_coo: tuple, polar coordinates of the gudie star radius in arcsec and angle in deg
+    - gs_height: float, altitude of the guide star
+    - idx_valid_sa: numpy 1D array, indices of the valid sub-apertures
+    - verbose, optional
+    - display, optional
+    - specula_convention, optional
+
+    Returns:
+    - im: numpy 2D array, set of signals
+    """
+
+    trans_dm_array, trans_dm_mask, trans_pup_mask = update_dm_pup(
+                  pup_diam_m, pup_mask, dm_array, dm_mask, dm_height, dm_rotation,
+                  wfs_rotation, wfs_translation, wfs_magnification,
+                  gs_pol_coo, gs_height, verbose=verbose, specula_convention=specula_convention)
+    
     # Derivative od DM modes shape
     der_dx, der_dy = compute_derivatives_with_extrapolation(trans_dm_array,mask=trans_dm_mask)
 
@@ -678,7 +810,7 @@ def interaction_matrix(pup_diam_m,pup_mask,dm_array,dm_mask,dm_height,dm_rotatio
     dm_mask_sa[dm_mask_sa<0.5] = 0
     WFS_signal_x = apply_mask(WFS_signal_x,dm_mask_sa,norm=True)
     WFS_signal_y = apply_mask(WFS_signal_y,dm_mask_sa,norm=True)
-    
+
     # set to zero the signal outside the pupil
     pup_mask_sa[pup_mask_sa<0.5] = 0
     pup_mask_sa[pup_mask_sa>=0.5] = 1
@@ -704,13 +836,13 @@ def interaction_matrix(pup_diam_m,pup_mask,dm_array,dm_mask,dm_height,dm_rotatio
             idx_valid_sa_new[:,1] = idx_temp[1]
         else:
             idx_valid_sa_new = idx_valid_sa
-        
+
         if len(idx_valid_sa_new.shape) > 1 and idx_valid_sa_new.shape[1] == 2:
             # Convert 2D coordinates [y,x] to linear indices
             # Formula: linear_index = y * width + x
             width = wfs_nsubaps  # Width of the original 2D array
             linear_indices = idx_valid_sa_new[:,0] * width + idx_valid_sa_new[:,1]
-            
+
             # Use these linear indices to select elements from flattened arrays
             WFS_signal_x_2D = WFS_signal_x_2D[linear_indices.astype(int),:]
             WFS_signal_y_2D = WFS_signal_y_2D[linear_indices.astype(int),:]
@@ -741,9 +873,9 @@ def interaction_matrix(pup_diam_m,pup_mask,dm_array,dm_mask,dm_height,dm_rotatio
         plt.imshow(pup_mask_sa)
         plt.title('Pupil masks rebinned on WFS sub-apertures')
         plt.colorbar()
-        
+
         idx_plot = [2,5]
-        
+
         fig, axs = plt.subplots(2,2)
         im3 = axs[0,0].imshow(trans_dm_array[:,:,idx_plot[0]], cmap='seismic')
         im3 = axs[0,1].imshow(trans_dm_array[:,:,idx_plot[0]], cmap='seismic')
@@ -751,7 +883,7 @@ def interaction_matrix(pup_diam_m,pup_mask,dm_array,dm_mask,dm_height,dm_rotatio
         im3 = axs[1,1].imshow(trans_dm_array[:,:,idx_plot[1]], cmap='seismic')
         fig.suptitle('DM shapes seen on the WFS direction (idx {idx_plot[0]} and {idx_plot[1]})')
         fig.colorbar(im3, ax=axs.ravel().tolist(),fraction=0.02)
-        
+
         fig, axs = plt.subplots(2,2)
         im4 = axs[0,0].imshow(der_dx[:,:,idx_plot[0]], cmap='seismic')
         im4 = axs[0,1].imshow(der_dy[:,:,idx_plot[0]], cmap='seismic')
@@ -759,7 +891,7 @@ def interaction_matrix(pup_diam_m,pup_mask,dm_array,dm_mask,dm_height,dm_rotatio
         im4 = axs[1,1].imshow(der_dy[:,:,idx_plot[1]], cmap='seismic')
         fig.suptitle('X and Y derivative of DM shapes seen on the WFS direction (idx {idx_plot[0]} and {idx_plot[1]})')
         fig.colorbar(im4, ax=axs.ravel().tolist(),fraction=0.02)
-        
+
         fig, axs = plt.subplots(2,2)
         im5 = axs[0,0].imshow(WFS_signal_x[:,:,idx_plot[0]], cmap='seismic')
         im5 = axs[0,1].imshow(WFS_signal_y[:,:,idx_plot[0]], cmap='seismic')
