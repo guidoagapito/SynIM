@@ -594,7 +594,7 @@ class ParamsManager:
                     n_slopes_per_wfs = n_slopes_this_wfs
                 elif n_slopes_per_wfs != n_slopes_this_wfs:
                     print(f"Warning: Inconsistent number of slopes across WFSs")
-      
+
         if self.verbose:
             print(f"Each WFS has {n_slopes_per_wfs} slopes")
 
@@ -713,28 +713,23 @@ class ParamsManager:
                     print("Loading inverse basis functions from modal_analysis")
                 dm_inv_params = self.params['modal_analysis']
 
-            try:
-                # Load influence functions from dm_inv
-                base_inv_array, inv_mask = load_influence_functions(
-                    self.cm,
-                    dm_inv_params,
-                    self.pixel_pupil,
-                    verbose=verbose_flag
-                )
+            # Load influence functions from dm_inv
+            base_inv_array, inv_mask = load_influence_functions(
+                self.cm,
+                dm_inv_params,
+                self.pixel_pupil,
+                verbose=verbose_flag
+            )
 
-                n_valid_pixels = np.sum(inv_mask > 0.5)
+            n_valid_pixels = np.sum(inv_mask > 0.5)
 
-                if base_inv_array is not None:
-                    if verbose_flag:
-                        print(f"Loaded inverse basis with shape {base_inv_array.shape}")
-                        print(f"Mask has {n_valid_pixels} valid pixels")
-
-            except Exception as e:
-                print(f"Error loading inverse basis functions: {e}")
+            if base_inv_array is not None:
+                if verbose_flag:
+                    print(f"Loaded inverse basis with shape {base_inv_array.shape}")
+                    print(f"Mask has {n_valid_pixels} valid pixels")
 
         if base_inv_array is None:
-            if verbose_flag:
-                print("Warning: Could not load base_inv_array. Using default identity matrix.")
+            raise ValueError("No valid base_inv_array found in the configuration file.")
 
         # Extract all DM and layer configurations
         dm_list = self.dm_list
@@ -849,7 +844,7 @@ class ParamsManager:
 
                 # Create Intmat object and save it (we reuse the Intmat class for storage)
                 pm_obj = Intmat(
-                    pm, 
+                    pm,
                     pupdata_tag=pupdata_tag,
                     norm_factor=1.0,
                     target_device_idx=None,  # Use default device
@@ -1021,6 +1016,7 @@ class ParamsManager:
                 if self.verbose:
                     print(f"    Filled array with opt{opt_index}, dm{dm_index} projection data")
 
+            # Build a 3D array piling the arrays on the new dimension
             if ii == 0:
                 pm_full_dm = pm_full_i[np.newaxis, :, :]
             else:
@@ -1044,7 +1040,7 @@ class ParamsManager:
                 intmat_obj = Intmat.restore(pm_path)
                 intmat_data = intmat_obj._intmat
 
-                # Build a 3D array piling the arrays on the second dimension
+                # Pile the arrays on the second dimension
                 if jj == 0:
                     pm_full_i = intmat_data
                 else:
@@ -1053,6 +1049,7 @@ class ParamsManager:
                 if self.verbose:
                     print(f"    Filled array with opt{opt_index}, dm{dm_index} projection data")
 
+            # Build a 3D array piling the arrays on the new dimension
             if ii == 0:
                 pm_full_layer = pm_full_i[np.newaxis, :, :]
             else:
