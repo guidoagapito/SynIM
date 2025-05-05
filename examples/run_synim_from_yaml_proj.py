@@ -27,12 +27,6 @@ pm_paths = params_mgr.compute_projection_matrices(overwrite=False)
 
 pm_full_dm, pm_full_layer, weights_array = params_mgr.assemble_projection_matrices(output_dir=output_pm_dir, save=False)
 
-# Display summary information
-print("\nFinal 4D projection matrices:")
-if pm_full_dm is not None:
-    print(f"DM projection matrix shape: {pm_full_dm.shape} (n_modes, n_sources, n_dms, n_dm_modes)")
-if pm_full_layer is not None:
-    print(f"Layer projection matrix shape: {pm_full_layer.shape} (n_modes, n_sources, n_layers, n_layer_modes)")
 
 print(f"Weights array: {weights_array}")
 
@@ -40,18 +34,18 @@ print(f"Weights array: {weights_array}")
 if pm_full_dm is not None:
     # Visualize the first mode for first DM across all sources
     plt.figure(figsize=(10, 6))
-    plt.imshow(pm_full_dm[0, :, 0, :], cmap='viridis')
+    plt.imshow(pm_full_dm[0, :, :], cmap='viridis')
     plt.colorbar()
-    plt.title(f"DM Projection Matrix - Mode 0, DM 0")
+    plt.title(f"DM Projection Matrix - Mode 0, all DMs")
     plt.xlabel("DM Mode Index")
     plt.ylabel("Source Index")
     plt.tight_layout()
 
     # Visualize first source, first DM for all modes
     plt.figure(figsize=(10, 6))
-    plt.imshow(pm_full_dm[:, 0, 0, :], cmap='viridis')
+    plt.imshow(pm_full_dm[:, 0, :], cmap='viridis')
     plt.colorbar()
-    plt.title("DM Projection Matrix - Source 0, DM 0")
+    plt.title("DM Projection Matrix - Source 0, all DMs")
     plt.xlabel("DM Mode Index")
     plt.ylabel("Mode Index")
     plt.tight_layout()
@@ -60,18 +54,18 @@ if pm_full_dm is not None:
 if pm_full_layer is not None:
     # Visualize the first mode for first layer across all sources
     plt.figure(figsize=(10, 6))
-    plt.imshow(pm_full_layer[0, :, 0, :], cmap='viridis')
+    plt.imshow(pm_full_layer[0, :, :], cmap='viridis')
     plt.colorbar()
-    plt.title(f"Layer Projection Matrix - Mode 0, Layer 0")
+    plt.title(f"Layer Projection Matrix - Mode 0, all Layers")
     plt.xlabel("Layer Mode Index")
     plt.ylabel("Source Index")
     plt.tight_layout()
 
     # Visualize first source, first layer for all modes
     plt.figure(figsize=(10, 6))
-    plt.imshow(pm_full_layer[:, 0, 0, :], cmap='viridis')
+    plt.imshow(pm_full_layer[:, 0, :], cmap='viridis')
     plt.colorbar()
-    plt.title("Layer Projection Matrix - Source 0, Layer 0")
+    plt.title("Layer Projection Matrix - Source 0, all Layers")
     plt.xlabel("Layer Mode Index")
     plt.ylabel("Mode Index")
     plt.tight_layout()
