@@ -823,7 +823,7 @@ class ParamsManager:
 
                 if verbose_flag:
                     print(f"  Projection matrix shape: {pm.shape}")
-                    print(f"  First few values of PM: {pm[:min(5, pm.shape[0]), :min(5, pm.shape[1])]}")
+                    #print(f"  First few values of PM: {pm[:min(5, pm.shape[0]), :min(5, pm.shape[1])]}")
 
                 # Display the matrix if requested
                 if display:
@@ -1049,7 +1049,7 @@ class ParamsManager:
                 if jj == 0:
                     pm_full_i = intmat_data
                 else:
-                    pm_full_i = np.concatenate((pm_full_i, intmat_data), axis=1)
+                    pm_full_i = np.concatenate((pm_full_i, intmat_data), axis=0)
 
                 if self.verbose:
                     print(f"    Filled array with opt{opt_index}, dm{dm_index} projection data")
@@ -1083,6 +1083,48 @@ class ParamsManager:
                     print(f"Saved Layer projection matrix to {layer_output_filename}")
 
         return pm_full_dm, pm_full_layer, weights_array
+    
+    def calc_final_projection_matrix(self, pm_full_dm, pm_full_layer, weights_array, regFactor=1e-8):
+        """
+        Calculate the final projection matrix using the full DM and layer matrices.
+        This function computes the projection matrix using a weighted average of the individual matrices,
+        and applies a regularization term to ensure numerical stability.
+
+        The regularization term is added to the diagonal of the pseudoinverse to prevent singularities.
+        The function returns the final projection matrix.
+        The function assumes that the input matrices are in the correct shape and format.
+        The function also assumes that the weights_array is normalized to sum to 1.
+
+        Args:
+            pm_full_dm (numpy.ndarray): Full DM projection matrix (nopt, n_dm_modes, n_pupil_modes)
+            pm_full_layer (numpy.ndarray): Full layer projection matrix (nopt, n_layer_modes, n_pupil_modes)
+            weights_array (numpy.ndarray): Array of weights for each optical source
+            regFactor (float, optional): Regularization factor for the pseudoinverse calculation
+                Default is 1e-8.
+
+        Returns:
+            popt (numpy.ndarray): Final projection matrix (n_dm_modes, n_layer_modes)
+        """
+        nopt = pm_full_dm.shape[0]
+        tpdm_pdm = np.zeros((pm_full_dm.shape[1], pm_full_dm.shape[1]))
+        tpdm_pl = np.zeros((pm_full_dm.shape[1], pm_full_layer.shape[1]))
+
+        total_weight = np.sum(weights_array)
+        for i in range(nopt):
+            pdm_i = pm_full_dm[i, :, :]      # shape: (n_dm_modes, n_pupil_modes)
+            pl_i = pm_full_layer[i, :, :]    # shape: (n_layer_modes, n_pupil_modes)
+            w = weights_array[i] / total_weight
+
+            tpdm_pdm += pdm_i @ pdm_i.T * w
+            tpdm_pl +=  pdm_i @ pl_i.T * w
+
+        # Pseudoinverse with regularization (tune eps and regFactor as needed)
+        eps = 1e-14
+        # tpdm_pdm is square, so we can use np.linalg.pinv directly
+        tpdm_pdm_inv = np.linalg.pinv(tpdm_pdm + regFactor * np.eye(tpdm_pdm.shape[0]), rcond=eps)
+        p_opt = tpdm_pdm_inv @ tpdm_pl
+        
+        return p_opt
 
     def list_wfs(self):
         """Return a list of all WFS names and types."""

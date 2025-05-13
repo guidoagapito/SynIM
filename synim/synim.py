@@ -524,7 +524,7 @@ def update_dm_pup(pup_diam_m, pup_mask, dm_array, dm_mask, dm_height, dm_rotatio
                   wfs_rotation, wfs_translation, wfs_magnification,
                   gs_pol_coo, gs_height, verbose=False, specula_convention=True):
     """
-    Update the DM and pupil array to be used in the computation of interaction matrix.
+    Update the DM and pupil array to be used in the computation of interaction or projection matrix.
     From Guido Agapito.
 
     Parameters:
@@ -598,7 +598,7 @@ def update_dm_pup(pup_diam_m, pup_mask, dm_array, dm_mask, dm_height, dm_rotatio
         trans_dm_array = np.transpose(trans_dm_array, (1, 0, 2))
         trans_dm_mask = np.transpose(trans_dm_mask)
         trans_pup_mask = np.transpose(trans_pup_mask)
-    
+
     return trans_dm_array, trans_dm_mask, trans_pup_mask
 
 def projection_matrix(pup_diam_m, pup_mask, dm_array, dm_mask, base_inv_array,
@@ -653,7 +653,7 @@ def projection_matrix(pup_diam_m, pup_mask, dm_array, dm_mask, base_inv_array,
         base_valid_values[:, i] = base_inv_array[:, :, i][valid_pixels]
 
     # Perform matrix multiplication with base_inv_array to get projection coefficients
-    projection = np.dot(base_valid_values.T, dm_valid_values)
+    projection = np.dot(dm_valid_values.T, base_valid_values)
 
     if verbose:
         print('Matrix multiplication done, projection shape:', projection.shape)
@@ -679,7 +679,7 @@ def projection_matrix(pup_diam_m, pup_mask, dm_array, dm_mask, base_inv_array,
         # Display projection coefficients
         plt.figure()
         for i in range(min(5, projection.shape[0])):
-            plt.plot(projection[i, :], label=f'Basis mode {i}')
+            plt.plot(projection[:,i], label=f'Basis mode {i}')
         plt.legend()
         plt.title('Projection coefficients')
         plt.xlabel('DM mode index')
@@ -733,8 +733,8 @@ def interaction_matrix(pup_diam_m, pup_mask, dm_array, dm_mask, dm_height, dm_ro
                   pup_diam_m, pup_mask, dm_array, dm_mask, dm_height, dm_rotation,
                   wfs_rotation, wfs_translation, wfs_magnification,
                   gs_pol_coo, gs_height, verbose=verbose, specula_convention=specula_convention)
-    
-    # Derivative od DM modes shape
+
+    # Derivative of DM modes shape
     der_dx, der_dy = compute_derivatives_with_extrapolation(trans_dm_array,mask=trans_dm_mask)
 
     if verbose:
