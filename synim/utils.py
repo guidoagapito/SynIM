@@ -729,7 +729,7 @@ def insert_interaction_matrix_part(im_full, intmat_obj, mode_idx, slope_idx_star
         return False
         
     # Calculate how many modes we can actually use from this IM
-    available_dm_modes = intmat_obj._intmat.shape[0]
+    available_dm_modes = intmat_obj.intmat.shape[0]
     actual_mode_indices = [idx for idx in mode_idx if idx < available_dm_modes]
     
     if not actual_mode_indices:
@@ -740,7 +740,7 @@ def insert_interaction_matrix_part(im_full, intmat_obj, mode_idx, slope_idx_star
         
     # Insert the valid modes into our combined matrix
     n_slopes = slope_idx_end - slope_idx_start
-    im_full[mode_idx, slope_idx_start:slope_idx_end] = intmat_obj._intmat[actual_mode_indices, :n_slopes]
+    im_full[mode_idx, slope_idx_start:slope_idx_end] = intmat_obj.intmat[actual_mode_indices, :n_slopes]
     
     if verbose:
         print(f"  Inserted {len(actual_mode_indices)} modes at indices {actual_mode_indices}, "
@@ -1839,33 +1839,33 @@ def compute_mmse_reconstructor(interaction_matrix, C_atm, noise_variance=None, C
     """
     if verbose:
         print("Starting MMSE reconstructor computation")
-    
+
     # Setup matrices
     A = interaction_matrix
-    
+
     # Handle noise covariance matrix
     if C_noise is None and noise_variance is not None:
         n_slopes_total = A.shape[1]
         n_wfs = len(noise_variance)
         n_slopes_per_wfs = n_slopes_total // n_wfs
-        
+
         if verbose:
             print(f"Building noise covariance matrix for {n_wfs} WFSs with {n_slopes_per_wfs} slopes each")
-        
+
         C_noise = np.zeros((n_slopes_total, n_slopes_total))
         for i in range(n_wfs):
             # Set the diagonal elements for this WFS
             start_idx = i * n_slopes_per_wfs
             end_idx = (i + 1) * n_slopes_per_wfs
             C_noise[start_idx:end_idx, start_idx:end_idx] = noise_variance[i] * np.eye(n_slopes_per_wfs)
-    
+
     # Check dimensions
     if A.shape[1] != C_atm.shape[0]:
         raise ValueError(f"A ({A.shape}) and C_atm ({C_atm.shape}) must have compatible dimensions")
-    
+
     if C_noise is not None and A.shape[0] != C_noise.shape[0]:
         raise ValueError(f"A ({A.shape}) and C_noise ({C_noise.shape}) must have compatible dimensions")
-    
+
     # Compute inverses if needed
     if not cinverse:
         # Check if matrices are diagonal
@@ -1890,9 +1890,9 @@ def compute_mmse_reconstructor(interaction_matrix, C_atm, noise_variance=None, C
             if verbose:
                 print("No C_noise provided, using identity matrix")
             C_noise_inv = np.eye(A.shape[1])
-            
+
         is_diag_atm = np.all(np.abs(np.diag(np.diag(C_atm)) - C_atm) < 1e-10)
-        
+
         if is_diag_atm:
             if verbose:
                 print("C_atm is diagonal, using optimized inversion")
@@ -1910,17 +1910,17 @@ def compute_mmse_reconstructor(interaction_matrix, C_atm, noise_variance=None, C
         # Matrices are already inverted
         C_atm_inv = C_atm
         C_noise_inv = C_noise if C_noise is not None else np.eye(A.shape[1])
-    
+
     # Compute H = A' Cz^(-1) A + Cx^(-1)
     if verbose:
         print("Computing H = A' Cz^(-1) A + Cx^(-1)")
-    
+
     # Check if C_noise_inv is scalar
     if isinstance(C_noise_inv, (int, float)) or (hasattr(C_noise_inv, 'size') and C_noise_inv.size == 1):
         H = C_noise_inv * np.dot(A.T, A) + C_atm_inv
     else:
         H = np.dot(A.T, np.dot(C_noise_inv, A)) + C_atm_inv
-    
+
     # Compute H^(-1)
     if verbose:
         print("Inverting H")
@@ -1930,19 +1930,19 @@ def compute_mmse_reconstructor(interaction_matrix, C_atm, noise_variance=None, C
         if verbose:
             print("Warning: H inversion failed, using pseudo-inverse")
         H_inv = np.linalg.pinv(H)
-    
+
     # Compute W = H^(-1) A' Cz^(-1)
     if verbose:
         print("Computing W = H^(-1) A' Cz^(-1)")
-    
+
     # Check if C_noise_inv is scalar
     if isinstance(C_noise_inv, (int, float)) or (hasattr(C_noise_inv, 'size') and C_noise_inv.size == 1):
         W_mmse = C_noise_inv * np.dot(H_inv, A.T)
     else:
         W_mmse = np.dot(H_inv, np.dot(A.T, C_noise_inv))
-    
+
     if verbose:
         print("MMSE reconstruction matrix computed")
         print(f"Matrix shape: {W_mmse.shape}")
-    
+
     return W_mmse

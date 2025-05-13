@@ -650,10 +650,10 @@ class ParamsManager:
                 intmat_obj = Intmat.restore(im_path)
 
                 if self.verbose:
-                    print(f"    IM shape: {intmat_obj._intmat.shape}")
+                    print(f"    IM shape: {intmat_obj.intmat.shape}")
 
                 # Fill the appropriate section of the full interaction matrix
-                im_full[mode_idx, n_slopes_per_wfs*ii:n_slopes_per_wfs*(ii+1)] = intmat_obj._intmat[mode_idx, :]
+                im_full[mode_idx, n_slopes_per_wfs*ii:n_slopes_per_wfs*(ii+1)] = intmat_obj.intmat[mode_idx, :]
 
         # Display summary
         if self.verbose:
@@ -1004,8 +1004,13 @@ class ParamsManager:
                 pm_path = os.path.join(output_dir, pm_filename)
                 if self.verbose:
                     print(f"--> Loading DM PM: {pm_filename}")
+
+                # check if the file exists
+                if not os.path.exists(pm_path):
+                    raise FileNotFoundError(f"File {pm_path} does not exist")
+
                 intmat_obj = Intmat.restore(pm_path)
-                intmat_data = intmat_obj._intmat
+                intmat_data = intmat_obj.intmat
 
                 # Pile the arrays on the second dimension
                 if jj == 0:
@@ -1038,7 +1043,7 @@ class ParamsManager:
                 if self.verbose:
                     print(f"--> Loading Layer PM: {pm_filename}")
                 intmat_obj = Intmat.restore(pm_path)
-                intmat_data = intmat_obj._intmat
+                intmat_data = intmat_obj.intmat
 
                 # Pile the arrays on the second dimension
                 if jj == 0:
