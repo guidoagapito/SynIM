@@ -62,13 +62,17 @@ for i, dm in enumerate(dm_indices):
     dm2d = dm2d[mode_indices[i],:]   # Select only the first n modes
     print("dm2d shape", dm2d.shape)
     print("computing covariance matrix for DM", i+1)
+    print("params['pup_diam_m']", params['pup_diam_m'])
     C_atm = compute_ifs_covmat(
         params['dm_mask'], params['pup_diam_m'], dm2d, r0, L0, 
         oversampling=2, verbose=False
     )
+    print("Done.")
     # Create proper indexing for block assignment using np.ix_
     idx = np.ix_(mode_indices[i], mode_indices[i])
-    C_atm_full[idx] = C_atm
+    C_atm_full[idx] = C_atm * (500/2/np.pi)**2
+
+print("C_atm_full", C_atm_full.diagonal())
 
 display_covmat = False
 if display_covmat:
@@ -81,10 +85,21 @@ if display_covmat:
 
 # 2 Create the noise covariance matrix
 # computes noise from magnitude and 0-magnitude flux
-magnitude = np.array([10,16,18])
-flux0 = 7.40e-11
-flux = flux0 * 10**(-0.4*magnitude)
-noise_variance = 1/np.sqrt(flux)
+params = params_mgr.params
+magnitude = np.array([params['source_ngs1']['magnitude'],params['source_ngs2']['magnitude'],params['source_ngs3']['magnitude']])
+flux0 = 7.27e11
+flux = flux0 * 10**(-0.4*magnitude) * 0.002
+print("flux", flux)
+sa_side_in_m = params['main']['pixel_pupil'] * params['main']['pixel_pitch'] / params['sh_ngs1']['subap_on_diameter']
+sensor_fov = params['sh_ngs1']['sensor_pxscale'] * params['sh_ngs1']['subap_npx']
+rad2arcsec = 3600.*180./np.pi
+spot_size = 2 * params['sh_ngs1']['sensor_pxscale']
+sigma2inArcsec2 = spot_size**2./2.35**2./flux
+sigma2inNm2 = sigma2inArcsec2 * (1./rad2arcsec * sa_side_in_m / 4. * 1e9)**2.
+sigma2inSlope = sigma2inArcsec2 * 1./(sensor_fov/2.)**2.
+print("sigma2inSlope", sigma2inSlope)
+
+noise_variance = sigma2inSlope
 n_slopes_total = im_full.shape[1]
 
 C_noise = np.zeros((n_slopes_total, n_slopes_total))
@@ -93,8 +108,6 @@ for i in range(n_wfs):
     start_idx = i * n_slopes_per_wfs
     end_idx = (i + 1) * n_slopes_per_wfs
     C_noise[start_idx:end_idx, start_idx:end_idx] = noise_variance[i] * np.eye(n_slopes_per_wfs)
-    
-print("C_noise", C_noise)
 
 if display_covmat: 
     plt.figure(figsize=(10, 8))
@@ -108,12 +121,9 @@ if display_covmat:
 reconstructor = compute_mmse_reconstructor(im_full.T, C_atm_full, noise_variance=None, C_noise=C_noise, 
                         cinverse=False, verbose=False)
 
-# Print some statistics about the matrices
-print(f"Interaction matrix shape: {im_full.shape}")
-print(f"Interaction matrix dtype: {im_full.dtype}")
-print(f"Interaction matrix min: {im_full.min()}")
-print(f"Interaction matrix max: {im_full.max()}")
-print(f"Interaction matrix mean: {im_full.mean()}")
+print("Full reconstructor matrix:")
+df = pd.DataFrame(reconstructor)
+print(df.to_string(float_format=lambda x: f"{x:.2f}"))
 # -------------------------------------------------------------------
 
 # Visualize the matrix

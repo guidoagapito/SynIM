@@ -56,13 +56,13 @@ source_lgs6: { <<: *LGS_SOURCE, polar_coordinates: [45.0, 300.0] }
 
 source_ngs1: &NGS_SOURCE
   class:             'Source'
-  polar_coordinates:  [55.0, 0.0]         # [arcsec, degrees] source polar coordinates
+  polar_coordinates:  [46.2,303.5]         # [arcsec, degrees] source polar coordinates
   height:            .inf                # Source height [m]
-  magnitude:         10.0                # source magnitude
+  magnitude:         13.5                # source magnitude
   wavelengthInNm:    1650                # [nm] wavelength
 
-source_ngs2: { <<: *NGS_SOURCE, polar_coordinates: [55.0, 120.0] }
-source_ngs3: { <<: *NGS_SOURCE, polar_coordinates: [55.0, 240.0] }
+source_ngs2: { <<: *NGS_SOURCE, polar_coordinates: [42.5,  78.9], magnitude: 13.6 }
+source_ngs3: { <<: *NGS_SOURCE, polar_coordinates: [42.7, 197.0], magnitude: 16.0 }
 
 source_ref1: &REF_SOURCE
   class:             'Source'
