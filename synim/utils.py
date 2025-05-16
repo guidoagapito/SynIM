@@ -554,7 +554,10 @@ def load_influence_functions(cm, dm_params, pixel_pupil, verbose=False):
             m2c_path = cm.filename('m2c', m2c_tag)
             m2c = M2C.restore(m2c_path)
             # multiply the influence function by the M2C
-            ifunc.influence_function = ifunc.influence_function @ m2c.m2c
+            ifunc.influence_function = m2c.m2c.T @ ifunc.influence_function
+
+        if ifunc.influence_function.shape[0] > dm_params['nmodes']:
+            ifunc.influence_function = ifunc.influence_function[:dm_params['nmodes'],:]
 
         # Convert influence function from 2D to 3D
         if ifunc.mask_inf_func is not None:           
