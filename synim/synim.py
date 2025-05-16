@@ -548,6 +548,12 @@ def update_dm_pup(pup_diam_m, pup_mask, dm_array, dm_mask, dm_height, dm_rotatio
     - trans_pup_mask: pupil mask
     """
 
+    if specula_convention:
+        # transpose the DM array, mask and pupil mask to match the specula convention
+        dm_array = np.transpose(dm_array, (1, 0, 2))
+        dm_mask = np.transpose(dm_mask)
+        pup_mask = np.transpose(pup_mask)
+
     pup_diam_pix = pup_mask.shape[0]
     pixel_pitch = pup_diam_m/pup_diam_pix
 
@@ -592,12 +598,6 @@ def update_dm_pup(pup_diam_m, pup_mask, dm_array, dm_mask, dm_height, dm_rotatio
 
     if verbose:
         print('Mask applied.')
-
-    if specula_convention:
-        # transpose the DM array, mask and pupil mask to match the specula convention
-        trans_dm_array = np.transpose(trans_dm_array, (1, 0, 2))
-        trans_dm_mask = np.transpose(trans_dm_mask)
-        trans_pup_mask = np.transpose(trans_pup_mask)
 
     return trans_dm_array, trans_dm_mask, trans_pup_mask
 
