@@ -55,6 +55,7 @@ print(df.to_string(float_format=lambda x: f"{x:.6e}"))
 r0 = 0.2
 L0 = 25
 C_atm_full = np.zeros((im_full.shape[0], im_full.shape[0]))
+weights = [1,0.15]
 for i, dm in enumerate(dm_indices):
     params = params_mgr.prepare_interaction_matrix_params(wfs_type='ngs', 
                                                          wfs_index=1, dm_index=dm)
@@ -70,7 +71,7 @@ for i, dm in enumerate(dm_indices):
     print("Done.")
     # Create proper indexing for block assignment using np.ix_
     idx = np.ix_(mode_indices[i], mode_indices[i])
-    C_atm_full[idx] = C_atm * (500/2/np.pi)**2
+    C_atm_full[idx] = C_atm * weights[i] * (500/2/np.pi)**2
 
 print("C_atm_full", C_atm_full.diagonal())
 
