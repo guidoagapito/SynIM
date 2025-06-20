@@ -692,7 +692,7 @@ def find_subapdata(cm, wfs_params, wfs_key, params, verbose=False):
                 print("     Loading subapdata from slopec, tag:", slopec_params['subapdata_object'])
             subap_tag = slopec_params['subapdata_object']
             subap_path = cm.filename('subapdata', subap_tag)
-            
+ 
     if subap_path is None:
         if verbose:
             print("     No subapdata file found. Using default.")
@@ -707,7 +707,7 @@ def find_subapdata(cm, wfs_params, wfs_key, params, verbose=False):
             print("     Loading subapdata from file:", subap_path)
         subap_data = SubapData.restore(subap_path)
         return np.transpose(np.asarray(np.where(subap_data.single_mask())))
-    
+
     return None
 
 def insert_interaction_matrix_part(im_full, intmat_obj, mode_idx, slope_idx_start, slope_idx_end, verbose=False):
@@ -730,25 +730,25 @@ def insert_interaction_matrix_part(im_full, intmat_obj, mode_idx, slope_idx_star
         if verbose:
             print(f"  Warning: Invalid indices for matrix insertion")
         return False
-        
+
     # Calculate how many modes we can actually use from this IM
     available_dm_modes = intmat_obj.intmat.shape[0]
     actual_mode_indices = [idx for idx in mode_idx if idx < available_dm_modes]
-    
+
     if not actual_mode_indices:
         if verbose:
             print(f"  Warning: No valid mode indices. "
                   f"Available modes: {available_dm_modes}, requested: {mode_idx}")
         return False
-        
+
     # Insert the valid modes into our combined matrix
     n_slopes = slope_idx_end - slope_idx_start
     im_full[mode_idx, slope_idx_start:slope_idx_end] = intmat_obj.intmat[actual_mode_indices, :n_slopes]
-    
+
     if verbose:
         print(f"  Inserted {len(actual_mode_indices)} modes at indices {actual_mode_indices}, "
               f"slopes {slope_idx_start}:{slope_idx_end}")
-    
+
     return True
 
 def build_source_filename_part(source_config):
@@ -762,7 +762,7 @@ def build_source_filename_part(source_config):
         list: Filename parts for source
     """
     parts = []
-    
+
     if 'polar_coordinates' in source_config:
         dist, angle = source_config['polar_coordinates']
         parts.append(f"pd{dist:.1f}a{angle:.0f}")
@@ -772,10 +772,10 @@ def build_source_filename_part(source_config):
     elif 'pol_coords' in source_config:
         dist, angle = source_config['pol_coords']
         parts.append(f"pd{dist:.1f}a{angle:.0f}")
-    
+
     if 'height' in source_config:
         parts.append(f"h{source_config['height']:.0f}")
-    
+
     return parts
 
 def build_pupil_filename_part(pupil_params):
@@ -789,15 +789,15 @@ def build_pupil_filename_part(pupil_params):
         list: Filename parts for pupil
     """
     parts = []
-    
+
     if pupil_params:
         ps = pupil_params.get('pixel_pupil', 0)
         pp = pupil_params.get('pixel_pitch', 0)
         parts.append(f"ps{ps}p{pp:.4f}")
-        
+
         if 'obsratio' in pupil_params and pupil_params['obsratio'] > 0:
             parts.append(f"o{pupil_params['obsratio']:.3f}")
-    
+
     return parts
 
 def build_wfs_filename_part(wfs_config, wfs_type):
@@ -812,21 +812,21 @@ def build_wfs_filename_part(wfs_config, wfs_type):
         list: Filename parts for WFS
     """
     parts = []
-    
+
     if wfs_type == 'sh':
         nsubaps = wfs_config.get('subap_on_diameter', 0)
         wl = wfs_config.get('wavelengthInNm', 0)
         fov = wfs_fov_from_config(wfs_config)
         npx = wfs_config.get('subap_npx', 0)
         parts.append(f"sh{nsubaps}x{nsubaps}_wl{wl}_fv{fov:.1f}_np{npx}")
-    
+
     elif wfs_type == 'pyr':
         pup_diam = wfs_config.get('pup_diam', 0)
         wl = wfs_config.get('wavelengthInNm', 0)
         fov = wfs_fov_from_config(wfs_config)
         mod_amp = wfs_config.get('mod_amp', 0)
         parts.append(f"pyr{pup_diam:.1f}_wl{wl}_fv{fov:.1f}_ma{mod_amp:.1f}")
-    
+
     return parts
 
 def build_dm_filename_part(dm_config, config=None):
@@ -841,13 +841,13 @@ def build_dm_filename_part(dm_config, config=None):
         list: Filename parts for DM
     """
     parts = []
-    
+
     height = dm_config.get('height', 0)
     parts.append(f"dmH{height}")
-    
+
     # Check for custom influence functions - use config for simple configs
     target_config = config['dm'] if config and 'dm' in config else dm_config
-    
+
     if 'ifunc_tag' in target_config:
         parts.append(f"ifunc_{target_config['ifunc_tag']}")
         if 'm2c_tag' in target_config:
@@ -863,7 +863,7 @@ def build_dm_filename_part(dm_config, config=None):
         # Default case
         nmodes = dm_config.get('nmodes', 0)
         parts.append(f"nm{nmodes}")
-    
+
     return parts
 
 def dm3d_to_2d(dm_array, mask):
@@ -1221,7 +1221,7 @@ def prepare_interaction_matrix_params(params, wfs_type=None, wfs_index=None, dm_
     else:
         # NGS and REF are at infinite distance
         gs_height = float('inf')
-    
+
     # Get source polar coordinates
     gs_pol_coo = extract_source_coordinates(params, wfs_key)
 
