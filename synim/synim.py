@@ -29,10 +29,10 @@ def compute_derivatives_with_extrapolation(data,mask=None):
 
     # Compute x derivative
     dx = np.gradient(data, axis=(1), edge_order=1)
-    
+
     # Compute y derivative
     dy = np.gradient(data, axis=(0), edge_order=1)
-    
+
     if mask is not None:
         idx = np.ravel(np.array(np.where(mask.flatten() == 0)))
         dx2D = dx.reshape((-1,dx.shape[2]))
@@ -41,7 +41,7 @@ def compute_derivatives_with_extrapolation(data,mask=None):
         dy2D[idx,:] = np.nan
         dx = dx2D.reshape(dx.shape)
         dy = dy2D.reshape(dy.shape)
-        
+
     return dx, dy
 
 def integrate_derivatives(dx, dy):
@@ -58,7 +58,7 @@ def integrate_derivatives(dx, dy):
             - integrated_x: Integrated x derivative.
             - integrated_y: Integrated y derivative.
     """
-    
+
     # Integrate x derivative along the x-axis
     integrated_x = np.cumsum(dx, axis=1)
 
@@ -85,24 +85,24 @@ def calculate_extrapolation_indices_coeffs(mask, debug=False, debug_pixels=None)
             - reference_indices: Array of reference pixel indices for extrapolation.
             - coefficients: Coefficients for linear extrapolation.
     """
-    
+
     # Convert the mask to boolean
     binary_mask = mask.astype(bool)
-    
+
     # Identify edge pixels (outside but adjacent to the mask) using binary dilation
     dilated_mask = binary_dilation(binary_mask)
     edge_pixels = np.where(dilated_mask & ~binary_mask)
     edge_pixels_linear = np.ravel_multi_index(edge_pixels, mask.shape)
-    
+
     if debug:
         print(f"Found {len(edge_pixels[0])} edge pixels to extrapolate.")
-        
+
         # Plot the original mask and the edge pixels
         plt.figure(figsize=(10, 4))
         plt.subplot(121)
         plt.imshow(binary_mask, cmap='gray', interpolation='nearest')
         plt.title('Original Mask')
-        
+
         plt.subplot(122)
         edge_mask = np.zeros_like(binary_mask)
         edge_mask[edge_pixels] = 1
@@ -111,11 +111,11 @@ def calculate_extrapolation_indices_coeffs(mask, debug=False, debug_pixels=None)
         plt.title('Edge Pixels to Extrapolate (red)')
         plt.tight_layout()
         plt.show()
-    
+
     # Preallocate arrays for reference indices and coefficients
     reference_indices = np.full((len(edge_pixels[0]), 8), -1, dtype=np.int32)
     coefficients = np.zeros((len(edge_pixels[0]), 8), dtype=np.float32)
-    
+
     # Directions for extrapolation (y+1, y-1, x+1, x-1)
     directions = [
         (1, 0),  # y+1 (down)
@@ -123,7 +123,7 @@ def calculate_extrapolation_indices_coeffs(mask, debug=False, debug_pixels=None)
         (0, 1),  # x+1 (right)
         (0, -1)  # x-1 (left)
     ]
-    
+
     # Iterate over each edge pixel
     problem_indices = []
     for i, (y, x) in enumerate(zip(*edge_pixels)):
@@ -134,12 +134,12 @@ def calculate_extrapolation_indices_coeffs(mask, debug=False, debug_pixels=None)
                 if p[0] == y and p[1] == x:
                     is_debug_pixel = True
                     break
-        
+
         valid_directions = 0
-        
+
         if is_debug_pixel:
             print(f"\n[DEBUG] Detailed analysis for pixel [{y},{x}]:")
-        
+
         # Examine the 4 directions
         for dir_idx, (dy, dx) in enumerate(directions):
             # Coordinates of reference points at distance 1 and 2
@@ -150,7 +150,7 @@ def calculate_extrapolation_indices_coeffs(mask, debug=False, debug_pixels=None)
             valid_ref1 = (0 <= y1 < mask.shape[0] and 
                           0 <= x1 < mask.shape[1] and 
                           binary_mask[y1, x1])
-                          
+        
             valid_ref2 = (0 <= y2 < mask.shape[0] and 
                           0 <= x2 < mask.shape[1] and 
                           binary_mask[y2, x2])
@@ -192,35 +192,35 @@ def calculate_extrapolation_indices_coeffs(mask, debug=False, debug_pixels=None)
                 # Set coefficients to 0 if the first reference is invalid
                 coefficients[i, 2*dir_idx] = 0.0
                 coefficients[i, 2*dir_idx + 1] = 0.0
-        
+
         # Normalize coefficients based on the number of valid directions
         if valid_directions > 1:
             factor = 1.0 / valid_directions
-            
+
             if is_debug_pixel:
                 print(f"  Valid directions: {valid_directions}, factor: {factor}")
                 print("  Coefficients before normalization:", coefficients[i])
-            
+
             for dir_idx in range(4):
                 if coefficients[i, 2*dir_idx] != 0:
                     coefficients[i, 2*dir_idx] *= factor
                     if coefficients[i, 2*dir_idx + 1] != 0:
                         coefficients[i, 2*dir_idx + 1] *= factor
-            
+
             if is_debug_pixel:
                 print("  Coefficients after normalization:", coefficients[i])
                 problem_indices.append(i)
 
     if debug:
         print(f"Average valid directions per pixel: {np.sum(coefficients != 0) / (len(edge_pixels[0]) * 2):.2f}")
-        
+
         # Display coefficient matrix for the first 10 pixels
         if len(edge_pixels[0]) >= 10:
             print("\nCoefficients for the first 10 pixels:")
             for i in range(min(10, len(edge_pixels[0]))):
                 print(f"Pixel {i} ({edge_pixels[0][i]}, {edge_pixels[1][i]}): {coefficients[i]}")
                 print(f"Indices: {reference_indices[i]}")
-    
+
     return edge_pixels_linear, reference_indices, coefficients
 
 def apply_extrapolation(data, edge_pixels, reference_indices, coefficients, debug=False, problem_indices=None):
@@ -498,25 +498,13 @@ def rotshiftzoom_array(input_array, dm_translation=(0.0, 0.0), dm_rotation=0.0, 
     offset = center - np.dot(combined_matrix, output_center) - np.dot(dm_matrix, dm_translation) - wfs_translation
 
     # Apply transformation
-    if is_3d:
-        # For 3D arrays, apply transformation to each slice
-        for i in range(input_array.shape[2]):
-            output[:, :, i] = affine_transform(
-                input_array[:, :, i],
-                combined_matrix,
-                offset=offset,
-                output_shape=output_size,
-                order=1
-            )
-    else:
-        # For 2D arrays
-        output = affine_transform(
-            input_array,
-            combined_matrix,
-            offset=offset,
-            output_shape=output_size,
-            order=1
-        )
+    output = affine_transform(
+        input_array,
+        combined_matrix,
+        offset=offset,
+        output_shape=output_size if not is_3d else output_size + (input_array.shape[2],),
+        order=1
+    )
 
     return output
 
