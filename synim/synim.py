@@ -493,9 +493,21 @@ def rotshiftzoom_array(input_array, dm_translation=(0.0, 0.0), dm_rotation=0.0, 
     # Combine transformations (first DM, then WFS)
     combined_matrix = np.dot(wfs_matrix, dm_matrix)
 
+    # For 3D arrays, extend the transformation matrix to 3x3
+    if is_3d:
+        # Create a 3x3 identity matrix and insert the 2x2 transformation in the top-left
+        combined_matrix_3d = np.eye(3)
+        combined_matrix_3d[:2, :2] = combined_matrix
+        combined_matrix = combined_matrix_3d
+
     # Calculate offset
     output_center = np.array(output_size) / 2.0
-    offset = center - np.dot(combined_matrix, output_center) - np.dot(dm_matrix, dm_translation) - wfs_translation
+    if is_3d:
+        # For 3D, calculate offset only for the first two dimensions
+        offset_2d = center[:2] - np.dot(combined_matrix[:2, :2], output_center) - np.dot(dm_matrix, dm_translation) - wfs_translation
+        offset = np.array([offset_2d[0], offset_2d[1], 0])
+    else:
+        offset = center - np.dot(combined_matrix, output_center) - np.dot(dm_matrix, dm_translation) - wfs_translation
 
     # Apply transformation
     output = affine_transform(
