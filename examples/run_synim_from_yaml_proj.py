@@ -25,15 +25,11 @@ print(f"YAML file path: {yaml_file}")
 params_mgr = ParamsManager(yaml_file, root_dir=root_dir, verbose=True)
 pm_paths = params_mgr.compute_projection_matrices(overwrite=False)
 
-pm_full_dm, pm_full_layer, weights_array = params_mgr.assemble_projection_matrices(output_dir=output_pm_dir, save=False)
-
-print(f"Shape of pm_full_dm: {pm_full_dm.shape}")
-print(f"Shape of pm_full_layer: {pm_full_layer.shape}")
-print(f"Weights array: {weights_array}")
-
-p_opt = params_mgr.calc_final_projection_matrix(pm_full_dm, pm_full_layer, weights_array, regFactor=1e-8)
+p_opt, pm_full_dm, pm_full_layer = params_mgr.compute_projection_matrix(regFactor=1e-8, output_dir=output_pm_dir, save=False)
 
 print("p_opt shape:", p_opt.shape)
+print("pm_full_dm shape:", pm_full_dm.shape if pm_full_dm is not None else "None")
+print("pm_full_layer shape:", pm_full_layer.shape if pm_full_layer is not None else "None")
 
 # Visualize slices of the 4D matrices
 if pm_full_dm is not None:
