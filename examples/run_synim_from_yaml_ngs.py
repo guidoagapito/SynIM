@@ -38,8 +38,8 @@ print(f"Output directory: {output_im_dir}")
 
 # -------------------------------------------------------------------
 # Count NGS WFSs in the configuration
-ngs_wfs_list = [wfs for wfs in params_mgr.wfs_list if 'ngs' in wfs['name']]
-n_wfs = len(ngs_wfs_list)
+out = params_mgr.count_mcao_stars()
+n_wfs = out['n_ngs']
 print(f"Found {n_wfs} NGS WFSs")
 
 im_full, n_slopes_per_wfs, mode_indices, dm_indices = params_mgr.assemble_interaction_matrices(
