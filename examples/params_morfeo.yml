@@ -344,7 +344,7 @@ dm1:
   type_str:          'zernike'              # modes type
   nmodes:            100                     # number of modes
   npixels:           486                    # linear dimension of DM phase array
-  obsratio:          0.28                    # obstruction dimension ratio w.r.t. diameter
+  obsratio:          0.25                    # obstruction dimension ratio w.r.t. diameter
   height:            600                      # DM height [m]
   inputs:
       in_command: 'sum_lo_avc.out_value'

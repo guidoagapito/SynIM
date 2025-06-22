@@ -25,7 +25,7 @@ def rebin(array, new_shape, method='average'):
     Parameters:
     - array: numpy 2D or 3D array
     - new_shape: 2 elements tuple
-    - method: 'sum' or 'average', used in the compression case
+    - method: 'sum' or 'average' or 'nanmean', used in the compression case
 
     Returns:
     - rebinned_array: numpy 2D or 3D array
@@ -60,6 +60,11 @@ def rebin(array, new_shape, method='average'):
                 rebinned_array = array[:M*(m//M), :N*(n//N), :].reshape((M, m//M, N, n//N, shape[2])).mean(axis=(1, 3))
             else:
                 rebinned_array = array[:M*(m//M), :N*(n//N)].reshape((M, m//M, N, n//N)).mean(axis=(1, 3))
+        elif method == 'nanmean':
+            if len(shape) == 3:
+                rebinned_array = np.nanmean(array[:M*(m//M), :N*(n//N), :].reshape((M, m//M, N, n//N, shape[2])), axis=(1, 3))
+            else:
+                rebinned_array = np.nanmean(array[:M*(m//M), :N*(n//N)].reshape((M, m//M, N, n//N)), axis=(1, 3))
         else:
             raise ValueError("Unsupported rebin method. Use 'sum' or 'average'.")  
 
@@ -1895,7 +1900,7 @@ def compute_mmse_reconstructor(interaction_matrix, C_atm, noise_variance=None, C
         # Check if matrices are diagonal
         if C_noise is not None:
             is_diag_noise = np.all(np.abs(np.diag(np.diag(C_noise)) - C_noise) < 1e-10)
-            
+
             if is_diag_noise:
                 if verbose:
                     print("C_noise is diagonal, using optimized inversion")
