@@ -98,8 +98,51 @@ class ParamsManager:
                 precision=0
             )
             pup_mask = pupilstop.A
- 
+
         return pup_mask
+
+    def count_mcao_stars(self):
+        """
+        Count the number of LGS, NGS, reference stars, DMs, optimisation optics, science stars and layers
+        in the parameter configuration, similar to count_mcao_stars of IDL.
+
+            Returns:
+        dict: Dictionary with counts.
+        """
+        def count_keys_with_prefix(params, prefix):
+            # Count keys starting with prefix and followed by a number
+            return len([k for k in params.keys() if re.match(rf"{prefix}\d+$", k)])
+
+        params = self.params
+
+        out = {}
+        out['n_lgs'] = count_keys_with_prefix(params, 'source_lgs')
+        out['n_ngs'] = count_keys_with_prefix(params, 'source_ngs')
+        out['n_ref'] = count_keys_with_prefix(params, 'source_ref')
+
+        if 'source_opt1' in params:
+            out['n_opt'] = count_keys_with_prefix(params, 'source_opt')
+            out['n_gs'] = out['n_lgs'] + out['n_ngs'] + out['n_opt']
+        else:
+            out['n_opt'] = 0
+            out['n_gs'] = out['n_lgs'] + out['n_ngs']
+
+        if 'dm1' in params:
+            out['n_dm'] = count_keys_with_prefix(params, 'dm')
+        else:
+            out['n_dm'] = 1
+
+        if 'science_source1' in params:
+            out['n_star'] = count_keys_with_prefix(params, 'science_source')
+        else:
+            out['n_star'] = 0
+
+        if 'layer1' in params:
+            out['n_rec_layer'] = count_keys_with_prefix(params, 'layer')
+        else:
+            out['n_rec_layer'] = 0
+
+        return out
 
     def get_dm_params(self, component_idx, is_layer=False, cut_start_mode=False):
         """
@@ -278,17 +321,17 @@ class ParamsManager:
         wfs_translation = wfs_params.get('translation', [0.0, 0.0])
         wfs_magnification = wfs_params.get('magnification', 1.0)
         wfs_fov_arcsec = wfs_fov_from_config(wfs_params)
-        
+
         if wfs_type_detected == 'sh':
             # Shack-Hartmann specific parameters
             wfs_nsubaps = wfs_params.get('subap_on_diameter', 0)
         else:
             # Pyramid specific parameters
             wfs_nsubaps = wfs_params.get('pup_diam', 0)
-        
+
         # Load SubapData for valid subapertures
         idx_valid_sa = find_subapdata(self.cm, wfs_params, wfs_key, self.params, verbose=self.verbose)
-        
+
         # Guide star parameters
         if source_type == 'lgs':
             # LGS is at finite height
