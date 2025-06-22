@@ -24,8 +24,24 @@ def compute_derivatives_with_extrapolation(data,mask=None):
             mask, debug=False, debug_pixels=None)
         for i in range(data.shape[2]):
             # Apply extrapolation
-            data[:,:,i] = apply_extrapolation(data[:,:,i], edge_pixels, reference_indices, coefficients, 
+            temp = data[:,:,i].copy()
+            data[:,:,i] = apply_extrapolation(data[:,:,i], edge_pixels, reference_indices, coefficients,
                                               debug=True, problem_indices=None)
+            debug_extrapolation = False
+            if i == 0 and debug_extrapolation:
+                plt.figure(figsize=(8, 6))
+                plt.imshow(temp, cmap='seismic', interpolation='nearest')
+                plt.colorbar()
+                plt.title(f'Original data slice {i}')
+                plt.figure(figsize=(8, 6))
+                plt.imshow(data[:,:,i], cmap='seismic', interpolation='nearest')
+                plt.colorbar()
+                plt.title(f'Extrapolated data slice {i}')
+                plt.figure(figsize=(8, 6))
+                plt.imshow(data[:,:,i] - temp, cmap='seismic', interpolation='nearest')
+                plt.colorbar()
+                plt.title(f'Difference after extrapolation for slice {i}')
+                plt.show()
 
     # Compute x derivative
     dx = np.gradient(data, axis=(1), edge_order=1)
@@ -740,7 +756,7 @@ def interaction_matrix(pup_diam_m, pup_mask, dm_array, dm_mask, dm_height, dm_ro
     if verbose:
         print('Derivatives done, size of der_dx and der_dy:', der_dx.shape, der_dy.shape)
 
-    # estimate an array proportional to flux per sub-aperture from the mask   
+    # estimate an array proportional to flux per sub-aperture from the mask
     if np.isnan(trans_pup_mask).any():
         np.nan_to_num(trans_pup_mask, copy=False, nan=0.0, posinf=None, neginf=None)
     if np.isnan(trans_dm_mask).any():
@@ -760,13 +776,13 @@ def interaction_matrix(pup_diam_m, pup_mask, dm_array, dm_mask, dm_height, dm_ro
     if np.isnan(der_dy).any():
         np.nan_to_num(der_dy, copy=False, nan=0.0, posinf=None, neginf=None)
 
-    # apply pup mask
-    der_dx = apply_mask(der_dx,trans_pup_mask)
-    der_dy = apply_mask(der_dy,trans_pup_mask)
+    # apply pup mask with NaN on pixels outside the mask
+    der_dx = np.where(trans_pup_mask[..., np.newaxis], der_dx, np.nan)
+    der_dy = np.where(trans_pup_mask[..., np.newaxis], der_dy, np.nan)
 
     scale_factor = (der_dx.shape[0]/wfs_nsubaps)/np.median(rebin(trans_pup_mask, (wfs_nsubaps,wfs_nsubaps), method='average'))
-    WFS_signal_x = rebin(der_dx, (wfs_nsubaps,wfs_nsubaps), method='average')*scale_factor
-    WFS_signal_y = rebin(der_dy, (wfs_nsubaps,wfs_nsubaps), method='average')*scale_factor
+    wfs_signal_x = rebin(der_dx, (wfs_nsubaps,wfs_nsubaps), method='nanmean') * scale_factor
+    wfs_signal_y = rebin(der_dy, (wfs_nsubaps,wfs_nsubaps), method='nanmean') * scale_factor
 
     debug_rebin_plot = False
     if debug_rebin_plot:
@@ -782,46 +798,50 @@ def interaction_matrix(pup_diam_m, pup_mask, dm_array, dm_mask, dm_height, dm_ro
         axs[0, 1].axis('off') # empty cell
 
         # second line: Derivate
-        im1 = axs[1, 0].imshow(der_dx[:, :, idx_mode], cmap='seismic')
+        vmax = np.nanmax(np.abs([
+            der_dx[:, :, idx_mode],
+            der_dy[:, :, idx_mode],
+        ]))
+        vmin = -vmax
+        im1 = axs[1, 0].imshow(der_dx[:, :, idx_mode], cmap='seismic', vmin=vmin, vmax=vmax)
         axs[1, 0].set_title(f'Derivative dx (mode {idx_mode})')
         fig.colorbar(im1, ax=axs[1, 0])
-        im2 = axs[1, 1].imshow(der_dy[:, :, idx_mode], cmap='seismic')
+        im2 = axs[1, 1].imshow(der_dy[:, :, idx_mode], cmap='seismic', vmin=vmin, vmax=vmax)
         axs[1, 1].set_title(f'Derivative dy (mode {idx_mode})')
         fig.colorbar(im2, ax=axs[1, 1])
 
         # Third line: WFS signals
-        im3 = axs[2, 0].imshow(WFS_signal_x[:, :, idx_mode], cmap='seismic')
+        vmax = np.nanmax(np.abs([
+            wfs_signal_x[:, :, idx_mode],
+            wfs_signal_y[:, :, idx_mode]
+        ]))
+        vmin = -vmax
+        im3 = axs[2, 0].imshow(wfs_signal_x[:, :, idx_mode], cmap='seismic', vmin=vmin, vmax=vmax)
         axs[2, 0].set_title(f'WFS signal x (mode {idx_mode})')
         fig.colorbar(im3, ax=axs[2, 0])
-        im4 = axs[2, 1].imshow(WFS_signal_y[:, :, idx_mode], cmap='seismic')
+        im4 = axs[2, 1].imshow(wfs_signal_y[:, :, idx_mode], cmap='seismic', vmin=vmin, vmax=vmax)
         axs[2, 1].set_title(f'WFS signal y (mode {idx_mode})')
         fig.colorbar(im4, ax=axs[2, 1])
-
         fig.suptitle(f'DM, derivatives, and WFS signals (mode {idx_mode})')
         plt.tight_layout()
+
         plt.show()
 
     if verbose:
-        print('Rebin done, size of WFS_signal_x and WFS_signal_y:', WFS_signal_x.shape, WFS_signal_y.shape)
+        print('Rebin done, size of wfs_signal_x and wfs_signal_y:', wfs_signal_x.shape, wfs_signal_y.shape)
 
-    # normalize by dm_mask_sa to get the correct value at the edge of the dm
-    # because at the edge the average of the rebin is done with pixel outside the
-    # dm that have 0 values
-    dm_mask_sa[dm_mask_sa<0.5] = 0
-    WFS_signal_x = apply_mask(WFS_signal_x,dm_mask_sa,norm=True)
-    WFS_signal_y = apply_mask(WFS_signal_y,dm_mask_sa,norm=True)
+    # Create a combined mask for the valid sub-aperture
+    combined_mask_sa = (dm_mask_sa >= 0.5) & (pup_mask_sa >= 0.5)
 
-    # set to zero the signal outside the pupil
-    pup_mask_sa[pup_mask_sa<0.5] = 0
-    pup_mask_sa[pup_mask_sa>=0.5] = 1
-    WFS_signal_x = apply_mask(WFS_signal_x,pup_mask_sa,norm=False)
-    WFS_signal_y = apply_mask(WFS_signal_y,pup_mask_sa,norm=False)
+    # Apply the combined mask to the WFS signals
+    wfs_signal_x = np.where(combined_mask_sa[..., np.newaxis], wfs_signal_x, 0)
+    wfs_signal_y = np.where(combined_mask_sa[..., np.newaxis], wfs_signal_y, 0)
 
     if verbose:
         print('Mask applied.')
 
-    WFS_signal_x_2D = WFS_signal_x.reshape((-1,WFS_signal_x.shape[2]))
-    WFS_signal_y_2D = WFS_signal_y.reshape((-1,WFS_signal_y.shape[2]))
+    wfs_signal_x_2D = wfs_signal_x.reshape((-1,wfs_signal_x.shape[2]))
+    wfs_signal_y_2D = wfs_signal_y.reshape((-1,wfs_signal_y.shape[2]))
 
     if idx_valid_sa is not None:
 
@@ -844,19 +864,19 @@ def interaction_matrix(pup_diam_m, pup_mask, dm_array, dm_mask, dm_height, dm_ro
             linear_indices = idx_valid_sa_new[:,0] * width + idx_valid_sa_new[:,1]
 
             # Use these linear indices to select elements from flattened arrays
-            WFS_signal_x_2D = WFS_signal_x_2D[linear_indices.astype(int),:]
-            WFS_signal_y_2D = WFS_signal_y_2D[linear_indices.astype(int),:]
+            wfs_signal_x_2D = wfs_signal_x_2D[linear_indices.astype(int),:]
+            wfs_signal_y_2D = wfs_signal_y_2D[linear_indices.astype(int),:]
         else:
             # Use 1D array directly
-            WFS_signal_x_2D = WFS_signal_x_2D[idx_valid_sa_new.astype(int),:]
-            WFS_signal_y_2D = WFS_signal_y_2D[idx_valid_sa_new.astype(int),:]
+            wfs_signal_x_2D = wfs_signal_x_2D[idx_valid_sa_new.astype(int),:]
+            wfs_signal_y_2D = wfs_signal_y_2D[idx_valid_sa_new.astype(int),:]
         if verbose:
             print('Indices selected.')
 
     if specula_convention:
-        im = np.concatenate((WFS_signal_y_2D, WFS_signal_x_2D))
+        im = np.concatenate((wfs_signal_y_2D, wfs_signal_x_2D))
     else:
-        im = np.concatenate((WFS_signal_x_2D, WFS_signal_y_2D))
+        im = np.concatenate((wfs_signal_x_2D, wfs_signal_y_2D))
 
     # Here we consider that tilt give a 4nm/SA derivative
     # Conversion from 4nm tilt derivative to arcsec
@@ -893,10 +913,10 @@ def interaction_matrix(pup_diam_m, pup_mask, dm_array, dm_mask, dm_height, dm_ro
         fig.colorbar(im4, ax=axs.ravel().tolist(),fraction=0.02)
 
         fig, axs = plt.subplots(2,2)
-        im5 = axs[0,0].imshow(WFS_signal_x[:,:,idx_plot[0]], cmap='seismic')
-        im5 = axs[0,1].imshow(WFS_signal_y[:,:,idx_plot[0]], cmap='seismic')
-        im5 = axs[1,0].imshow(WFS_signal_x[:,:,idx_plot[1]], cmap='seismic')
-        im5 = axs[1,1].imshow(WFS_signal_y[:,:,idx_plot[1]], cmap='seismic')
+        im5 = axs[0,0].imshow(wfs_signal_x[:,:,idx_plot[0]], cmap='seismic')
+        im5 = axs[0,1].imshow(wfs_signal_y[:,:,idx_plot[0]], cmap='seismic')
+        im5 = axs[1,0].imshow(wfs_signal_x[:,:,idx_plot[1]], cmap='seismic')
+        im5 = axs[1,1].imshow(wfs_signal_y[:,:,idx_plot[1]], cmap='seismic')
         fig.suptitle('X and Y WFS signals')
         fig.colorbar(im5, ax=axs.ravel().tolist(),fraction=0.02)
         plt.show()
