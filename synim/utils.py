@@ -474,6 +474,39 @@ def extract_source_coordinates(config, wfs_key):
     # Default to on-axis
     return [0.0, 0.0]
 
+def extract_source_height(config, wfs_key):
+    """
+    Extracts the actual height of the source from the configuration.
+    If zenithAngleInDeg is present, returns height * airmass.
+    If height is not present, returns np.inf.
+    """
+    # Compute airmass
+    if 'main' in config:
+        zenith_angle = config['main'].get('zenithAngleInDeg', None)
+        zenith_rad = np.deg2rad(zenith_angle)
+        airmass = 1.0 / np.cos(zenith_rad)
+    else:
+        airmass = 1.0
+
+    # First check if coordinates are in WFS parameters
+    if wfs_key in config and 'height' in config[wfs_key]:
+        return config[wfs_key]['height'] * airmass
+
+    # Try to find source corresponding to this WFS
+    source_match = re.search(r'((?:lgs|ngs|ref)\d+)', wfs_key)
+    if source_match:
+        source_key = f'source_{source_match.group(1)}'
+        if source_key in config:
+            if 'height' in config[source_key]:
+                return config[source_key]['height'] * airmass
+
+    # Try on_axis_source for simple configs
+    if 'on_axis_source' in config:
+        if 'height' in config['on_axis_source']:
+            return config['on_axis_source']['height'] * airmass
+
+    return np.inf  # Default to infinity if no height is specified
+
 def load_pupilstop(cm, pupilstop_params, pixel_pupil, pixel_pitch, verbose=False):
     """
     Load or create a pupilstop.
@@ -751,7 +784,7 @@ def insert_interaction_matrix_part(im_full, intmat_obj, mode_idx, slope_idx_star
 
     return True
 
-def build_source_filename_part(source_config):
+def build_source_filename_part(source_config,zenith_angle=None):
     """
     Build filename part for source parameters.
     
@@ -774,7 +807,12 @@ def build_source_filename_part(source_config):
         parts.append(f"pd{dist:.1f}a{angle:.0f}")
 
     if 'height' in source_config:
-        parts.append(f"h{source_config['height']:.0f}")
+        if source_config['height'] is not None and not np.isinf(source_config['height']):
+            airmass = 1.0
+            if zenith_angle is not None:
+                zenith_rad = np.deg2rad(zenith_angle)
+                airmass /= np.cos(zenith_rad)
+        parts.append(f"h{source_config['height']*airmass:.0f}")
 
     return parts
 
@@ -1369,16 +1407,6 @@ def extract_source_info(config, wfs_name):
 
     return source_info
 
-def is_simple_config(config):
-    """Detect if this is a simple SCAO config or a complex MCAO config"""
-    # Check for multiple DMs
-    dm_count = sum(1 for key in config if key.startswith('dm') and key != 'dm')
-
-    # Check for multiple WFSs
-    wfs_count = sum(1 for key in config if key.startswith('sh_') or key.startswith('pyramid') and key != 'pyramid')
-
-    return dm_count == 0 and wfs_count == 0
-
 def generate_im_filename(config_file, wfs_type=None, wfs_index=None, dm_index=None, timestamp=False, verbose=False):
     """
     Generate a specific interaction matrix filename based on WFS and DM indices.
@@ -1472,8 +1500,7 @@ def generate_im_filename(config_file, wfs_type=None, wfs_index=None, dm_index=No
     # Extract source information
     source_coords = extract_source_coordinates(config, selected_wfs['name'])
 
-    # Extract DM height
-    dm_height = selected_dm['config'].get('height', 0)
+    height = extract_source_height(config, selected_wfs['name'])
 
     # Generate filename parts
     base_name = "IM_syn"
@@ -1483,13 +1510,12 @@ def generate_im_filename(config_file, wfs_type=None, wfs_index=None, dm_index=No
     if source_coords is not None:
         dist, angle = source_coords
         parts.append(f"pd{dist:.1f}a{angle:.0f}")
+    if height is not None and not np.isinf(height):
+        parts.append(f"h{height:.0f}")
 
     # WFS info
     wfs_config = selected_wfs['config']
     parts.extend(build_wfs_filename_part(wfs_config, selected_wfs['type']))
-
-    # DM info
-    parts.append(f"dmH{dm_height}")
 
     # Add DM-specific parts
     parts.extend(build_dm_filename_part(selected_dm['config']))
@@ -1531,6 +1557,9 @@ def generate_im_filenames(config_file, timestamp=False):
     if 'main' in config:
         pupil_params['pixel_pupil'] = config['main'].get('pixel_pupil', 0)
         pupil_params['pixel_pitch'] = config['main'].get('pixel_pitch', 0)
+        zenith_angle = config['main'].get('zenithAngleInDeg', None)
+    else:
+        zenith_angle = None
 
     if 'pupilstop' in config:
         pupstop = config['pupilstop']
@@ -1564,31 +1593,23 @@ def generate_im_filenames(config_file, timestamp=False):
         source_config = config.get('on_axis_source', {})
 
         # Build filename parts
-        parts = [base_name]
-
-        # Add source parts
-        parts.extend(build_source_filename_part(source_config))
-
-        # Add pupil parts
-        parts.extend(build_pupil_filename_part(pupil_params))
-
-        # Add WFS parts
-        if wfs_type:
-            parts.extend(build_wfs_filename_part(wfs_params, wfs_type))
-
-        # Add DM parts - use config for simple configs
         for dm in dm_list:
-            dm_parts = build_dm_filename_part(dm['config'], config)
-            parts.extend(dm_parts)
-
+            parts = [base_name]  # <-- Ricomincia da capo per ogni DM
+            # Add source parts
+            parts.extend(build_source_filename_part(source_config, zenith_angle))
+            # Add pupil parts
+            parts.extend(build_pupil_filename_part(pupil_params))
+            # Add WFS parts
+            if wfs_type:
+                parts.extend(build_wfs_filename_part(wfs_params, wfs_type))
+            # Add DM parts - usa SOLO la funzione, non aggiungere dmH a mano!
+            parts.extend(build_dm_filename_part(dm['config'], config))
             # Add timestamp if requested
             if timestamp:
                 ts = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
                 parts.append(ts)
-
-            # Join all parts with underscores and add extension
             filename = "_".join(parts) + ".fits"
-            filenames_by_type['ngs'].append(filename)  # Default to NGS for simple config
+            filenames_by_type['ngs'].append(filename)
             break  # Only one DM in simple config
     else:
         # Complex MCAO configuration
@@ -1618,7 +1639,7 @@ def generate_im_filenames(config_file, timestamp=False):
                 parts = [base_name]
 
                 # Add source parts
-                parts.extend(build_source_filename_part(source_config))
+                parts.extend(build_source_filename_part(source_config, zenith_angle))
 
                 # Add pupil parts
                 parts.extend(build_pupil_filename_part(pupil_params))
