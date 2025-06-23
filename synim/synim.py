@@ -777,8 +777,8 @@ def interaction_matrix(pup_diam_m, pup_mask, dm_array, dm_mask, dm_height, dm_ro
         np.nan_to_num(der_dy, copy=False, nan=0.0, posinf=None, neginf=None)
 
     # apply pup mask with NaN on pixels outside the mask
-    der_dx = np.where(trans_pup_mask[..., np.newaxis], der_dx, np.nan)
-    der_dy = np.where(trans_pup_mask[..., np.newaxis], der_dy, np.nan)
+    der_dx = apply_mask(der_dx, trans_pup_mask, fill_value=np.nan)
+    der_dy = apply_mask(der_dy, trans_pup_mask, fill_value=np.nan)
 
     scale_factor = (der_dx.shape[0]/wfs_nsubaps)/np.median(rebin(trans_pup_mask, (wfs_nsubaps,wfs_nsubaps), method='average'))
     wfs_signal_x = rebin(der_dx, (wfs_nsubaps,wfs_nsubaps), method='nanmean') * scale_factor
@@ -834,8 +834,8 @@ def interaction_matrix(pup_diam_m, pup_mask, dm_array, dm_mask, dm_height, dm_ro
     combined_mask_sa = (dm_mask_sa >= 0.5) & (pup_mask_sa >= 0.5)
 
     # Apply the combined mask to the WFS signals
-    wfs_signal_x = np.where(combined_mask_sa[..., np.newaxis], wfs_signal_x, 0)
-    wfs_signal_y = np.where(combined_mask_sa[..., np.newaxis], wfs_signal_y, 0)
+    wfs_signal_x = apply_mask(wfs_signal_x, combined_mask_sa, fill_value=0)
+    wfs_signal_y = apply_mask(wfs_signal_y, combined_mask_sa, fill_value=0)
 
     if verbose:
         print('Mask applied.')
