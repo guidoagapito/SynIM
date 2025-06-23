@@ -789,7 +789,7 @@ def interaction_matrix(pup_diam_m, pup_mask, dm_array, dm_mask, dm_height, dm_ro
         # compare derivative before and after rebining
         idx_mode = 2 # you can change this value as you wish
 
-        fig, axs = plt.subplots(3, 2, figsize=(12, 14))
+        fig, axs = plt.subplots(4, 2, figsize=(12, 14))
 
         # first line: DM shape
         im0 = axs[0, 0].imshow(trans_dm_array[:, :, idx_mode], cmap='seismic')
@@ -825,13 +825,11 @@ def interaction_matrix(pup_diam_m, pup_mask, dm_array, dm_mask, dm_height, dm_ro
         fig.suptitle(f'DM, derivatives, and WFS signals (mode {idx_mode})')
         plt.tight_layout()
 
-        plt.show()
-
     if verbose:
         print('Rebin done, size of wfs_signal_x and wfs_signal_y:', wfs_signal_x.shape, wfs_signal_y.shape)
 
     # Create a combined mask for the valid sub-aperture
-    combined_mask_sa = (dm_mask_sa >= 0.5) & (pup_mask_sa >= 0.5)
+    combined_mask_sa = (dm_mask_sa > 0.0) & (pup_mask_sa > 0.0)
 
     # Apply the combined mask to the WFS signals
     wfs_signal_x = apply_mask(wfs_signal_x, combined_mask_sa, fill_value=0)
@@ -842,6 +840,24 @@ def interaction_matrix(pup_diam_m, pup_mask, dm_array, dm_mask, dm_height, dm_ro
 
     wfs_signal_x_2D = wfs_signal_x.reshape((-1,wfs_signal_x.shape[2]))
     wfs_signal_y_2D = wfs_signal_y.reshape((-1,wfs_signal_y.shape[2]))
+
+    if debug_rebin_plot:
+        # Third line: WFS signals
+        vmax = np.nanmax(np.abs([
+            wfs_signal_x[:, :, idx_mode],
+            wfs_signal_y[:, :, idx_mode]
+        ]))
+        vmin = -vmax
+        im5 = axs[3, 0].imshow(wfs_signal_x[:, :, idx_mode], cmap='seismic', vmin=vmin, vmax=vmax)
+        axs[3, 0].set_title(f'WFS signal x (mode {idx_mode})')
+        fig.colorbar(im5, ax=axs[3, 0])
+        im6 = axs[3, 1].imshow(wfs_signal_y[:, :, idx_mode], cmap='seismic', vmin=vmin, vmax=vmax)
+        axs[3, 1].set_title(f'WFS signal y (mode {idx_mode})')
+        fig.colorbar(im6, ax=axs[3, 1])
+        fig.suptitle(f'DM, derivatives, and WFS signals (mode {idx_mode})')
+        plt.tight_layout()
+
+        plt.show()
 
     if idx_valid_sa is not None:
 
