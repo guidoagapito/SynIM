@@ -11,7 +11,6 @@ import specula
 specula.init(device_idx=-1, precision=1)
 
 from specula.calib_manager import CalibManager
-from specula.lib.make_mask import make_mask
 from specula.data_objects.ifunc import IFunc
 from specula.data_objects.m2c import M2C
 from specula.data_objects.pupilstop import Pupilstop
@@ -66,7 +65,7 @@ def rebin(array, new_shape, method='average'):
             else:
                 rebinned_array = np.nanmean(array[:M*(m//M), :N*(n//N)].reshape((M, m//M, N, n//N)), axis=(1, 3))
         else:
-            raise ValueError("Unsupported rebin method. Use 'sum' or 'average'.")  
+            raise ValueError("Unsupported rebin method. Use 'sum' or 'average'.")
 
     return rebinned_array
 
@@ -82,26 +81,42 @@ def xy_to_polar(x, y):
     theta = np.arctan2(y, x)
     return r, theta
 
-def apply_mask(array,mask,norm=False):
-    # multiply a 2D or 3D by a 2D mask
-    # if norm is True 1/mask is used.
-    norm_array = np.copy(mask)
+def apply_mask(array, mask, norm=False, fill_value=None):
+    """
+    Apply a 2D or 3D mask to a 2D or 3D array.
+    
+    Default behavior is to multiply the array by the mask (norm = False and fill_value = None).
+    If norm is True, the mask is inverted (1/mask) before applying.
+    If fill_value is provided, it replaces the masked values.
+
+    Args:
+        array (numpy.ndarray): Input 2D or 3D array to be masked.
+        mask (numpy.ndarray): 2D mask to be applied.
+        norm (bool, optional): If True, inverts the mask (1/mask) before applying. Defaults to False.
+        fill_value (float, optional): Value to replace masked elements. If None, masked elements are set to 0. Defaults to None.
+
+    Returns:
+        numpy.ndarray: New array with the mask applied.
+    """
+    mask = np.asarray(mask)
     if norm:
-        idx2D = np.array(np.where(norm_array == 0))
-        norm_array[idx2D[0,:],idx2D[1,:]] = 1
-        norm_array = norm_array**(-1)
-    if len(array.shape) == 3:
-        norm_array_1d = norm_array.flatten()
-        array_2d = array.reshape((-1,array.shape[2]))
-        array_2d = array_2d*norm_array_1d[:, np.newaxis]
-        new_array = array_2d.reshape(array.shape)
-        if norm:
-            new_array[idx2D[0,:],idx2D[1,:],:] = 0
+        safe_mask = np.where(mask == 0, 1, mask)
+        norm_mask = 1.0 / safe_mask
     else:
-        new_array = array * norm_array
-        if norm:
-            new_array[idx2D[0,:],idx2D[1,:]] = 0
-    return new_array
+        norm_mask = mask
+
+    # Broadcast mask for 3D arrays
+    if array.ndim == 3 and mask.ndim == 2:
+        norm_mask = norm_mask[:, :, np.newaxis]
+
+    if fill_value is not None:
+        return np.where(norm_mask, array, fill_value)
+    else:
+        result = array * norm_mask
+        if norm and fill_value is None:
+            # Set to 0 where mask was zero (to avoid inf)
+            result = np.where(mask if mask.ndim == array.ndim else mask[:, :, np.newaxis], result, 0)
+        return result
 
 def make_xy(sampling, ratio, is_polar=False, is_double=False, is_vector=False,
             use_zero=False, quarter=False, fft=False):
