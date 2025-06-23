@@ -84,14 +84,14 @@ class ParamsManager:
         pup_mask = None
         if 'pupilstop' in self.params:
             pupilstop_params = self.params['pupilstop']
-            pup_mask = load_pupilstop(self.cm, pupilstop_params, self.pixel_pupil, self.pixel_pitch, 
+            pup_mask = load_pupilstop(self.cm, pupilstop_params, self.pixel_pupil, self.pixel_pitch,
                                     verbose=self.verbose)
 
         # If no pupilstop defined, create a default circular pupil
         if pup_mask is None:
+            simul_params = SimulParams(pixel_pupil=self.pixel_pupil, pixel_pitch=self.pixel_pitch)
             pupilstop = Pupilstop(
-                pixel_pupil=self.pixel_pupil,
-                pixel_pitch=self.pixel_pitch,
+                simul_params,
                 mask_diam=1.0,
                 obs_diam=0.0,
                 target_device_idx=-1,
@@ -636,7 +636,7 @@ class ParamsManager:
                 if n_slopes_per_wfs == 0:
                     n_slopes_per_wfs = n_slopes_this_wfs
                 elif n_slopes_per_wfs != n_slopes_this_wfs:
-                    print(f"Warning: Inconsistent number of slopes across WFSs")
+                    print("Warning: Inconsistent number of slopes across WFSs")
 
         if self.verbose:
             print(f"Each WFS has {n_slopes_per_wfs} slopes")
@@ -792,7 +792,7 @@ class ParamsManager:
             print(f"Found {len(opt_sources)} optical sources")
             for src in opt_sources:
                 print(f"  Source: {src['name']} (index: {src['index']})")
-            print(f"Computing projection matrices for optical sources with DMs and layers")
+            print("Computing projection matrices for optical sources with DMs and layers")
 
         # Process each Source-DM combination
         for source in opt_sources:
@@ -1000,7 +1000,7 @@ class ParamsManager:
 
         return saved_matrices
 
-    def compute_projection_matrix(self,  regFactor=1e-8, output_dir=None, save=False):
+    def compute_projection_matrix(self, regFactor=1e-8, output_dir=None, save=False):
         """
         Assemble 4D projection matrices from individual PM files and
         calculate the final projection matrix using the full DM and layer matrices.

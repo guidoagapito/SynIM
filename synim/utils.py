@@ -13,6 +13,7 @@ specula.init(device_idx=-1, precision=1)
 from specula.calib_manager import CalibManager
 from specula.data_objects.ifunc import IFunc
 from specula.data_objects.m2c import M2C
+from specula.data_objects.simul_params import SimulParams
 from specula.data_objects.pupilstop import Pupilstop
 from specula.data_objects.subap_data import SubapData
 
@@ -559,9 +560,9 @@ def load_pupilstop(cm, pupilstop_params, pixel_pupil, pixel_pitch, verbose=False
         obs_diam = pupilstop_params.get('obs_diam', 0.0)
 
         # Create a new Pupilstop instance with the given parameters
+        simul_params = SimulParams(pixel_pupil=pixel_pupil, pixel_pitch=pixel_pitch)
         pupilstop = Pupilstop(
-            pixel_pupil=pixel_pupil,
-            pixel_pitch=pixel_pitch,
+            simul_params,
             mask_diam=mask_diam,
             obs_diam=obs_diam,
             target_device_idx=-1,
@@ -1111,9 +1112,9 @@ def prepare_interaction_matrix_params(params, wfs_type=None, wfs_index=None, dm_
 
     # If no pupilstop defined, create a default circular pupil
     if pup_mask is None:
+        simul_params = SimulParams(pixel_pupil=pixel_pupil, pixel_pitch=pixel_pitch)
         pupilstop = Pupilstop(
-            pixel_pupil=pixel_pupil,
-            pixel_pitch=pixel_pitch,
+            simul_params,
             mask_diam=1.0,
             obs_diam=0.0,
             target_device_idx=-1,
