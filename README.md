@@ -14,7 +14,7 @@ This repository contains Python code based on standard libraries for the computa
 
 - `synim/synim.py`: Contains all low-level functions for interaction matrix generation, mask manipulation, derivatives, Zernike, etc.
 - `synim/params_manager.py`: The `ParamsManager` class for centralized parameter management and batch generation of interaction matrices. It can work with PASSATA or SPECULA parameters and calibration data.
-- `synim/params_common_utils.py`: Utility functions for parsing, parameter extraction, filename generation, and MMSE reconstructor operators.
+- `synim/utils.py`: Utility functions for parsing, parameter extraction, filename generation, and MMSE reconstructor operators.
 
 ## Example Usage
 
