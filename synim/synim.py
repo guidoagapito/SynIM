@@ -1,7 +1,12 @@
-import numpy as np
-from scipy.ndimage import rotate, shift, zoom
+import synim
+from synim import xp, scndI, cpuArray, to_xp
+rotate = scndI.rotate
+shift = scndI.shift
+zoom = scndI.zoom
+affine_transform = scndI.affine_transform
+binary_dilation = scndI.binary_dilation
+
 import matplotlib.pyplot as plt
-from scipy.ndimage import affine_transform, binary_dilation
 from synim.utils import apply_mask, polar_to_xy, rebin
 
 def compute_derivatives_with_extrapolation(data,mask=None):
@@ -30,31 +35,31 @@ def compute_derivatives_with_extrapolation(data,mask=None):
             debug_extrapolation = False
             if i == 0 and debug_extrapolation:
                 plt.figure(figsize=(8, 6))
-                plt.imshow(temp, cmap='seismic', interpolation='nearest')
+                plt.imshow(cpuArray(temp), cmap='seismic', interpolation='nearest')
                 plt.colorbar()
                 plt.title(f'Original data slice {i}')
                 plt.figure(figsize=(8, 6))
-                plt.imshow(data[:,:,i], cmap='seismic', interpolation='nearest')
+                plt.imshow(cpuArray(data[:,:,i]), cmap='seismic', interpolation='nearest')
                 plt.colorbar()
                 plt.title(f'Extrapolated data slice {i}')
                 plt.figure(figsize=(8, 6))
-                plt.imshow(data[:,:,i] - temp, cmap='seismic', interpolation='nearest')
+                plt.imshow(cpuArray(data[:,:,i] - temp), cmap='seismic', interpolation='nearest')
                 plt.colorbar()
                 plt.title(f'Difference after extrapolation for slice {i}')
                 plt.show()
 
     # Compute x derivative
-    dx = np.gradient(data, axis=(1), edge_order=1)
+    dx = xp.gradient(data, axis=(1), edge_order=1)
 
     # Compute y derivative
-    dy = np.gradient(data, axis=(0), edge_order=1)
+    dy = xp.gradient(data, axis=(0), edge_order=1)
 
     if mask is not None:
-        idx = np.ravel(np.array(np.where(mask.flatten() == 0)))
+        idx = xp.ravel(xp.array(xp.where(mask.flatten() == 0)))
         dx2D = dx.reshape((-1,dx.shape[2]))
-        dx2D[idx,:] = np.nan
+        dx2D[idx,:] = xp.nan
         dy2D = dy.reshape((-1,dy.shape[2]))
-        dy2D[idx,:] = np.nan
+        dy2D[idx,:] = xp.nan
         dx = dx2D.reshape(dx.shape)
         dy = dy2D.reshape(dy.shape)
 
@@ -76,10 +81,10 @@ def integrate_derivatives(dx, dy):
     """
 
     # Integrate x derivative along the x-axis
-    integrated_x = np.cumsum(dx, axis=1)
+    integrated_x = xp.cumsum(dx, axis=1)
 
     # Integrate y derivative along the y-axis
-    integrated_y = np.cumsum(dy, axis=0)
+    integrated_y = xp.cumsum(dy, axis=0)
 
     return integrated_x, integrated_y
 
@@ -107,8 +112,8 @@ def calculate_extrapolation_indices_coeffs(mask, debug=False, debug_pixels=None)
 
     # Identify edge pixels (outside but adjacent to the mask) using binary dilation
     dilated_mask = binary_dilation(binary_mask)
-    edge_pixels = np.where(dilated_mask & ~binary_mask)
-    edge_pixels_linear = np.ravel_multi_index(edge_pixels, mask.shape)
+    edge_pixels = xp.where(dilated_mask & ~binary_mask)
+    edge_pixels_linear = xp.ravel_multi_index(edge_pixels, mask.shape)
 
     if debug:
         print(f"Found {len(edge_pixels[0])} edge pixels to extrapolate.")
@@ -116,21 +121,21 @@ def calculate_extrapolation_indices_coeffs(mask, debug=False, debug_pixels=None)
         # Plot the original mask and the edge pixels
         plt.figure(figsize=(10, 4))
         plt.subplot(121)
-        plt.imshow(binary_mask, cmap='gray', interpolation='nearest')
+        plt.imshow(cpuArray(binary_mask), cmap='gray', interpolation='nearest')
         plt.title('Original Mask')
 
         plt.subplot(122)
-        edge_mask = np.zeros_like(binary_mask)
+        edge_mask = xp.zeros_like(binary_mask)
         edge_mask[edge_pixels] = 1
-        plt.imshow(binary_mask, cmap='gray', alpha=0.5, interpolation='nearest')
-        plt.imshow(edge_mask, cmap='hot', alpha=0.5, interpolation='nearest')
+        plt.imshow(cpuArray(binary_mask), cmap='gray', alpha=0.5, interpolation='nearest')
+        plt.imshow(cpuArray(edge_mask), cmap='hot', alpha=0.5, interpolation='nearest')
         plt.title('Edge Pixels to Extrapolate (red)')
         plt.tight_layout()
         plt.show()
 
     # Preallocate arrays for reference indices and coefficients
-    reference_indices = np.full((len(edge_pixels[0]), 8), -1, dtype=np.int32)
-    coefficients = np.zeros((len(edge_pixels[0]), 8), dtype=np.float32)
+    reference_indices = xp.full((len(edge_pixels[0]), 8), -1, dtype=xp.int32)
+    coefficients = xp.zeros((len(edge_pixels[0]), 8), dtype=xp.float32)
 
     # Directions for extrapolation (y+1, y-1, x+1, x-1)
     directions = [
@@ -228,7 +233,7 @@ def calculate_extrapolation_indices_coeffs(mask, debug=False, debug_pixels=None)
                 problem_indices.append(i)
 
     if debug:
-        print(f"Average valid directions per pixel: {np.sum(coefficients != 0) / (len(edge_pixels[0]) * 2):.2f}")
+        print(f"Average valid directions per pixel: {xp.sum(coefficients != 0) / (len(edge_pixels[0]) * 2):.2f}")
 
         # Display coefficient matrix for the first 10 pixels
         if len(edge_pixels[0]) >= 10:
@@ -307,13 +312,13 @@ def shiftzoom_from_source_dm_params(source_pol_coo, source_height, dm_height, pi
     - zoom: tuple, (x_zoom, y_zoom) magnification factors
     """
 
-    arcsec2rad = np.pi/180/3600
+    arcsec2rad = xp.pi/180/3600
 
-    if np.isinf(source_height):
+    if xp.isinf(source_height):
         mag_factor = 1.0
     else:
         mag_factor = source_height/(source_height-dm_height)
-    source_rec_coo_asec = polar_to_xy(source_pol_coo[0],source_pol_coo[1]*np.pi/180)
+    source_rec_coo_asec = polar_to_xy(source_pol_coo[0],source_pol_coo[1]*xp.pi/180)
     source_rec_coo_m = source_rec_coo_asec*dm_height*arcsec2rad
     # change sign to get the shift in the right direction considering the convention applied in rotshiftzoom_array
     source_rec_coo_pix = -1 * source_rec_coo_m / pixel_pitch
@@ -342,8 +347,8 @@ def rotshiftzoom_array_noaffine(input_array, dm_translation=(0.0, 0.0),  dm_rota
     - output: numpy array, transformed data
     """
 
-    if np.isnan(input_array).any():
-        np.nan_to_num(input_array, copy=False, nan=0.0, posinf=None, neginf=None)
+    if xp.isnan(input_array).any():
+        xp.nan_to_num(input_array, copy=False, nan=0.0, posinf=None, neginf=None)
 
     # Check if phase is 2D or 3D
     if len(input_array.shape) == 3:
@@ -408,7 +413,7 @@ def rotshiftzoom_array_noaffine(input_array, dm_translation=(0.0, 0.0),  dm_rota
     elif (array_mag.shape[0] < output_size[0]) | (array_mag.shape[1] < output_size[1]):
         # bigger output size
         if len(input_array.shape) == 3:
-            output = np.zeros(output_size+(input_array.shape[2],))
+            output = xp.zeros(output_size+(input_array.shape[2],))
             output[int(0.5*(output_size[0]-array_mag.shape[0])):int(0.5*(output_size[0]+array_mag.shape[0])), \
                    int(0.5*(output_size[1]-array_mag.shape[1])):int(0.5*(output_size[1]+array_mag.shape[1])),:] = array_mag
         else:
@@ -472,8 +477,8 @@ def rotshiftzoom_array(input_array, dm_translation=(0.0, 0.0), dm_rotation=0.0, 
     except (TypeError, ValueError):
         wfs_magnification = (1.0, 1.0)
 
-    if np.isnan(input_array).any():
-        input_array = np.nan_to_num(input_array, copy=True, nan=0.0, posinf=None, neginf=None)
+    if xp.isnan(input_array).any():
+        input_array = xp.nan_to_num(input_array, copy=True, nan=0.0, posinf=None, neginf=None)
 
     # Check if array is 2D or 3D
     is_3d = len(input_array.shape) == 3
@@ -483,47 +488,47 @@ def rotshiftzoom_array(input_array, dm_translation=(0.0, 0.0), dm_rotation=0.0, 
         output_size = input_array.shape[:2]  # Only take the first two dimensions
 
     # Center of the input array
-    center = np.array(input_array.shape[:2]) / 2.0
+    center = xp.array(input_array.shape[:2]) / 2.0
     # Convert rotations to radians
     # Note: Inverting the sign of rotation to match the first function's direction
-    dm_rot_rad = np.deg2rad(-dm_rotation)  # Negative sign to reverse direction
-    wfs_rot_rad = np.deg2rad(-wfs_rotation)  # Negative sign to reverse direction
+    dm_rot_rad = xp.deg2rad(-dm_rotation)  # Negative sign to reverse direction
+    wfs_rot_rad = xp.deg2rad(-wfs_rotation)  # Negative sign to reverse direction
 
     # Initialize the output array
     if is_3d:
-        output = np.zeros((output_size[0], output_size[1], input_array.shape[2]), dtype=input_array.dtype)
+        output = xp.zeros((output_size[0], output_size[1], input_array.shape[2]), dtype=input_array.dtype)
     else:
-        output = np.zeros(output_size, dtype=input_array.dtype)
+        output = xp.zeros(output_size, dtype=input_array.dtype)
 
     # Create the transformation matrices
     # For DM transformation
-    dm_scale_matrix = np.array([[1.0/dm_magnification[0], 0], [0, 1.0/dm_magnification[1]]])
-    dm_rot_matrix = np.array([[np.cos(dm_rot_rad), -np.sin(dm_rot_rad)], [np.sin(dm_rot_rad), np.cos(dm_rot_rad)]])
-    dm_matrix = np.dot(dm_rot_matrix, dm_scale_matrix)
+    dm_scale_matrix = xp.array([[1.0/dm_magnification[0], 0], [0, 1.0/dm_magnification[1]]])
+    dm_rot_matrix = xp.array([[xp.cos(dm_rot_rad), -xp.sin(dm_rot_rad)], [xp.sin(dm_rot_rad), xp.cos(dm_rot_rad)]])
+    dm_matrix = xp.dot(dm_rot_matrix, dm_scale_matrix)
 
     # For WFS transformation
-    wfs_scale_matrix = np.array([[1.0/wfs_magnification[0], 0], [0, 1.0/wfs_magnification[1]]])
-    wfs_rot_matrix = np.array([[np.cos(wfs_rot_rad), -np.sin(wfs_rot_rad)], [np.sin(wfs_rot_rad), np.cos(wfs_rot_rad)]])
-    wfs_matrix = np.dot(wfs_rot_matrix, wfs_scale_matrix)
+    wfs_scale_matrix = xp.array([[1.0/wfs_magnification[0], 0], [0, 1.0/wfs_magnification[1]]])
+    wfs_rot_matrix = xp.array([[xp.cos(wfs_rot_rad), -xp.sin(wfs_rot_rad)], [xp.sin(wfs_rot_rad), xp.cos(wfs_rot_rad)]])
+    wfs_matrix = xp.dot(wfs_rot_matrix, wfs_scale_matrix)
 
     # Combine transformations (first DM, then WFS)
-    combined_matrix = np.dot(wfs_matrix, dm_matrix)
+    combined_matrix = xp.dot(wfs_matrix, dm_matrix)
 
     # For 3D arrays, extend the transformation matrix to 3x3
     if is_3d:
         # Create a 3x3 identity matrix and insert the 2x2 transformation in the top-left
-        combined_matrix_3d = np.eye(3)
+        combined_matrix_3d = xp.eye(3)
         combined_matrix_3d[:2, :2] = combined_matrix
         combined_matrix = combined_matrix_3d
 
     # Calculate offset
-    output_center = np.array(output_size) / 2.0
+    output_center = xp.array(output_size) / 2.0
     if is_3d:
         # For 3D, calculate offset only for the first two dimensions
-        offset_2d = center[:2] - np.dot(combined_matrix[:2, :2], output_center) - np.dot(dm_matrix, dm_translation) - wfs_translation
-        offset = np.array([offset_2d[0], offset_2d[1], 0])
+        offset_2d = center[:2] - xp.dot(combined_matrix[:2, :2], output_center) - xp.dot(dm_matrix, dm_translation) - wfs_translation
+        offset = xp.array([offset_2d[0], offset_2d[1], 0])
     else:
-        offset = center - np.dot(combined_matrix, output_center) - np.dot(dm_matrix, dm_translation) - wfs_translation
+        offset = center - xp.dot(combined_matrix, output_center) - xp.dot(dm_matrix, dm_translation) - wfs_translation
 
     # Apply transformation
     output = affine_transform(
@@ -566,9 +571,9 @@ def update_dm_pup(pup_diam_m, pup_mask, dm_array, dm_mask, dm_height, dm_rotatio
 
     if specula_convention:
         # transpose the DM array, mask and pupil mask to match the specula convention
-        dm_array = np.transpose(dm_array, (1, 0, 2))
-        dm_mask = np.transpose(dm_mask)
-        pup_mask = np.transpose(pup_mask)
+        dm_array = xp.transpose(dm_array, (1, 0, 2))
+        dm_mask = xp.transpose(dm_mask)
+        pup_mask = xp.transpose(pup_mask)
 
     pup_diam_pix = pup_mask.shape[0]
     pixel_pitch = pup_diam_m/pup_diam_pix
@@ -590,7 +595,7 @@ def update_dm_pup(pup_diam_m, pup_mask, dm_array, dm_mask, dm_height, dm_rotatio
                                         wfs_translation=(0,0), wfs_rotation=0, wfs_magnification=(1,1),
                                         output_size=output_size)
     trans_dm_mask[trans_dm_mask<0.5] = 0
-    if np.max(trans_dm_mask) <= 0:
+    if xp.max(trans_dm_mask) <= 0:
         raise ValueError('Error in input data, the rotated dm mask is empty.')
 
     # apply transformation to the pupil mask
@@ -599,7 +604,7 @@ def update_dm_pup(pup_diam_m, pup_mask, dm_array, dm_mask, dm_height, dm_rotatio
                                         output_size=output_size)
     trans_pup_mask[trans_pup_mask<0.5] = 0
 
-    if np.max(trans_pup_mask) <= 0:
+    if xp.max(trans_pup_mask) <= 0:
         raise ValueError('Error in input data, the rotated pup mask is empty.')
 
     if verbose:
@@ -609,7 +614,7 @@ def update_dm_pup(pup_diam_m, pup_mask, dm_array, dm_mask, dm_height, dm_rotatio
 
     # apply mask
     trans_dm_array = apply_mask(trans_dm_array,trans_dm_mask)
-    if np.max(trans_dm_array) <= 0:
+    if xp.max(trans_dm_array) <= 0:
         raise ValueError('Error in input data, the rotated dm array is empty.')
 
     if verbose:
@@ -645,6 +650,10 @@ def projection_matrix(pup_diam_m, pup_mask, dm_array, dm_mask, base_inv_array,
     - pm: numpy 2D array, projection matrix (n_base_modes x n_dm_modes)
     """
 
+    pup_mask = to_xp(pup_mask)
+    dm_array = to_xp(dm_array)
+    dm_mask = to_xp(dm_mask)
+
     trans_dm_array, trans_dm_mask, trans_pup_mask = update_dm_pup(
                   pup_diam_m, pup_mask, dm_array, dm_mask, dm_height, dm_rotation,
                   base_rotation, base_translation, base_magnification,
@@ -655,21 +664,21 @@ def projection_matrix(pup_diam_m, pup_mask, dm_array, dm_mask, base_inv_array,
     valid_pixels = valid_mask > 0.5
 
     # Extract valid pixels from dm_array
-    n_valid_pixels = np.sum(valid_pixels)
+    n_valid_pixels = xp.sum(valid_pixels)
     height, width, n_modes = trans_dm_array.shape
-    dm_valid_values = np.zeros((n_valid_pixels, n_modes))
+    dm_valid_values = xp.zeros((n_valid_pixels, n_modes))
 
     for i in range(n_modes):
         dm_valid_values[:, i] = trans_dm_array[:, :, i][valid_pixels]
 
     height_base, width_base, n_modes_base = base_inv_array.shape
-    base_valid_values = np.zeros((n_valid_pixels, n_modes_base))
+    base_valid_values = xp.zeros((n_valid_pixels, n_modes_base))
 
     for i in range(n_modes_base):
         base_valid_values[:, i] = base_inv_array[:, :, i][valid_pixels]
 
     # Perform matrix multiplication with base_inv_array to get projection coefficients
-    projection = np.dot(dm_valid_values.T, base_valid_values)
+    projection = xp.dot(dm_valid_values.T, base_valid_values)
 
     if verbose:
         print('Matrix multiplication done, projection shape:', projection.shape)
@@ -677,25 +686,25 @@ def projection_matrix(pup_diam_m, pup_mask, dm_array, dm_mask, base_inv_array,
     if display:
         # Display valid pixels mask
         plt.figure()
-        plt.imshow(valid_mask)
+        plt.imshow(cpuArray(valid_mask))
         plt.title('Valid pixels mask')
         plt.colorbar()
 
         # Display a couple of DM modes
         plt.figure(figsize=(10, 5))
         plt.subplot(1, 2, 1)
-        plt.imshow(trans_dm_array[:, :, 0], cmap='seismic')
+        plt.imshow(cpuArray(trans_dm_array[:, :, 0]), cmap='seismic')
         plt.title('DM Mode 0')
         plt.colorbar()
         plt.subplot(1, 2, 2)
-        plt.imshow(trans_dm_array[:, :, 1], cmap='seismic')
+        plt.imshow(cpuArray(trans_dm_array[:, :, 1]), cmap='seismic')
         plt.title('DM Mode 1')
         plt.colorbar()
 
         # Display projection coefficients
         plt.figure()
         for i in range(min(5, projection.shape[0])):
-            plt.plot(projection[:,i], label=f'Basis mode {i}')
+            plt.plot(cpuArray(projection[:,i]), label=f'Basis mode {i}')
         plt.legend()
         plt.title('Projection coefficients')
         plt.xlabel('DM mode index')
@@ -704,7 +713,7 @@ def projection_matrix(pup_diam_m, pup_mask, dm_array, dm_mask, base_inv_array,
 
         # Display projection array
         plt.figure()
-        plt.imshow(projection, cmap='seismic', origin='lower')
+        plt.imshow(cpuArray(projection), cmap='seismic', origin='lower')
         plt.legend()
         plt.title('Projection coefficients')
         plt.xlabel('DM mode index')
@@ -745,6 +754,10 @@ def interaction_matrix(pup_diam_m, pup_mask, dm_array, dm_mask, dm_height, dm_ro
     - im: numpy 2D array, set of signals
     """
 
+    pup_mask = to_xp(pup_mask)
+    dm_array = to_xp(dm_array)
+    dm_mask = to_xp(dm_mask)
+
     trans_dm_array, trans_dm_mask, trans_pup_mask = update_dm_pup(
                   pup_diam_m, pup_mask, dm_array, dm_mask, dm_height, dm_rotation,
                   wfs_rotation, wfs_translation, wfs_magnification,
@@ -757,30 +770,30 @@ def interaction_matrix(pup_diam_m, pup_mask, dm_array, dm_mask, dm_height, dm_ro
         print('Derivatives done, size of der_dx and der_dy:', der_dx.shape, der_dy.shape)
 
     # estimate an array proportional to flux per sub-aperture from the mask
-    if np.isnan(trans_pup_mask).any():
-        np.nan_to_num(trans_pup_mask, copy=False, nan=0.0, posinf=None, neginf=None)
-    if np.isnan(trans_dm_mask).any():
-        np.nan_to_num(trans_dm_mask, copy=False, nan=0.0, posinf=None, neginf=None)
+    if xp.isnan(trans_pup_mask).any():
+        xp.nan_to_num(trans_pup_mask, copy=False, nan=0.0, posinf=None, neginf=None)
+    if xp.isnan(trans_dm_mask).any():
+        xp.nan_to_num(trans_dm_mask, copy=False, nan=0.0, posinf=None, neginf=None)
 
     pup_mask_sa = rebin(trans_pup_mask, (wfs_nsubaps,wfs_nsubaps), method='sum')
-    pup_mask_sa = pup_mask_sa * 1/np.max(pup_mask_sa)
+    pup_mask_sa = pup_mask_sa * 1/xp.max(pup_mask_sa)
 
     dm_mask_sa = rebin(trans_dm_mask, (wfs_nsubaps,wfs_nsubaps), method='sum')
-    if np.max(dm_mask_sa) <= 0:
+    if xp.max(dm_mask_sa) <= 0:
         raise ValueError('Error in input data, the dm mask is empty.')
-    dm_mask_sa = dm_mask_sa * 1/np.max(dm_mask_sa)
+    dm_mask_sa = dm_mask_sa * 1/xp.max(dm_mask_sa)
 
     # rebin the array to get the correct signal size
-    if np.isnan(der_dx).any():
-        np.nan_to_num(der_dx, copy=False, nan=0.0, posinf=None, neginf=None)
-    if np.isnan(der_dy).any():
-        np.nan_to_num(der_dy, copy=False, nan=0.0, posinf=None, neginf=None)
+    if xp.isnan(der_dx).any():
+        xp.nan_to_num(der_dx, copy=False, nan=0.0, posinf=None, neginf=None)
+    if xp.isnan(der_dy).any():
+        xp.nan_to_num(der_dy, copy=False, nan=0.0, posinf=None, neginf=None)
 
     # apply pup mask with NaN on pixels outside the mask
-    der_dx = apply_mask(der_dx, trans_pup_mask, fill_value=np.nan)
-    der_dy = apply_mask(der_dy, trans_pup_mask, fill_value=np.nan)
+    der_dx = apply_mask(der_dx, trans_pup_mask, fill_value=xp.nan)
+    der_dy = apply_mask(der_dy, trans_pup_mask, fill_value=xp.nan)
 
-    scale_factor = (der_dx.shape[0]/wfs_nsubaps)/np.median(rebin(trans_pup_mask, (wfs_nsubaps,wfs_nsubaps), method='average'))
+    scale_factor = (der_dx.shape[0]/wfs_nsubaps)/xp.median(rebin(trans_pup_mask, (wfs_nsubaps,wfs_nsubaps), method='average'))
     wfs_signal_x = rebin(der_dx, (wfs_nsubaps,wfs_nsubaps), method='nanmean') * scale_factor
     wfs_signal_y = rebin(der_dy, (wfs_nsubaps,wfs_nsubaps), method='nanmean') * scale_factor
 
@@ -792,34 +805,34 @@ def interaction_matrix(pup_diam_m, pup_mask, dm_array, dm_mask, dm_height, dm_ro
         fig, axs = plt.subplots(4, 2, figsize=(12, 14))
 
         # first line: DM shape
-        im0 = axs[0, 0].imshow(trans_dm_array[:, :, idx_mode], cmap='seismic')
+        im0 = axs[0, 0].imshow(cpuArray(trans_dm_array[:, :, idx_mode]), cmap='seismic')
         axs[0, 0].set_title(f'DM shape (mode {idx_mode})')
         fig.colorbar(im0, ax=axs[0, 0])
         axs[0, 1].axis('off') # empty cell
 
         # second line: Derivate
-        vmax = np.nanmax(np.abs([
+        vmax = xp.nanmax(xp.abs([
             der_dx[:, :, idx_mode],
             der_dy[:, :, idx_mode],
         ]))
         vmin = -vmax
-        im1 = axs[1, 0].imshow(der_dx[:, :, idx_mode], cmap='seismic', vmin=vmin, vmax=vmax)
+        im1 = axs[1, 0].imshow(cpuArray(der_dx[:, :, idx_mode]), cmap='seismic', vmin=vmin, vmax=vmax)
         axs[1, 0].set_title(f'Derivative dx (mode {idx_mode})')
         fig.colorbar(im1, ax=axs[1, 0])
-        im2 = axs[1, 1].imshow(der_dy[:, :, idx_mode], cmap='seismic', vmin=vmin, vmax=vmax)
+        im2 = axs[1, 1].imshow(cpuArray(der_dy[:, :, idx_mode]), cmap='seismic', vmin=vmin, vmax=vmax)
         axs[1, 1].set_title(f'Derivative dy (mode {idx_mode})')
         fig.colorbar(im2, ax=axs[1, 1])
 
         # Third line: WFS signals
-        vmax = np.nanmax(np.abs([
+        vmax = xp.nanmax(xp.abs([
             wfs_signal_x[:, :, idx_mode],
             wfs_signal_y[:, :, idx_mode]
         ]))
         vmin = -vmax
-        im3 = axs[2, 0].imshow(wfs_signal_x[:, :, idx_mode], cmap='seismic', vmin=vmin, vmax=vmax)
+        im3 = axs[2, 0].imshow(cpuArray(wfs_signal_x[:, :, idx_mode]), cmap='seismic', vmin=vmin, vmax=vmax)
         axs[2, 0].set_title(f'WFS signal x (mode {idx_mode})')
         fig.colorbar(im3, ax=axs[2, 0])
-        im4 = axs[2, 1].imshow(wfs_signal_y[:, :, idx_mode], cmap='seismic', vmin=vmin, vmax=vmax)
+        im4 = axs[2, 1].imshow(cpuArray(wfs_signal_y[:, :, idx_mode]), cmap='seismic', vmin=vmin, vmax=vmax)
         axs[2, 1].set_title(f'WFS signal y (mode {idx_mode})')
         fig.colorbar(im4, ax=axs[2, 1])
         fig.suptitle(f'DM, derivatives, and WFS signals (mode {idx_mode})')
@@ -843,15 +856,15 @@ def interaction_matrix(pup_diam_m, pup_mask, dm_array, dm_mask, dm_height, dm_ro
 
     if debug_rebin_plot:
         # Third line: WFS signals
-        vmax = np.nanmax(np.abs([
+        vmax = xp.nanmax(xp.abs([
             wfs_signal_x[:, :, idx_mode],
             wfs_signal_y[:, :, idx_mode]
         ]))
         vmin = -vmax
-        im5 = axs[3, 0].imshow(wfs_signal_x[:, :, idx_mode], cmap='seismic', vmin=vmin, vmax=vmax)
+        im5 = axs[3, 0].imshow(cpuArray(wfs_signal_x[:, :, idx_mode]), cmap='seismic', vmin=vmin, vmax=vmax)
         axs[3, 0].set_title(f'WFS signal x (mode {idx_mode})')
         fig.colorbar(im5, ax=axs[3, 0])
-        im6 = axs[3, 1].imshow(wfs_signal_y[:, :, idx_mode], cmap='seismic', vmin=vmin, vmax=vmax)
+        im6 = axs[3, 1].imshow(cpuArray(wfs_signal_y[:, :, idx_mode]), cmap='seismic', vmin=vmin, vmax=vmax)
         axs[3, 1].set_title(f'WFS signal y (mode {idx_mode})')
         fig.colorbar(im6, ax=axs[3, 1])
         fig.suptitle(f'DM, derivatives, and WFS signals (mode {idx_mode})')
@@ -863,10 +876,10 @@ def interaction_matrix(pup_diam_m, pup_mask, dm_array, dm_mask, dm_height, dm_ro
 
         if specula_convention:
             # transpose idx_valid_sa to match the specula convention
-            sa2D = np.zeros((wfs_nsubaps,wfs_nsubaps))
+            sa2D = xp.zeros((wfs_nsubaps,wfs_nsubaps))
             sa2D[idx_valid_sa[:,0], idx_valid_sa[:,1]] = 1
-            sa2D = np.transpose(sa2D)
-            idx_temp = np.where(sa2D>0)
+            sa2D = xp.transpose(sa2D)
+            idx_temp = xp.where(sa2D>0)
             idx_valid_sa_new = idx_valid_sa*0.
             idx_valid_sa_new[:,0] = idx_temp[0]
             idx_valid_sa_new[:,1] = idx_temp[1]
@@ -890,9 +903,9 @@ def interaction_matrix(pup_diam_m, pup_mask, dm_array, dm_mask, dm_height, dm_ro
             print('Indices selected.')
 
     if specula_convention:
-        im = np.concatenate((wfs_signal_y_2D, wfs_signal_x_2D))
+        im = xp.concatenate((wfs_signal_y_2D, wfs_signal_x_2D))
     else:
-        im = np.concatenate((wfs_signal_x_2D, wfs_signal_y_2D))
+        im = xp.concatenate((wfs_signal_x_2D, wfs_signal_y_2D))
 
     # Here we consider that tilt give a 4nm/SA derivative
     # Conversion from 4nm tilt derivative to arcsec
@@ -906,33 +919,33 @@ def interaction_matrix(pup_diam_m, pup_mask, dm_array, dm_mask, dm_height, dm_ro
 
     if display:
         fig, _ = plt.subplots()
-        plt.imshow(pup_mask_sa)
+        plt.imshow(cpuArray(pup_mask_sa))
         plt.title('Pupil masks rebinned on WFS sub-apertures')
         plt.colorbar()
 
         idx_plot = [2,5]
 
         fig, axs = plt.subplots(2,2)
-        im3 = axs[0,0].imshow(trans_dm_array[:,:,idx_plot[0]], cmap='seismic')
-        im3 = axs[0,1].imshow(trans_dm_array[:,:,idx_plot[0]], cmap='seismic')
-        im3 = axs[1,0].imshow(trans_dm_array[:,:,idx_plot[1]], cmap='seismic')
-        im3 = axs[1,1].imshow(trans_dm_array[:,:,idx_plot[1]], cmap='seismic')
+        im3 = axs[0,0].imshow(cpuArray(trans_dm_array[:,:,idx_plot[0]]), cmap='seismic')
+        im3 = axs[0,1].imshow(cpuArray(trans_dm_array[:,:,idx_plot[0]]), cmap='seismic')
+        im3 = axs[1,0].imshow(cpuArray(trans_dm_array[:,:,idx_plot[1]]), cmap='seismic')
+        im3 = axs[1,1].imshow(cpuArray(trans_dm_array[:,:,idx_plot[1]]), cmap='seismic')
         fig.suptitle('DM shapes seen on the WFS direction (idx {idx_plot[0]} and {idx_plot[1]})')
         fig.colorbar(im3, ax=axs.ravel().tolist(),fraction=0.02)
 
         fig, axs = plt.subplots(2,2)
-        im4 = axs[0,0].imshow(der_dx[:,:,idx_plot[0]], cmap='seismic')
-        im4 = axs[0,1].imshow(der_dy[:,:,idx_plot[0]], cmap='seismic')
-        im4 = axs[1,0].imshow(der_dx[:,:,idx_plot[1]], cmap='seismic')
-        im4 = axs[1,1].imshow(der_dy[:,:,idx_plot[1]], cmap='seismic')
+        im4 = axs[0,0].imshow(cpuArray(der_dx[:,:,idx_plot[0]]), cmap='seismic')
+        im4 = axs[0,1].imshow(cpuArray(der_dy[:,:,idx_plot[0]]), cmap='seismic')
+        im4 = axs[1,0].imshow(cpuArray(der_dx[:,:,idx_plot[1]]), cmap='seismic')
+        im4 = axs[1,1].imshow(cpuArray(der_dy[:,:,idx_plot[1]]), cmap='seismic')
         fig.suptitle('X and Y derivative of DM shapes seen on the WFS direction (idx {idx_plot[0]} and {idx_plot[1]})')
         fig.colorbar(im4, ax=axs.ravel().tolist(),fraction=0.02)
 
         fig, axs = plt.subplots(2,2)
-        im5 = axs[0,0].imshow(wfs_signal_x[:,:,idx_plot[0]], cmap='seismic')
-        im5 = axs[0,1].imshow(wfs_signal_y[:,:,idx_plot[0]], cmap='seismic')
-        im5 = axs[1,0].imshow(wfs_signal_x[:,:,idx_plot[1]], cmap='seismic')
-        im5 = axs[1,1].imshow(wfs_signal_y[:,:,idx_plot[1]], cmap='seismic')
+        im5 = axs[0,0].imshow(cpuArray(wfs_signal_x[:,:,idx_plot[0]]), cmap='seismic')
+        im5 = axs[0,1].imshow(cpuArray(wfs_signal_y[:,:,idx_plot[0]]), cmap='seismic')
+        im5 = axs[1,0].imshow(cpuArray(wfs_signal_x[:,:,idx_plot[1]]), cmap='seismic')
+        im5 = axs[1,1].imshow(cpuArray(wfs_signal_y[:,:,idx_plot[1]]), cmap='seismic')
         fig.suptitle('X and Y WFS signals')
         fig.colorbar(im5, ax=axs.ravel().tolist(),fraction=0.02)
         plt.show()

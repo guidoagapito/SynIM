@@ -4,8 +4,10 @@ import yaml
 import datetime
 import numpy as np
 
+from synim import xp, scndI, cpuArray, to_xp
+rotate = scndI.rotate
+
 from scipy.special import eval_legendre
-from scipy.ndimage import rotate
 
 import specula
 specula.init(device_idx=-1, precision=1)
@@ -46,9 +48,9 @@ def rebin(array, new_shape, method='average'):
 
         # Replicate the array in both dimensions
         if len(shape) == 3:
-            rebinned_array = np.tile(array, (m_factor, n_factor, 1))
+            rebinned_array = xp.tile(array, (m_factor, n_factor, 1))
         else:
-            rebinned_array = np.tile(array, (m_factor, n_factor))
+            rebinned_array = xp.tile(array, (m_factor, n_factor))
     else:    
         if method == 'sum':
             if len(shape) == 3:
@@ -62,9 +64,9 @@ def rebin(array, new_shape, method='average'):
                 rebinned_array = array[:M*(m//M), :N*(n//N)].reshape((M, m//M, N, n//N)).mean(axis=(1, 3))
         elif method == 'nanmean':
             if len(shape) == 3:
-                rebinned_array = np.nanmean(array[:M*(m//M), :N*(n//N), :].reshape((M, m//M, N, n//N, shape[2])), axis=(1, 3))
+                rebinned_array = xp.nanmean(array[:M*(m//M), :N*(n//N), :].reshape((M, m//M, N, n//N, shape[2])), axis=(1, 3))
             else:
-                rebinned_array = np.nanmean(array[:M*(m//M), :N*(n//N)].reshape((M, m//M, N, n//N)), axis=(1, 3))
+                rebinned_array = xp.nanmean(array[:M*(m//M), :N*(n//N)].reshape((M, m//M, N, n//N)), axis=(1, 3))
         else:
             raise ValueError("Unsupported rebin method. Use 'sum' or 'average'.")
 
@@ -73,13 +75,13 @@ def rebin(array, new_shape, method='average'):
 def polar_to_xy(r,theta):
     # conversion polar to rectangular coordinates
     # theta is in rad
-    return np.array(( r * np.cos(theta),r * np.sin(theta) ))
+    return xp.array(( r * xp.cos(theta),r * xp.sin(theta) ))
 
 def xy_to_polar(x, y):
     # conversion rectangular to polar coordinates
     # theta is in rad
-    r = np.sqrt(x**2 + y**2)
-    theta = np.arctan2(y, x)
+    r = xp.sqrt(x**2 + y**2)
+    theta = xp.arctan2(y, x)
     return r, theta
 
 def apply_mask(array, mask, norm=False, fill_value=None):
@@ -99,24 +101,24 @@ def apply_mask(array, mask, norm=False, fill_value=None):
     Returns:
         numpy.ndarray: New array with the mask applied.
     """
-    mask = np.asarray(mask)
+    mask = xp.asarray(mask)
     if norm:
-        safe_mask = np.where(mask == 0, 1, mask)
+        safe_mask = xp.where(mask == 0, 1, mask)
         norm_mask = 1.0 / safe_mask
     else:
         norm_mask = mask
 
     # Broadcast mask for 3D arrays
     if array.ndim == 3 and mask.ndim == 2:
-        norm_mask = norm_mask[:, :, np.newaxis]
+        norm_mask = norm_mask[:, :, xp.newaxis]
 
     if fill_value is not None:
-        return np.where(norm_mask, array, fill_value)
+        return xp.where(norm_mask, array, fill_value)
     else:
         result = array * norm_mask
         if norm and fill_value is None:
             # Set to 0 where mask was zero (to avoid inf)
-            result = np.where(mask if mask.ndim == array.ndim else mask[:, :, np.newaxis], result, 0)
+            result = xp.where(mask if mask.ndim == array.ndim else mask[:, :, xp.newaxis], result, 0)
         return result
 
 def make_xy(sampling, ratio, is_polar=False, is_double=False, is_vector=False,
@@ -154,17 +156,17 @@ def make_xy(sampling, ratio, is_polar=False, is_double=False, is_vector=False,
 
     ss = float(sampling)
 
-    x = (np.arange(size) - x0) / (ss / 2) * ratio
+    x = (xp.arange(size) - x0) / (ss / 2) * ratio
 
     if not quarter:
         if sampling % 2 == 0 and fft:
-            x = np.roll(x, -sampling // 2)
+            x = xp.roll(x, -sampling // 2)
         elif sampling % 2 != 0 and fft:
-            x = np.roll(x, -(sampling - 1) // 2)
+            x = xp.roll(x, -(sampling - 1) // 2)
 
     if not is_vector or is_polar:
         y = rebin(x, (size, size), method='average')
-        x = np.transpose(y)
+        x = xp.transpose(y)
         if is_polar:
             r, theta = xy_to_polar(x, y)
             return r, theta
@@ -189,7 +191,7 @@ def make_mask(npoints, obsratio=None, diaratio=1.0, xc=0.0, yc=0.0, square=False
     - mask: numpy 2D array
     """
 
-    x, y = np.meshgrid(np.linspace(-1, 1, npoints), np.linspace(-1, 1, npoints))
+    x, y = xp.meshgrid(xp.linspace(-1, 1, npoints), xp.linspace(-1, 1, npoints))
 
     if xc is None:
         xc = 0.0
@@ -200,22 +202,22 @@ def make_mask(npoints, obsratio=None, diaratio=1.0, xc=0.0, yc=0.0, square=False
     ir = obsratio
 
     if centeronpixel:
-        idx = np.argmin(np.abs(xc - x[0, :]))
-        idxneigh = np.argmin(np.abs(xc - x[0, idx - 1:idx + 2]))
+        idx = xp.argmin(xp.abs(xc - x[0, :]))
+        idxneigh = xp.argmin(xp.abs(xc - x[0, idx - 1:idx + 2]))
         k = -0.5 if idxneigh == 0 else 0.5
         xc = x[0, idx] + k * (x[0, 1] - x[0, 0])
 
-        idx = np.argmin(np.abs(yc - y[:, 0]))
-        idxneigh = np.argmin(np.abs(yc - y[idx - 1:idx + 2, 0]))
+        idx = xp.argmin(xp.abs(yc - y[:, 0]))
+        idxneigh = xp.argmin(xp.abs(yc - y[idx - 1:idx + 2, 0]))
         k = -0.5 if idxneigh == 0 else 0.5
         yc = y[idx, 0] + k * (y[1, 0] - y[0, 0])
 
     if square:
-        mask = ((np.abs(x - xc) <= diaratio) & (np.abs(y - yc) <= diaratio) & 
-                ((np.abs(x - xc) >= diaratio * ir) | (np.abs(y - yc) >= diaratio * ir))).astype(np.uint8)
+        mask = ((xp.abs(x - xc) <= diaratio) & (xp.abs(y - yc) <= diaratio) & 
+                ((xp.abs(x - xc) >= diaratio * ir) | (xp.abs(y - yc) >= diaratio * ir))).astype(xp.uint8)
     else:
         mask = (((x - xc)**2 + (y - yc)**2 < diaratio**2) & 
-                ((x - xc)**2 + (y - yc)**2 >= (diaratio * ir)**2)).astype(np.uint8)
+                ((x - xc)**2 + (y - yc)**2 >= (diaratio * ir)**2)).astype(xp.uint8)
 
     if inverse:
         mask = 1 - mask
@@ -225,16 +227,16 @@ def make_mask(npoints, obsratio=None, diaratio=1.0, xc=0.0, yc=0.0, square=False
 def make_orto_modes(array):
     # return an othogonal 2D array
 
-    size_array = np.shape(array)
+    size_array = xp.shape(array)
 
     if len(size_array) != 2:
         raise ValueError('Error in input data, the input array must have two dimensions.')
 
     if size_array[1] > size_array[0]:
-        Q, R = np.linalg.qr(array.T)
+        Q, R = xp.linalg.qr(array.T)
         Q = Q.T
     else:
-        Q, R = np.linalg.qr(array)
+        Q, R = xp.linalg.qr(array)
 
     return Q
 
@@ -243,22 +245,22 @@ def zern_degree(j):
     From Armando Riccardi IDL function.
     """
     # return the zernike degree
-    n = np.floor(0.5 * (np.sqrt(8 * j - 7) - 3)) + 1
+    n = xp.floor(0.5 * (xp.sqrt(8 * j - 7) - 3)) + 1
     cn = n * (n + 1) / 2 + 1
 
-    if np.isscalar(n):
+    if xp.isscalar(n):
         if n % 2 == 0:
-            m = np.floor((j - cn + 1) / 2) * 2
+            m = xp.floor((j - cn + 1) / 2) * 2
         else:
-            m = np.floor((j - cn) / 2) * 2 + 1
+            m = xp.floor((j - cn) / 2) * 2 + 1
     else:
         # new code for j vector
-        idx_even = np.where(n % 2 == 0)[0]
-        idx_odd = np.where((n + 1) % 2 == 0)[0]
+        idx_even = xp.where(n % 2 == 0)[0]
+        idx_odd = xp.where((n + 1) % 2 == 0)[0]
         m = n * 0
         temp = j - cn
-        m[idx_even] = np.floor((temp[idx_even] + 1) / 2) * 2
-        m[idx_odd] = np.floor(temp[idx_odd] / 2) * 2 + 1
+        m[idx_even] = xp.floor((temp[idx_even] + 1) / 2) * 2
+        m[idx_odd] = xp.floor(temp[idx_odd] / 2) * 2 + 1
 
     return n, m.astype(int)
 
@@ -284,7 +286,7 @@ def zern_jradial(n, m, r):
     if m == 0:
         return eval_legendre(nmm2, 2.0 * r ** 2 - 1.0)
     else:
-        prefactor = np.sqrt(2.0 / (1.0 + 2.0 * n))
+        prefactor = xp.sqrt(2.0 / (1.0 + 2.0 * n))
         return prefactor * r ** m * eval_legendre(nmm2, 2.0 * r ** 2 - 1.0)
 
 def zern_jpolar(j, rho, theta):
@@ -307,14 +309,14 @@ def zern_jpolar(j, rho, theta):
 
     n, m = zern_degree(j)
 
-    result = np.sqrt(n + 1 + rho ** 2) * zern_jradial(n, m, rho)
+    result = xp.sqrt(n + 1 + rho ** 2) * zern_jradial(n, m, rho)
 
     if m == 0:
         return result
     elif j % 2 == 0:
-        return np.sqrt(2) * result * np.cos(m * theta)
+        return xp.sqrt(2) * result * xp.cos(m * theta)
     else:
-        return np.sqrt(2) * result * np.sin(m * theta)
+        return xp.sqrt(2) * result * xp.sin(m * theta)
 
 def zern(j, x, y):
     """
@@ -330,8 +332,8 @@ def zern(j, x, y):
     - jzern: numpy 2D array, j-th Zernike polynomial in the point of coordinates x ,y
     """
 
-    rho = np.sqrt(x**2 + y**2)
-    theta = np.arctan2(y, x)
+    rho = xp.sqrt(x**2 + y**2)
+    theta = xp.arctan2(y, x)
     return zern_jpolar(j, rho, theta)
 
 def zern2phi(dim, maxZernNumber, mask=None, no_round_mask=False, xsign=1, ysign=1, rot_angle=0, verbose=False):
@@ -353,9 +355,9 @@ def zern2phi(dim, maxZernNumber, mask=None, no_round_mask=False, xsign=1, ysign=
     """
 
     if not no_round_mask:
-        round_mask = np.array(make_mask(dim))
+        round_mask = xp.array(make_mask(dim))
     else:
-        round_mask = np.ones((dim, dim), dtype=float)
+        round_mask = xp.ones((dim, dim), dtype=float)
 
     if verbose:
         print('Computing Zernike cube...')
@@ -363,7 +365,7 @@ def zern2phi(dim, maxZernNumber, mask=None, no_round_mask=False, xsign=1, ysign=
     xx, yy = make_xy(dim, 1, is_polar=False, is_double=False, is_vector=False,
             use_zero=False, quarter=False, fft=False)
 
-    z2phi = np.zeros((dim, dim, maxZernNumber + 1), dtype=float)
+    z2phi = xp.zeros((dim, dim, maxZernNumber + 1), dtype=float)
 
     for i in range(maxZernNumber + 1):
         zern_shape = zern(i + 1, xsign * xx, ysign * yy)
@@ -378,8 +380,8 @@ def zern2phi(dim, maxZernNumber, mask=None, no_round_mask=False, xsign=1, ysign=
         if verbose:
             print('Orthogonalizing Zernike cube...')
 
-        idx1D = np.where(mask.flatten())
-        idx2D = np.where(mask)
+        idx1D = xp.where(mask.flatten())
+        idx2D = xp.where(mask)
 
         z2phi_temp = z2phi.reshape(-1, maxZernNumber + 1)
         z2phi_on_pupil = z2phi_temp[idx1D,:]
@@ -387,13 +389,13 @@ def zern2phi(dim, maxZernNumber, mask=None, no_round_mask=False, xsign=1, ysign=
 
         z2phi_matrix_ortho = make_orto_modes(z2phi_on_pupil)
 
-        #z2phi = np.zeros((dim, dim, maxZernNumber + 1), dtype=float)
-        z2phi = np.full((dim,dim, maxZernNumber + 1),np.nan)
+        #z2phi = xp.zeros((dim, dim, maxZernNumber + 1), dtype=float)
+        z2phi = xp.full((dim,dim, maxZernNumber + 1),xp.nan)
 
         for i in range(maxZernNumber + 1):
-            temp = np.zeros((dim, dim), dtype=float)
-            temp[idx2D[0],idx2D[1]] = z2phi_matrix_ortho[:, i] * 1/np.std(z2phi_matrix_ortho[:, i])
-            temp[idx2D[0],idx2D[1]] = temp[idx2D[0],idx2D[1]] - np.mean(temp[idx2D[0],idx2D[1]])
+            temp = xp.zeros((dim, dim), dtype=float)
+            temp[idx2D[0],idx2D[1]] = z2phi_matrix_ortho[:, i] * 1/xp.std(z2phi_matrix_ortho[:, i])
+            temp[idx2D[0],idx2D[1]] = temp[idx2D[0],idx2D[1]] - xp.mean(temp[idx2D[0],idx2D[1]])
             z2phi[:, :, i] = temp
 
         if verbose:
@@ -499,13 +501,13 @@ def extract_source_height(config, wfs_key):
     """
     Extracts the actual height of the source from the configuration.
     If zenithAngleInDeg is present, returns height * airmass.
-    If height is not present, returns np.inf.
+    If height is not present, returns xp.inf.
     """
     # Compute airmass
     if 'main' in config:
         zenith_angle = config['main'].get('zenithAngleInDeg', None)
-        zenith_rad = np.deg2rad(zenith_angle)
-        airmass = 1.0 / np.cos(zenith_rad)
+        zenith_rad = xp.deg2rad(zenith_angle)
+        airmass = 1.0 / xp.cos(zenith_rad)
     else:
         airmass = 1.0
 
@@ -526,7 +528,7 @@ def extract_source_height(config, wfs_key):
         if 'height' in config['on_axis_source']:
             return config['on_axis_source']['height'] * airmass
 
-    return np.inf  # Default to infinity if no height is specified
+    return xp.inf  # Default to infinity if no height is specified
 
 def load_pupilstop(cm, pupilstop_params, pixel_pupil, pixel_pitch, verbose=False):
     """
@@ -623,7 +625,7 @@ def load_influence_functions(cm, dm_params, pixel_pupil, verbose=False):
             dm_mask = ifunc.mask_inf_func.copy()
             if verbose:
                 print(f"     DM mask shape: {dm_mask.shape}")
-                print(f"     DM mask sum: {np.sum(dm_mask)}")
+                print(f"     DM mask sum: {xp.sum(dm_mask)}")
             return dm_array, dm_mask
         else:
             # If we don't have a mask, assume the influence function is already properly organized
@@ -660,7 +662,7 @@ def load_influence_functions(cm, dm_params, pixel_pupil, verbose=False):
         dm_mask = z_mask
         if verbose:
             print(f"     DM mask shape: {dm_mask.shape}")
-            print(f"     DM mask sum: {np.sum(dm_mask)}")
+            print(f"     DM mask sum: {xp.sum(dm_mask)}")
         return dm_array, dm_mask
     else:
         raise ValueError("No valid influence function configuration found. Need either 'ifunc_tag', 'ifunc_object', or 'type_str'.")
@@ -760,7 +762,7 @@ def find_subapdata(cm, wfs_params, wfs_key, params, verbose=False):
         if verbose:
             print("     Loading subapdata from file:", subap_path)
         subap_data = SubapData.restore(subap_path)
-        return np.transpose(np.asarray(np.where(subap_data.single_mask())))
+        return xp.transpose(xp.asarray(xp.where(subap_data.single_mask())))
 
     return None
 
@@ -828,11 +830,11 @@ def build_source_filename_part(source_config,zenith_angle=None):
         parts.append(f"pd{dist:.1f}a{angle:.0f}")
 
     if 'height' in source_config:
-        if source_config['height'] is not None and not np.isinf(source_config['height']):
+        if source_config['height'] is not None and not xp.isinf(source_config['height']):
             airmass = 1.0
             if zenith_angle is not None:
-                zenith_rad = np.deg2rad(zenith_angle)
-                airmass /= np.cos(zenith_rad)
+                zenith_rad = xp.deg2rad(zenith_angle)
+                airmass /= xp.cos(zenith_rad)
         parts.append(f"h{source_config['height']*airmass:.0f}")
 
     return parts
@@ -943,11 +945,11 @@ def dm3d_to_2d(dm_array, mask):
     if dm_array.ndim != 3:
         raise ValueError("The dm_array must be a 3D array.")
     nmodes = dm_array.shape[2]
-    idx = np.where(mask > 0)
+    idx = xp.where(mask > 0)
     dm_array_2d = dm_array[idx[0], idx[1], :].transpose()
     for i in range(nmodes):
-        dm_array_2d[i,:] /= np.sqrt(np.mean(dm_array_2d[i,:]**2))
-        dm_array_2d[i,:] -= np.mean(dm_array_2d[i,:])
+        dm_array_2d[i,:] /= xp.sqrt(xp.mean(dm_array_2d[i,:]**2))
+        dm_array_2d[i,:] -= xp.mean(dm_array_2d[i,:])
 
     return dm_array_2d
 
@@ -970,14 +972,14 @@ def dm2d_to_3d(dm_array, mask, normalize=True):
         raise ValueError("The dm_array must be a 2D array.")
     npixels = mask.shape[0]
     nmodes = dm_array.shape[0]
-    dm_array_3d = np.zeros((npixels, npixels, nmodes), dtype=float)
+    dm_array_3d = xp.zeros((npixels, npixels, nmodes), dtype=float)
     for i in range(nmodes):
-        idx = np.where(mask > 0)
+        idx = xp.where(mask > 0)
         dm_i = dm_array[i]
         # normalize by the RMS
         if normalize:
-            dm_i /= np.sqrt(np.mean(dm_i**2))
-        dm_i_3d = np.zeros(mask.shape, dtype=float)
+            dm_i /= xp.sqrt(xp.mean(dm_i**2))
+        dm_i_3d = xp.zeros(mask.shape, dtype=float)
         dm_i_3d[idx] = dm_i
         dm_array_3d[:, :, i] = dm_i_3d
 
@@ -1531,7 +1533,7 @@ def generate_im_filename(config_file, wfs_type=None, wfs_index=None, dm_index=No
     if source_coords is not None:
         dist, angle = source_coords
         parts.append(f"pd{dist:.1f}a{angle:.0f}")
-    if height is not None and not np.isinf(height):
+    if height is not None and not xp.isinf(height):
         parts.append(f"h{height:.0f}")
 
     # WFS info
@@ -1775,7 +1777,7 @@ def generate_pm_filename(config_file, opt_index=None, dm_index=None, layer_index
         parts.append(f"pd{dist:.1f}a{angle:.0f}")
 
     # Source height (only include if not infinite)
-    if not np.isinf(source_height):
+    if not xp.isinf(source_height):
         parts.append(f"h{source_height:.0f}")
 
     # Component info
@@ -1843,7 +1845,7 @@ def generate_pm_filenames(config_file, timestamp=False):
                 parts.append(f"pd{dist:.1f}a{angle:.0f}")
 
             # Source height (only include if not infinite)
-            if not np.isinf(source_height):
+            if not xp.isinf(source_height):
                 parts.append(f"h{source_height:.0f}")
 
             # DM info
@@ -1897,12 +1899,12 @@ def compute_mmse_reconstructor(interaction_matrix, C_atm, noise_variance=None, C
         if verbose:
             print(f"Building noise covariance matrix for {n_wfs} WFSs with {n_slopes_per_wfs} slopes each")
 
-        C_noise = np.zeros((n_slopes_total, n_slopes_total))
+        C_noise = xp.zeros((n_slopes_total, n_slopes_total))
         for i in range(n_wfs):
             # Set the diagonal elements for this WFS
             start_idx = i * n_slopes_per_wfs
             end_idx = (i + 1) * n_slopes_per_wfs
-            C_noise[start_idx:end_idx, start_idx:end_idx] = noise_variance[i] * np.eye(n_slopes_per_wfs)
+            C_noise[start_idx:end_idx, start_idx:end_idx] = noise_variance[i] * xp.eye(n_slopes_per_wfs)
 
     # Check dimensions
     if A.shape[1] != C_atm.shape[0]:
@@ -1915,46 +1917,46 @@ def compute_mmse_reconstructor(interaction_matrix, C_atm, noise_variance=None, C
     if not cinverse:
         # Check if matrices are diagonal
         if C_noise is not None:
-            is_diag_noise = np.all(np.abs(np.diag(np.diag(C_noise)) - C_noise) < 1e-10)
+            is_diag_noise = xp.all(xp.abs(xp.diag(xp.diag(C_noise)) - C_noise) < 1e-10)
 
             if is_diag_noise:
                 if verbose:
                     print("C_noise is diagonal, using optimized inversion")
-                C_noise_inv = np.diag(1.0 / np.diag(C_noise))
+                C_noise_inv = xp.diag(1.0 / xp.diag(C_noise))
             else:
                 if verbose:
                     print("Inverting C_noise matrix")
                 try:
-                    C_noise_inv = np.linalg.inv(C_noise)
-                except np.linalg.LinAlgError:
+                    C_noise_inv = xp.linalg.inv(C_noise)
+                except xp.linalg.LinAlgError:
                     if verbose:
                         print("Warning: C_noise inversion failed, using pseudo-inverse")
-                    C_noise_inv = np.linalg.pinv(C_noise)
+                    C_noise_inv = xp.linalg.pinv(C_noise)
         else:
             # Default: identity matrix (no noise)
             if verbose:
                 print("No C_noise provided, using identity matrix")
-            C_noise_inv = np.eye(A.shape[1])
+            C_noise_inv = xp.eye(A.shape[1])
 
-        is_diag_atm = np.all(np.abs(np.diag(np.diag(C_atm)) - C_atm) < 1e-10)
+        is_diag_atm = xp.all(xp.abs(xp.diag(xp.diag(C_atm)) - C_atm) < 1e-10)
 
         if is_diag_atm:
             if verbose:
                 print("C_atm is diagonal, using optimized inversion")
-            C_atm_inv = np.diag(1.0 / np.diag(C_atm))
+            C_atm_inv = xp.diag(1.0 / xp.diag(C_atm))
         else:
             if verbose:
                 print("Inverting C_atm matrix")
             try:
-                C_atm_inv = np.linalg.inv(C_atm)
-            except np.linalg.LinAlgError:
+                C_atm_inv = xp.linalg.inv(C_atm)
+            except xp.linalg.LinAlgError:
                 if verbose:
                     print("Warning: C_atm inversion failed, using pseudo-inverse")
-                C_atm_inv = np.linalg.pinv(C_atm)
+                C_atm_inv = xp.linalg.pinv(C_atm)
     else:
         # Matrices are already inverted
         C_atm_inv = C_atm
-        C_noise_inv = C_noise if C_noise is not None else np.eye(A.shape[1])
+        C_noise_inv = C_noise if C_noise is not None else xp.eye(A.shape[1])
 
     # Compute H = A' Cz^(-1) A + Cx^(-1)
     if verbose:
@@ -1962,19 +1964,19 @@ def compute_mmse_reconstructor(interaction_matrix, C_atm, noise_variance=None, C
 
     # Check if C_noise_inv is scalar
     if isinstance(C_noise_inv, (int, float)) or (hasattr(C_noise_inv, 'size') and C_noise_inv.size == 1):
-        H = C_noise_inv * np.dot(A.T, A) + C_atm_inv
+        H = C_noise_inv * xp.dot(A.T, A) + C_atm_inv
     else:
-        H = np.dot(A.T, np.dot(C_noise_inv, A)) + C_atm_inv
+        H = xp.dot(A.T, xp.dot(C_noise_inv, A)) + C_atm_inv
 
     # Compute H^(-1)
     if verbose:
         print("Inverting H")
     try:
-        H_inv = np.linalg.inv(H)
-    except np.linalg.LinAlgError:
+        H_inv = xp.linalg.inv(H)
+    except xp.linalg.LinAlgError:
         if verbose:
             print("Warning: H inversion failed, using pseudo-inverse")
-        H_inv = np.linalg.pinv(H)
+        H_inv = xp.linalg.pinv(H)
 
     # Compute W = H^(-1) A' Cz^(-1)
     if verbose:
@@ -1982,9 +1984,9 @@ def compute_mmse_reconstructor(interaction_matrix, C_atm, noise_variance=None, C
 
     # Check if C_noise_inv is scalar
     if isinstance(C_noise_inv, (int, float)) or (hasattr(C_noise_inv, 'size') and C_noise_inv.size == 1):
-        W_mmse = C_noise_inv * np.dot(H_inv, A.T)
+        W_mmse = C_noise_inv * xp.dot(H_inv, A.T)
     else:
-        W_mmse = np.dot(H_inv, np.dot(A.T, C_noise_inv))
+        W_mmse = xp.dot(H_inv, xp.dot(A.T, C_noise_inv))
 
     if verbose:
         print("MMSE reconstruction matrix computed")

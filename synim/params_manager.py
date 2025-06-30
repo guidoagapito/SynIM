@@ -2,16 +2,12 @@ import os
 import re
 import numpy as np
 import matplotlib.pyplot as plt
-import synim.synim as synim
 
-# Import all utility functions from params_common_utils
+# Import all utility functions BEFORE synim
 from synim.utils import *
 
+# Import specula BEFORE initialization
 import specula
-specula.init(device_idx=-1, precision=1)
-
-from specula.calib_manager import CalibManager
-from specula.data_objects.intmat import Intmat
 
 class ParamsManager:
     """
@@ -19,7 +15,7 @@ class ParamsManager:
     for all combinations of DMs and WFSs without redundant loading.
     """
 
-    def __init__(self, params_file, root_dir=None, verbose=False):
+    def __init__(self, params_file, use_cupy=None, device_idx=-1, root_dir=None, verbose=False):
         """
         Initialize the manager and load all common parameters.
         
@@ -28,6 +24,31 @@ class ParamsManager:
             root_dir (str, optional): Root directory to override in params
             verbose (bool): Whether to print detailed information
         """
+        # Initialize SynIM FIRST
+        import synim
+
+        if use_cupy is not None or device_idx != -1:
+            synim.set_backend(device_idx=device_idx, use_cupy=use_cupy)
+
+        # Then initialize SPECULA
+        specula.init(device_idx=device_idx, precision=1)
+
+        # Import synim functions AFTER initialization
+        import synim.synim as synim_funcs
+
+        # Store references
+        self.synim = synim
+        self.synim_funcs = synim_funcs
+        self.cpuArray = synim.cpuArray
+        self.to_xp = synim.to_xp
+        self.xp = synim.xp
+
+        # Import SPECULA classes AFTER initialization
+        from specula.calib_manager import CalibManager
+        from specula.data_objects.intmat import Intmat
+        self.CalibManager = CalibManager
+        self.Intmat = Intmat
+
         # Load configuration
         self.params_file = params_file
         if isinstance(params_file, str):
@@ -46,7 +67,7 @@ class ParamsManager:
 
         # Initialize the CalibManager
         self.main_params = self.params['main']
-        self.cm = CalibManager(self.main_params['root_dir'])
+        self.cm = self.CalibManager(self.main_params['root_dir'])
 
         # Extract common parameters
         self.pixel_pupil = self.main_params['pixel_pupil']
@@ -385,7 +406,7 @@ class ParamsManager:
             dm_index (int, optional): Index of the DM (1-based)
             
         Returns:
-            dict: Parameters ready to be passed to synim.interaction_matrix
+            dict: Parameters ready to be passed to self.synim_funcs.interaction_matrix
         """
         # Get DM parameters
         dm_params = self.get_dm_params(dm_index)
@@ -444,7 +465,7 @@ class ParamsManager:
             print(f"      Guide star: {params['gs_pol_coo']} at height {params['gs_height']} m")
 
         # Calculate the interaction matrix
-        im = synim.interaction_matrix(
+        im = self.synim_funcs.interaction_matrix(
             pup_diam_m=params['pup_diam_m'],
             pup_mask=params['pup_mask'],
             dm_array=params['dm_array'],
@@ -562,7 +583,7 @@ class ParamsManager:
                 # Display the matrix if requested
                 if display:
                     plt.figure(figsize=(10, 8))
-                    plt.imshow(im, cmap='viridis')
+                    plt.imshow(self.cpuArray(im), cmap='viridis')
                     plt.colorbar()
                     plt.title(f"Interaction Matrix: {wfs_name} - {dm_name}")
                     plt.tight_layout()
@@ -583,7 +604,7 @@ class ParamsManager:
                 pupdata_tag = f"{config_name}_{wfs_info}"
 
                 # Create Intmat object and save it
-                intmat_obj = Intmat(
+                intmat_obj = self.Intmat(
                     im, 
                     pupdata_tag=pupdata_tag,
                     norm_factor=1.0,
@@ -674,7 +695,7 @@ class ParamsManager:
             print(f"Mode indices: {mode_indices}")
 
         # Create the full interaction matrix
-        im_full = np.zeros((n_tot_modes, n_tot_slopes))
+        im_full = self.xp.zeros((n_tot_modes, n_tot_slopes))
 
         # Load and assemble the interaction matrices
         for ii in range(n_wfs):
@@ -690,7 +711,7 @@ class ParamsManager:
                     print(f"--> Loading IM: {im_filename}")
 
                 # Load the interaction matrix
-                intmat_obj = Intmat.restore(im_path)
+                intmat_obj = self.Intmat.restore(im_path)
 
                 if self.verbose:
                     print(f"    IM shape: {intmat_obj.intmat.shape}")
@@ -705,7 +726,7 @@ class ParamsManager:
         # Save the full interaction matrix if requested
         if save:
             output_filename = f"im_full_{wfs_type}.npy"
-            np.save(os.path.join(output_im_dir, output_filename), im_full)
+            self.xp.save(os.path.join(output_im_dir, output_filename), im_full)
             if self.verbose:
                 print(f"Saved full interaction matrix to {output_filename}")
 
@@ -764,7 +785,7 @@ class ParamsManager:
                 verbose=verbose_flag
             )
 
-            n_valid_pixels = np.sum(inv_mask > 0.5)
+            n_valid_pixels = self.xp.sum(inv_mask > 0.5)
 
             if base_inv_array is not None:
                 if verbose_flag:
@@ -837,8 +858,8 @@ class ParamsManager:
                 if base_inv_array is None:
                     if verbose_flag:
                         print("  No base_inv_array provided. Creating a simple identity matrix.")
-                    n_valid_pixels = np.sum(self.pup_mask > 0.5)
-                    base_inv_array = np.eye(n_valid_pixels)
+                    n_valid_pixels = self.xp.sum(self.pup_mask > 0.5)
+                    base_inv_array = self.xp.eye(n_valid_pixels)
 
                 if verbose_flag:
                     print(f"  Computing projection matrix with base_inv_array shape: {base_inv_array.shape}")
@@ -846,7 +867,7 @@ class ParamsManager:
                     print(f"  DM height: {dm_params['dm_height']}, rotation: {dm_params['dm_rotation']}")
 
                 # Calculate the projection matrix
-                pm = synim.projection_matrix(
+                pm = self.synim_funcs.projection_matrix(
                     pup_diam_m=self.pup_diam_m,
                     pup_mask=self.pup_mask,
                     dm_array=dm_params['dm_array'],
@@ -871,7 +892,7 @@ class ParamsManager:
                 # Display the matrix if requested
                 if display:
                     plt.figure(figsize=(10, 8))
-                    plt.imshow(pm, cmap='viridis')
+                    plt.imshow(self.cpuArray(pm), cmap='viridis')
                     plt.colorbar()
                     plt.title(f"Projection Matrix: {source_name} - {dm_name}")
                     plt.tight_layout()
@@ -886,7 +907,7 @@ class ParamsManager:
                 pupdata_tag = f"{config_name}_opt{source_idx}"
 
                 # Create Intmat object and save it (we reuse the Intmat class for storage)
-                pm_obj = Intmat(
+                pm_obj = self.Intmat(
                     pm,
                     pupdata_tag=pupdata_tag,
                     norm_factor=1.0,
@@ -934,8 +955,8 @@ class ParamsManager:
                 if base_inv_array is None:
                     if verbose_flag:
                         print("  No base_inv_array provided. Creating a simple identity matrix.")
-                    n_valid_pixels = np.sum(self.pup_mask > 0.5)
-                    base_inv_array = np.eye(n_valid_pixels)
+                    n_valid_pixels = self.xp.sum(self.pup_mask > 0.5)
+                    base_inv_array = self.xp.eye(n_valid_pixels)
 
                 if verbose_flag:
                     print(f"  Computing projection matrix with base_inv_array shape: {base_inv_array.shape}")
@@ -943,7 +964,7 @@ class ParamsManager:
                     print(f"  Layer height: {layer_params['dm_height']}, rotation: {layer_params['dm_rotation']}")
 
                 # Calculate the projection matrix
-                pm = synim.projection_matrix(
+                pm = self.synim_funcs.projection_matrix(
                     pup_diam_m=self.pup_diam_m,
                     pup_mask=self.pup_mask,
                     dm_array=layer_params['dm_array'],
@@ -968,7 +989,7 @@ class ParamsManager:
                 # Display the matrix if requested
                 if display:
                     plt.figure(figsize=(10, 8))
-                    plt.imshow(pm, cmap='viridis')
+                    plt.imshow(self.cpuArray(pm), cmap='viridis')
                     plt.colorbar()
                     plt.title(f"Projection Matrix: {source_name} - {layer_name}")
                     plt.tight_layout()
@@ -983,7 +1004,7 @@ class ParamsManager:
                 pupdata_tag = f"{config_name}_opt{source_idx}"
 
                 # Create Intmat object and save it (we reuse the Intmat class for storage)
-                pm_obj = Intmat(
+                pm_obj = self.Intmat(
                     pm,
                     pupdata_tag=pupdata_tag,
                     norm_factor=1.0,
@@ -1037,7 +1058,7 @@ class ParamsManager:
         if self.verbose:
             print(f"Found {len(opt_sources)} optical sources, {len(dm_list)} DMs, and {len(layer_list)} layers")
 
-        weights_array = np.zeros(len(opt_sources))
+        weights_array = self.xp.zeros(len(opt_sources))
         for i, source in enumerate(opt_sources):
             source_config = source['config']
             # Get weight (default to 1.0 if not specified)
@@ -1063,23 +1084,23 @@ class ParamsManager:
                 if not os.path.exists(pm_path):
                     raise FileNotFoundError(f"File {pm_path} does not exist")
 
-                intmat_obj = Intmat.restore(pm_path)
+                intmat_obj = self.Intmat.restore(pm_path)
                 intmat_data = intmat_obj.intmat
 
                 # Pile the arrays on the second dimension
                 if jj == 0:
                     pm_full_i = intmat_data
                 else:
-                    pm_full_i = np.concatenate((pm_full_i, intmat_data), axis=1)
+                    pm_full_i = self.xp.concatenate((pm_full_i, intmat_data), axis=1)
 
                 if self.verbose:
                     print(f"    Filled array with opt{opt_index}, dm{dm_index} projection data")
 
             # Build a 3D array piling the arrays on the new dimension
             if ii == 0:
-                pm_full_dm = pm_full_i[np.newaxis, :, :]
+                pm_full_dm = pm_full_i[self.xp.newaxis, :, :]
             else:
-                pm_full_dm = np.concatenate((pm_full_dm, pm_full_i[np.newaxis, :, :]), axis=0)
+                pm_full_dm = self.xp.concatenate((pm_full_dm, pm_full_i[self.xp.newaxis, :, :]), axis=0)
 
         for ii, opt_source in enumerate(opt_sources):
             opt_index = opt_source['index']
@@ -1096,23 +1117,23 @@ class ParamsManager:
                 pm_path = os.path.join(output_dir, pm_filename)
                 if self.verbose:
                     print(f"--> Loading Layer PM: {pm_filename}")
-                intmat_obj = Intmat.restore(pm_path)
+                intmat_obj = self.Intmat.restore(pm_path)
                 intmat_data = intmat_obj.intmat
 
                 # Pile the arrays on the second dimension
                 if jj == 0:
                     pm_full_i = intmat_data
                 else:
-                    pm_full_i = np.concatenate((pm_full_i, intmat_data), axis=0)
+                    pm_full_i = self.xp.concatenate((pm_full_i, intmat_data), axis=0)
 
                 if self.verbose:
                     print(f"    Filled array with opt{opt_index}, dm{dm_index} projection data")
 
             # Build a 3D array piling the arrays on the new dimension
             if ii == 0:
-                pm_full_layer = pm_full_i[np.newaxis, :, :]
+                pm_full_layer = pm_full_i[self.xp.newaxis, :, :]
             else:
-                pm_full_layer = np.concatenate((pm_full_layer, pm_full_i[np.newaxis, :, :]), axis=0)
+                pm_full_layer = self.xp.concatenate((pm_full_layer, pm_full_i[self.xp.newaxis, :, :]), axis=0)
 
         # Display summary information
         if self.verbose:
@@ -1126,21 +1147,21 @@ class ParamsManager:
         if save:
             if pm_full_dm is not None:
                 dm_output_filename = "pm_full_dm.npy"
-                np.save(os.path.join(output_dir, dm_output_filename), pm_full_dm)
+                self.xp.save(os.path.join(output_dir, dm_output_filename), pm_full_dm)
                 if self.verbose:
                     print(f"Saved DM projection matrix to {dm_output_filename}")
 
             if pm_full_layer is not None:
                 layer_output_filename = "pm_full_layer.npy"
-                np.save(os.path.join(output_dir, layer_output_filename), pm_full_layer)
+                self.xp.save(os.path.join(output_dir, layer_output_filename), pm_full_layer)
                 if self.verbose:
                     print(f"Saved Layer projection matrix to {layer_output_filename}")
 
         nopt = pm_full_dm.shape[0]
-        tpdm_pdm = np.zeros((pm_full_dm.shape[1], pm_full_dm.shape[1]))
-        tpdm_pl = np.zeros((pm_full_dm.shape[1], pm_full_layer.shape[1]))
+        tpdm_pdm = self.xp.zeros((pm_full_dm.shape[1], pm_full_dm.shape[1]))
+        tpdm_pl = self.xp.zeros((pm_full_dm.shape[1], pm_full_layer.shape[1]))
 
-        total_weight = np.sum(weights_array)
+        total_weight = self.xp.sum(weights_array)
         for i in range(nopt):
             pdm_i = pm_full_dm[i, :, :]      # shape: (n_dm_modes, n_pupil_modes)
             pl_i = pm_full_layer[i, :, :]    # shape: (n_layer_modes, n_pupil_modes)
@@ -1151,8 +1172,8 @@ class ParamsManager:
 
         # Pseudoinverse with regularization (tune eps and regFactor as needed)
         eps = 1e-14
-        # tpdm_pdm is square, so we can use np.linalg.pinv directly
-        tpdm_pdm_inv = np.linalg.pinv(tpdm_pdm + regFactor * np.eye(tpdm_pdm.shape[0]), rcond=eps)
+        # tpdm_pdm is square, so we can use self.xp.linalg.pinv directly
+        tpdm_pdm_inv = self.xp.linalg.pinv(tpdm_pdm + regFactor * self.xp.eye(tpdm_pdm.shape[0]), rcond=eps)
         p_opt = tpdm_pdm_inv @ tpdm_pl
 
         return p_opt, pm_full_dm, pm_full_layer
