@@ -986,6 +986,7 @@ def dm2d_to_3d(dm_array, mask, normalize=True):
 def parse_pro_file(pro_file_path):
     """
     Parse a .pro file and extract its structure into a Python dictionary.
+    Improved version to handle IDL-style syntax better.
 
     Args:
         pro_file_path (str): Path to the .pro file.
@@ -997,64 +998,148 @@ def parse_pro_file(pro_file_path):
     current_section = None
 
     with open(pro_file_path, 'r') as file:
-        for line in file:
-            # Remove comments and whitespace
-            line = line.split(';')[0].strip()
+        for line_num, line in enumerate(file, 1):
+            # Remove comments (everything after ;)
+            comment_pos = line.find(';')
+            if comment_pos != -1:
+                line = line[:comment_pos]
+
+            line = line.strip()
             if not line:
                 continue
 
-            # Recognize the start of a new section (e.g., {main, {DM, etc.)
-            section_match = re.match(r'^\{(\w+),', line)
-            if section_match:
-                current_section = section_match.group(1).lower()
-                data[current_section] = {}
+            try:
+                # Recognize the start of a new section (e.g., {main, {dm1, etc.)
+                section_match = re.match(r'^\{(\w+),?', line)
+                if section_match:
+                    current_section = section_match.group(1).lower()
+                    data[current_section] = {}
+                    continue
+
+                # Recognize the end of a section
+                if line == '}':
+                    current_section = None
+                    continue
+
+                # If we're in a section, process key-value pairs
+                if current_section:
+                    # Match both : and = assignments
+                    key_value_match = re.match(r'(\w+)\s*[:=]\s*(.+)', line)
+                    if key_value_match:
+                        key = key_value_match.group(1).strip()
+                        value = key_value_match.group(2).strip()
+
+                        # Remove trailing comma
+                        if value.endswith(','):
+                            value = value[:-1].strip()
+
+                        # Parse the value
+                        parsed_value = _parse_pro_value(value)
+                        data[current_section][key] = parsed_value
+
+            except Exception as e:
+                print(f"Warning: Error parsing line {line_num}: '{line}' - {e}")
                 continue
-
-            # Recognize the end of a section
-            if line == '}':
-                current_section = None
-                continue
-
-            # If we're in a section, process key-value pairs
-            if current_section:
-                key_value_match = re.match(r'(\w+)\s*[:=]\s*(.+)', line)
-                if key_value_match:
-                    key = key_value_match.group(1).strip()
-                    value = key_value_match.group(2).strip()
-
-                    # Remove any trailing commas
-                    if value.endswith(','):
-                        value = value[:-1].strip()
-
-                    # Remove single quotes around strings
-                    if value.startswith("'") and value.endswith("'"):
-                        value = value[1:-1]
-
-                    # Interpret value types
-                    if value.lower() in ['true', 'false']:
-                        value = value.lower() == 'true'
-                    elif re.match(r'^-?\d+(\.\d+)?$', value):  # Integer or float
-                        value = float(value) if '.' in value else int(value)
-                    elif re.match(r'^\[.*\]$', value):  # List
-                        # Special handling for 'replicate'
-                        def replicate_replacer(match):
-                            val = match.group(1)
-                            num = int(match.group(2))
-                            return str([float(val)] * num)
-                        # Replace all occurrences of replicate(x, n)
-                        value = re.sub(r'replicate\(([^,]+),\s*(\d+)\)', replicate_replacer, value)
-                        value = eval(value)
-                    elif re.match(r'^[\d\.]+/[^\s]+$', value):  # Mathematical expression (e.g., 8.118/160)
-                        try:
-                            value = eval(value)
-                        except Exception:
-                            pass
-                    elif value.lower() == '!values.f_infinity':  # Special case for infinity
-                        value = float('inf')
-
-                    data[current_section][key] = value
 
     return data
+
+def _parse_pro_value(value):
+    """
+    Parse a single value from a PRO file, handling IDL-specific syntax.
+    """
+    value = value.strip()
+
+    # Handle special IDL values
+    if value == '!VALUES.F_INFINITY':
+        return float('inf')
+
+    # Handle boolean values (IDL style)
+    if value.lower() in ['0b', 'false']:
+        return False
+    elif value.lower() in ['1b', 'true']:
+        return True
+
+    # Handle quoted strings
+    if (value.startswith("'") and value.endswith("'")) or \
+       (value.startswith('"') and value.endswith('"')):
+        return value[1:-1]
+
+    # Handle arrays [val1, val2, ...]
+    if value.startswith('[') and value.endswith(']'):
+        return _parse_pro_array(value)
+
+    # Handle replicate function: replicate(val, n)
+    replicate_match = re.match(r'replicate\(([^,]+),\s*(\d+)\)', value, re.IGNORECASE)
+    if replicate_match:
+        val = _parse_pro_value(replicate_match.group(1))
+        num = int(replicate_match.group(2))
+        return [val] * num
+
+    # *** MIGLIORAMENTO: Pattern per numeri più flessibile ***
+    # Handle integers (with optional L suffix)
+    if re.match(r'^-?\d+[lL]?$', value):
+        return int(value.rstrip('lL'))
+
+    # Handle floats (inclusi quelli che finiscono con .)
+    if re.match(r'^-?\d*\.?\d*([eE][+-]?\d+)?[dD]?$', value) and any(c.isdigit() for c in value):
+        try:
+            return float(value.rstrip('dD'))
+        except ValueError:
+            pass
+
+    # Handle scientific notation
+    if re.match(r'^-?\d+[eE][+-]?\d+$', value):
+        return float(value)
+
+    # Handle mathematical expressions (e.g., 38.5/480)
+    if '/' in value and re.match(r'^[\d\.\+\-\*/\(\)\s]+$', value):
+        try:
+            return eval(value)
+        except:
+            pass
+
+    # Handle 'auto' and other special string values without quotes
+    if value.lower() in ['auto']:
+        return value.lower()
+
+    # Default: return as string
+    return value
+
+def _parse_pro_array(array_str):
+    """
+    Parse a PRO array string like [val1, val2, val3].
+    
+    Args:
+        array_str (str): Array string including brackets
+        
+    Returns:
+        list: Parsed array
+    """
+    # Remove brackets
+    content = array_str[1:-1].strip()
+    if not content:
+        return []
+
+    # Split by comma
+    elements = []
+    parts = content.split(',')
+
+    for part in parts:
+        part = part.strip()
+        if part:
+            # Handle replicate within arrays
+            if 'replicate(' in part.lower():
+                replicate_match = re.match(r'replicate\(([^,]+),\s*(\d+)\)', part, re.IGNORECASE)
+                if replicate_match:
+                    val = _parse_pro_value(replicate_match.group(1))
+                    num = int(replicate_match.group(2))
+                    elements.extend([val] * num)
+                    continue
+
+            # Parse individual element
+            elements.append(_parse_pro_value(part))
+
+    return elements
 
 def parse_params_file(file_path):
     """
