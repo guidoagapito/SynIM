@@ -72,7 +72,11 @@ def to_xp(target_xp, v, dtype=None, force_copy=False):
     '''
     Make sure that v is allocated as an array on the target backend.
     '''
-    if target_xp is cp and cp is not None:
+    # If CuPy is requested but not available, fallback to NumPy
+    if target_xp is cp and cp is None:
+        target_xp = np
+
+    if target_xp is cp:
         if isinstance(v, cp.ndarray) and not force_copy:
             retval = v
         else:
