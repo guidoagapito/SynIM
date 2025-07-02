@@ -259,35 +259,55 @@ def apply_extrapolation(data, edge_pixels, reference_indices, coefficients, debu
     flat_result = result.ravel()
     flat_data = data.ravel()
 
-    # Iterate over each edge pixel
-    for i, edge_idx in enumerate(edge_pixels):
-        is_problem_pixel = problem_indices is not None and i in problem_indices
+    if debug:
+        # Iterate over each edge pixel
+        for i, edge_idx in enumerate(edge_pixels):
+            is_problem_pixel = problem_indices is not None and i in problem_indices
 
-        # Compute the 2D coordinates of the pixel
-        edge_y = edge_idx // data.shape[1]
-        edge_x = edge_idx % data.shape[1]
+            # Compute the 2D coordinates of the pixel
+            edge_y = edge_idx // data.shape[1]
+            edge_x = edge_idx % data.shape[1]
 
-        if is_problem_pixel:
-            print(f"\n[DEBUG] Calculating extrapolated value for pixel [{edge_y},{edge_x}]:")
-            print(f"  Original value: {flat_data[edge_idx]}")
+            if is_problem_pixel:
+                print(f"\n[DEBUG] Calculating extrapolated value for pixel [{edge_y},{edge_x}]:")
+                print(f"  Original value: {flat_data[edge_idx]}")
 
-        # Initialize the extrapolated value
-        extrap_value = 0.0
+            # Initialize the extrapolated value
+            extrap_value = 0.0
 
-        # Sum contributions from all references
-        for j in range(reference_indices.shape[1]):
-            ref_idx = reference_indices[i, j]
-            if ref_idx >= 0:  # If the index is valid
-                ref_y = ref_idx // data.shape[1]
-                ref_x = ref_idx % data.shape[1]
-                contrib = coefficients[i, j] * flat_data[ref_idx]
-                extrap_value += contrib
+            # Sum contributions from all references
+            for j in range(reference_indices.shape[1]):
+                ref_idx = reference_indices[i, j]
+                if ref_idx >= 0:  # If the index is valid
+                    ref_y = ref_idx // data.shape[1]
+                    ref_x = ref_idx % data.shape[1]
+                    contrib = coefficients[i, j] * flat_data[ref_idx]
+                    extrap_value += contrib
 
-                if is_problem_pixel:
-                    print(f"  Ref [{ref_y},{ref_x}] = {flat_data[ref_idx]} × {coefficients[i, j]:.4f} = {contrib:.4f}")
+                    if is_problem_pixel:
+                        print(f"  Ref [{ref_y},{ref_x}] = {flat_data[ref_idx]} × {coefficients[i, j]:.4f} = {contrib:.4f}")
 
-        # Assign the extrapolated value
-        flat_result[edge_idx] = extrap_value
+            # Assign the extrapolated value
+            flat_result[edge_idx] = extrap_value
+    else:       
+        # Create a mask for valid reference indices (>= 0)
+        valid_ref_mask = reference_indices >= 0
+        
+        # Replace invalid indices with 0 to avoid indexing errors
+        safe_ref_indices = np.where(valid_ref_mask, reference_indices, 0)
+        
+        # Get data values for all reference indices at once
+        ref_data = flat_data[safe_ref_indices]  # Shape: (n_valid_edges, 8)
+        
+        # Zero out contributions from invalid references
+        masked_coeffs = np.where(valid_ref_mask, coefficients, 0.0)
+        
+        # Compute all contributions at once and sum across reference positions
+        contributions = masked_coeffs * ref_data  # Element-wise multiplication
+        extrap_values = np.sum(contributions, axis=1)  # Sum across reference positions
+        
+        # Assign extrapolated values to edge pixels
+        flat_result[edge_pixels] = extrap_values
 
     return result
 
