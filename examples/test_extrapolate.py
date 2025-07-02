@@ -1,6 +1,6 @@
 import numpy as np
 import matplotlib.pyplot as plt
-from synim import calculate_extrapolation_indices_coeffs, apply_extrapolation
+from synim.synim import calculate_extrapolation_indices_coeffs, apply_extrapolation
 
 def test_extrapolation():
     """
