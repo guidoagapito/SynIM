@@ -292,20 +292,20 @@ def apply_extrapolation(data, edge_pixels, reference_indices, coefficients, debu
     else:       
         # Create a mask for valid reference indices (>= 0)
         valid_ref_mask = reference_indices >= 0
-        
+
         # Replace invalid indices with 0 to avoid indexing errors
         safe_ref_indices = np.where(valid_ref_mask, reference_indices, 0)
-        
+
         # Get data values for all reference indices at once
         ref_data = flat_data[safe_ref_indices]  # Shape: (n_valid_edges, 8)
-        
+
         # Zero out contributions from invalid references
         masked_coeffs = np.where(valid_ref_mask, coefficients, 0.0)
-        
+
         # Compute all contributions at once and sum across reference positions
         contributions = masked_coeffs * ref_data  # Element-wise multiplication
         extrap_values = np.sum(contributions, axis=1)  # Sum across reference positions
-        
+
         # Assign extrapolated values to edge pixels
         flat_result[edge_pixels] = extrap_values
 
