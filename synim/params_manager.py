@@ -468,7 +468,7 @@ class ParamsManager:
 
         return im
 
-    def compute_interaction_matrices(self, output_im_dir=None, output_rec_dir=None,
+    def compute_interaction_matrices(self, output_im_dir, output_rec_dir,
                                 wfs_type=None, overwrite=False, verbose=None, display=False):
         """
         Compute and save interaction matrices for all combinations of WFSs and DMs.
@@ -494,10 +494,10 @@ class ParamsManager:
 
         # Set up directories
         if output_im_dir is None:
-            output_im_dir = os.path.join(specula_repo_path, "main", "scao", "calib", "MCAO", "im")
+            raise ValueError("output_im_dir must be specified.")
 
         if output_rec_dir is None:
-            output_rec_dir = os.path.join(specula_repo_path, "main", "scao", "calib", "MCAO", "rec")
+            raise ValueError("output_rec_dir must be specified.")
 
         # Create directories if they don't exist
         os.makedirs(output_im_dir, exist_ok=True)
@@ -602,7 +602,8 @@ class ParamsManager:
 
     def assemble_interaction_matrices(self, wfs_type='ngs', output_im_dir=None, save=False):
         """
-        Assemble interaction matrices for a specific type of WFS into a single full interaction matrix.
+        Assemble interaction matrices for a specific type of WFS into
+        a single full interaction matrix.
 
         Args:
             wfs_type (str): The type of WFS to assemble matrices for ('ngs', 'lgs', 'ref')
@@ -610,15 +611,14 @@ class ParamsManager:
             save (bool): Whether to save the assembled matrix to disk
             
         Returns:
-            tuple: (im_full, n_slopes_per_wfs, mode_indices, dm_indices) - Assembled matrix and associated parameters
+            tuple: (im_full, n_slopes_per_wfs, mode_indices, dm_indices) -
+                   Assembled matrix and associated parameters
         """
         # Set up output directory
         if output_im_dir is None:
-            specula_init_path = specula.__file__
-            specula_package_dir = os.path.dirname(specula_init_path)
-            specula_repo_path = os.path.dirname(specula_package_dir)
-            output_im_dir = os.path.join(specula_repo_path, "main", "scao", "calib", "MCAO", "im")
+            raise ValueError("output_im_dir must be specified.")
 
+        # Calculate total dimensions
         # Count WFSs of the specified type in the configuration
         wfs_list = [wfs for wfs in self.wfs_list if wfs_type in wfs['name']]
         n_wfs = len(wfs_list)
@@ -627,16 +627,16 @@ class ParamsManager:
             print(f"Found {n_wfs} {wfs_type.upper()} WFSs")
 
         # Get the number of slopes per WFS (from idx_valid_sa)
-        n_slopes_per_wfs = 0
+        n_tot_slopes = 0
+        n_slopes_list = []
         for wfs in wfs_list:
             wfs_params = self.get_wfs_params(wfs_type, int(wfs['index']))
             if wfs_params['idx_valid_sa'] is not None:
                 # Each valid subaperture produces X and Y slopes
                 n_slopes_this_wfs = len(wfs_params['idx_valid_sa']) * 2
-                if n_slopes_per_wfs == 0:
-                    n_slopes_per_wfs = n_slopes_this_wfs
-                elif n_slopes_per_wfs != n_slopes_this_wfs:
-                    print("Warning: Inconsistent number of slopes across WFSs")
+                n_slopes_list.append(n_slopes_this_wfs)
+                n_tot_slopes += n_slopes_this_wfs
+        n_slopes_per_wfs = n_tot_slopes // n_wfs
 
         if self.verbose:
             print(f"Each WFS has {n_slopes_per_wfs} slopes")
@@ -662,16 +662,24 @@ class ParamsManager:
                         dm_indices.append(i + 1)
                         mode_indices.append(list(range(dm_start_mode, dm_start_mode + n_modes)))
                         total_modes += n_modes
+        else:
+            # Default: use all DMs with all modes
+            for dm in self.dm_list:
+                dm_idx = int(dm['index'])
+                dm_params = self.get_dm_params(dm_idx)
+                n_modes = dm_params['dm_array'].shape[2]
+                dm_start_mode = 0
 
-        # Calculate total dimensions
+                dm_start_modes.append(dm_start_mode)
+                dm_indices.append(dm_idx)
+                mode_indices.append(list(range(dm_start_mode, dm_start_mode + n_modes)))
+                total_modes += n_modes
         n_tot_modes = total_modes  # Total number of modes
-        n_tot_slopes = n_wfs * n_slopes_per_wfs  # Total number of slopes
 
         if self.verbose:
             print(f"Total modes: {n_tot_modes}, Total slopes: {n_tot_slopes}")
             print(f"DM indices for {wfs_type}: {dm_indices}")
             print(f"DM start modes: {dm_start_modes}")
-            print(f"Mode indices: {mode_indices}")
 
         # Create the full interaction matrix
         im_full = np.zeros((n_tot_modes, n_tot_slopes))
@@ -683,7 +691,9 @@ class ParamsManager:
                 mode_idx = mode_indices[jj]
 
                 # Generate and load the interaction matrix file
-                im_filename = self.generate_im_filename(wfs_type=wfs_type, wfs_index=ii+1, dm_index=dm_ind)
+                im_filename = self.generate_im_filename(
+                    wfs_type=wfs_type, wfs_index=ii+1, dm_index=dm_ind
+                )
                 im_path = os.path.join(output_im_dir, im_filename)
 
                 if self.verbose:
@@ -696,7 +706,12 @@ class ParamsManager:
                     print(f"    IM shape: {intmat_obj.intmat.shape}")
 
                 # Fill the appropriate section of the full interaction matrix
-                im_full[mode_idx, n_slopes_per_wfs*ii:n_slopes_per_wfs*(ii+1)] = intmat_obj.intmat[mode_idx, :]
+                if ii == 0:
+                    idx_start = 0
+                else:
+                    idx_start = sum(n_slopes_list[:ii-1])
+                im_full[mode_idx, idx_start: idx_start+n_slopes_list[ii]] \
+                    = intmat_obj.intmat[mode_idx, :]
 
         # Display summary
         if self.verbose:
@@ -736,7 +751,7 @@ class ParamsManager:
 
         # Set up directories
         if output_dir is None:
-            output_dir = os.path.join(specula_repo_path, "main", "scao", "calib", "MCAO", "pm")
+            raise ValueError("output_dir must be specified.")
 
         # Create directory if it doesn't exist
         os.makedirs(output_dir, exist_ok=True)
@@ -1024,10 +1039,10 @@ class ParamsManager:
 
         # Set up output directory
         if output_dir is None:
-            specula_init_path = specula.__file__
-            specula_package_dir = os.path.dirname(specula_init_path)
-            specula_repo_path = os.path.dirname(specula_package_dir)
-            output_dir = os.path.join(specula_repo_path, "main", "scao", "calib", "MCAO", "pm")
+            raise ValueError("output_dir must be specified.")
+
+        # Create directory if it doesn't exist
+        os.makedirs(output_dir, exist_ok=True)
 
         # Extract all necessary lists
         opt_sources = extract_opt_list(self.params)
@@ -1035,7 +1050,8 @@ class ParamsManager:
         layer_list = extract_layer_list(self.params)
 
         if self.verbose:
-            print(f"Found {len(opt_sources)} optical sources, {len(dm_list)} DMs, and {len(layer_list)} layers")
+            print(f"Found {len(opt_sources)} optical sources, {len(dm_list)} DMs"
+                  f", and {len(layer_list)} layers")
 
         weights_array = np.zeros(len(opt_sources))
         for i, source in enumerate(opt_sources):
@@ -1051,7 +1067,9 @@ class ParamsManager:
             for jj, dm in enumerate(dm_list):
                 dm_index = dm['index']
 
-                pm_filename = generate_pm_filename(self.params_file, opt_index=opt_index, dm_index=dm_index)
+                pm_filename = generate_pm_filename(
+                    self.params_file, opt_index=opt_index, dm_index=dm_index
+                )
                 if pm_filename is None:
                     raise ValueError(f"Could not generate filename for opt{opt_index}, dm{dm_index}")
 

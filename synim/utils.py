@@ -32,41 +32,59 @@ def rebin(array, new_shape, method='average'):
     """
 
     if array.ndim == 1:
-        array = array.reshape((-1, 1))  # Convert 1D array to 2D
+        array = array.reshape(array.shape[0], 1)
 
     shape = array.shape
     m, n = shape[0:2]
-    M, N = new_shape      
+    M, N = new_shape
 
     if M > m or N > n:
-        if M % m != 0 or N % n != 0:
+        # Expansion case
+        if m % M != 0 or n % N != 0:
             raise ValueError("New shape must be multiples of the input dimensions.")
-
-        m_factor, n_factor = M // m, N // n
-
-        # Replicate the array in both dimensions
-        if len(shape) == 3:
-            rebinned_array = np.tile(array, (m_factor, n_factor, 1))
+        if array.ndim == 3:
+            rebinned_array = np.tile(array, (M//m, N//n, 1))
         else:
-            rebinned_array = np.tile(array, (m_factor, n_factor))
+            rebinned_array = np.tile(array, (M//m, N//n))
     else:    
-        if method == 'sum':
-            if len(shape) == 3:
-                rebinned_array = array[:M*(m//M), :N*(n//N), :].reshape((M, m//M, N, n//N, shape[2])).sum(axis=(1, 3))
+        # Compression case
+        if M == 0 or N == 0:
+            raise ValueError("New shape dimensions must be greater than 0.")
+
+        if array.ndim == 3:
+            if method == 'sum':
+                rebinned_array = np.sum(
+                    array[:M*(m//M), :N*(n//N), :].reshape((M, m//M, N, n//N, shape[2])),
+                    axis=(1, 3))
+            elif method == 'average':
+                rebinned_array = np.mean(
+                    array[:M*(m//M), :N*(n//N), :].reshape((M, m//M, N, n//N, shape[2])),
+                    axis=(1, 3))
+            elif method == 'nanmean':
+                with np.errstate(invalid='ignore'):
+                    rebinned_array = np.nanmean(
+                        array[:M*(m//M), :N*(n//N), :].reshape((M, m//M, N, n//N, shape[2])),
+                        axis=(1, 3))
             else:
-                rebinned_array = array[:M*(m//M), :N*(n//N)].reshape((M, m//M, N, n//N)).sum(axis=(1, 3))
-        elif method == 'average':
-            if len(shape) == 3:
-                rebinned_array = array[:M*(m//M), :N*(n//N), :].reshape((M, m//M, N, n//N, shape[2])).mean(axis=(1, 3))
-            else:
-                rebinned_array = array[:M*(m//M), :N*(n//N)].reshape((M, m//M, N, n//N)).mean(axis=(1, 3))
-        elif method == 'nanmean':
-            if len(shape) == 3:
-                rebinned_array = np.nanmean(array[:M*(m//M), :N*(n//N), :].reshape((M, m//M, N, n//N, shape[2])), axis=(1, 3))
-            else:
-                rebinned_array = np.nanmean(array[:M*(m//M), :N*(n//N)].reshape((M, m//M, N, n//N)), axis=(1, 3))
+                raise ValueError(f"Unsupported method: {method}."
+                                 " Use 'sum', 'average', or 'nanmean'.")
         else:
-            raise ValueError("Unsupported rebin method. Use 'sum' or 'average'.")
+            if method == 'sum':
+                rebinned_array = np.sum(
+                    array[:M*(m//M), :N*(n//N)].reshape((M, m//M, N, n//N)),
+                    axis=(1, 3))
+            elif method == 'average':
+                rebinned_array = np.mean(
+                    array[:M*(m//M), :N*(n//N)].reshape((M, m//M, N, n//N)),
+                    axis=(1, 3))
+            elif method == 'nanmean':
+                with np.errstate(invalid='ignore'):
+                    rebinned_array = np.nanmean(
+                        array[:M*(m//M), :N*(n//N)].reshape((M, m//M, N, n//N)),
+                        axis=(1, 3))
+            else:
+                raise ValueError(f"Unsupported method: {method}."
+                                 " Use 'sum', 'average', or 'nanmean'.")
 
     return rebinned_array
 
@@ -627,7 +645,8 @@ def load_influence_functions(cm, dm_params, pixel_pupil, verbose=False):
             return dm_array, dm_mask
         else:
             # If we don't have a mask, assume the influence function is already properly organized
-            raise ValueError("IFunc without mask_inf_func is not supported. Mask is required to reconstruct the 3D array.")
+            raise ValueError("IFunc without mask_inf_func is not supported."
+                             " Mask is required to reconstruct the 3D array.")
 
     elif 'type_str' in dm_params:
         if verbose:
@@ -663,7 +682,8 @@ def load_influence_functions(cm, dm_params, pixel_pupil, verbose=False):
             print(f"     DM mask sum: {np.sum(dm_mask)}")
         return dm_array, dm_mask
     else:
-        raise ValueError("No valid influence function configuration found. Need either 'ifunc_tag', 'ifunc_object', or 'type_str'.")
+        raise ValueError("No valid influence function configuration found."
+                         " Need either 'ifunc_tag', 'ifunc_object', or 'type_str'.")
 
 def find_subapdata(cm, wfs_params, wfs_key, params, verbose=False):
     """
@@ -686,14 +706,11 @@ def find_subapdata(cm, wfs_params, wfs_key, params, verbose=False):
     if 'subapdata_object' in wfs_params or 'subapdata_tag' in wfs_params:
         if 'subapdata_tag' in wfs_params:
             subap_tag = wfs_params['subapdata_tag']
-            if verbose:
-                print("     Loading subapdata from file, tag:", subap_tag)
-            subap_path = cm.filename('subap_data', subap_tag)
         else:
             subap_tag = wfs_params['subapdata_object']
-            if verbose:
-                print("     Loading subapdata from file, tag:", subap_tag)
-            subap_path = cm.filename('subapdata', subap_tag)
+        if verbose:
+            print("     Loading subapdata from file, tag:", subap_tag)
+        subap_path = cm.filename('subapdata', subap_tag)
 
     # Second check - Try to find corresponding slopec section based on WFS name
     elif wfs_key is not None:
@@ -715,21 +732,23 @@ def find_subapdata(cm, wfs_params, wfs_key, params, verbose=False):
                 potential_slopec = f'slopec{numeric_part}'
                 if potential_slopec in params:
                     slopec_key = potential_slopec
-        
+
         # Check standard slopec key
         if slopec_key is None and 'slopec' in params:
             slopec_key = 'slopec'
-        
+
         if slopec_key:
             slopec_params = params[slopec_key]
             if 'subapdata_tag' in slopec_params:
                 if verbose:
-                    print(f"     Loading subapdata from {slopec_key}, tag:", slopec_params['subapdata_tag'])
+                    print(f"     Loading subapdata from {slopec_key}, tag:",
+                          slopec_params['subapdata_tag'])
                 subap_tag = slopec_params['subapdata_tag']
                 subap_path = cm.filename('subap_data', subap_tag)
             elif 'subapdata_object' in slopec_params:
                 if verbose:
-                    print(f"     Loading subapdata from {slopec_key}, tag:", slopec_params['subapdata_object'])
+                    print(f"     Loading subapdata from {slopec_key}, tag:",
+                          slopec_params['subapdata_object'])
                 subap_tag = slopec_params['subapdata_object']
                 subap_path = cm.filename('subapdata', subap_tag)
 
@@ -1323,7 +1342,7 @@ def prepare_interaction_matrix_params(params, wfs_type=None, wfs_index=None, dm_
     wfs_key = selected_wfs['name']
     wfs_params = selected_wfs['config']
     wfs_type_detected = selected_wfs['type']
-    
+
     # Determine source type from WFS name if not already set
     if source_type is None:
         source_type = determine_source_type(wfs_key)
@@ -1513,7 +1532,8 @@ def extract_source_info(config, wfs_name):
 
     return source_info
 
-def generate_im_filename(config_file, wfs_type=None, wfs_index=None, dm_index=None, timestamp=False, verbose=False):
+def generate_im_filename(config_file, wfs_type=None, wfs_index=None,
+                         dm_index=None, timestamp=False, verbose=False):
     """
     Generate a specific interaction matrix filename based on WFS and DM indices.
     
@@ -1949,7 +1969,7 @@ def generate_pm_filenames(config_file, timestamp=False):
 
     return filenames
 
-def compute_mmse_reconstructor(interaction_matrix, C_atm, noise_variance=None, C_noise=None, 
+def compute_mmse_reconstructor(interaction_matrix, C_atm, noise_variance=None, C_noise=None,
                               cinverse=False, verbose=False):
     """
     Compute the Minimum Mean Square Error (MMSE) reconstructor.
