@@ -824,37 +824,36 @@ def insert_interaction_matrix_part(im_full, intmat_obj, mode_idx, slope_idx_star
 
     return True
 
-def build_source_filename_part(source_config,zenith_angle=None):
+def build_source_filename_part(source_config, zenith_angle=None):
     """
-    Build filename part for source parameters.
+    Build the source-specific part of the filename.
     
     Args:
-        source_config (dict): Source configuration
+        source_config (dict): Source configuration parameters
+        zenith_angle (float, optional): Zenith angle override
         
     Returns:
-        list: Filename parts for source
+        str: Source filename component
     """
     parts = []
 
-    if 'polar_coordinates' in source_config:
-        dist, angle = source_config['polar_coordinates']
-        parts.append(f"pd{dist:.1f}a{angle:.0f}")
-    elif 'polar_coordinate' in source_config:
-        dist, angle = source_config['polar_coordinate']
-        parts.append(f"pd{dist:.1f}a{angle:.0f}")
-    elif 'pol_coords' in source_config:
-        dist, angle = source_config['pol_coords']
-        parts.append(f"pd{dist:.1f}a{angle:.0f}")
+    # Polar coordinates
+    if 'polar_coordinate' in source_config:
+        pol_coords = source_config['polar_coordinate']
+        if isinstance(pol_coords, (list, tuple)) and len(pol_coords) >= 2:
+            # Format: pdXXaYY where XX is angle in arcsec, YY is azimuth in degrees
+            angle_arcsec = pol_coords[0]
+            azimuth_deg = pol_coords[1]
+            parts.append(f"pd{angle_arcsec:.1f}a{azimuth_deg:.0f}")
 
-    if 'height' in source_config:
-        if source_config['height'] is not None and not np.isinf(source_config['height']):
-            airmass = 1.0
-            if zenith_angle is not None:
-                zenith_rad = np.deg2rad(zenith_angle)
-                airmass /= np.cos(zenith_rad)
-        parts.append(f"h{source_config['height']*airmass:.0f}")
+    # Height
+    height = source_config.get('height', float('inf'))
+    if height != float('inf'):
+        parts.append(f"h{height:.0f}")
 
-    return parts
+    # Join all parts with underscore
+    return "_".join(parts) if parts else "on_axis"
+
 
 def build_pupil_filename_part(pupil_params):
     """
@@ -878,71 +877,77 @@ def build_pupil_filename_part(pupil_params):
 
     return parts
 
-def build_wfs_filename_part(wfs_config, wfs_type):
+def build_wfs_filename_part(wfs_config, wfs_type=None):
     """
-    Build filename part for WFS parameters.
+    Build the WFS-specific part of the filename.
     
     Args:
-        wfs_config (dict): WFS configuration
-        wfs_type (str): Type of WFS ('sh' or 'pyr')
+        wfs_config (dict): WFS configuration parameters
+        wfs_type (str, optional): WFS type for context
         
     Returns:
-        list: Filename parts for WFS
+        str: WFS filename component
     """
     parts = []
 
-    if wfs_type == 'sh':
-        nsubaps = wfs_config.get('subap_on_diameter', 0)
-        wl = wfs_config.get('wavelengthInNm', 0)
-        fov = wfs_fov_from_config(wfs_config)
-        npx = wfs_config.get('subap_npx', 0)
-        parts.append(f"sh{nsubaps}x{nsubaps}_wl{wl}_fv{fov:.1f}_np{npx}")
+    # WFS type
+    wfs_class = wfs_config.get('class', 'sh')
 
-    elif wfs_type == 'pyr':
-        pup_diam = wfs_config.get('pup_diam', 0)
-        wl = wfs_config.get('wavelengthInNm', 0)
-        fov = wfs_fov_from_config(wfs_config)
-        mod_amp = wfs_config.get('mod_amp', 0)
-        parts.append(f"pyr{pup_diam:.1f}_wl{wl}_fv{fov:.1f}_ma{mod_amp:.1f}")
+    # Number of subapertures or pupil diameter
+    if 'subap_on_diameter' in wfs_config:
+        n_subaps = wfs_config['subap_on_diameter']
+        parts.append(f"{wfs_class}{n_subaps}x{n_subaps}")
+    elif 'pup_diam' in wfs_config:
+        pup_diam = wfs_config['pup_diam']
+        parts.append(f"{wfs_class}{pup_diam}")
 
-    return parts
+    # Wavelength
+    if 'wavelength' in wfs_config:
+        wl = wfs_config['wavelength']
+        parts.append(f"wl{wl:.0f}")
+
+    # Field of view
+    if 'sensor_pxscale' in wfs_config and 'subap_npx' in wfs_config:
+        fov = wfs_config['sensor_pxscale'] * wfs_config['subap_npx']
+        parts.append(f"fv{fov:.1f}")
+
+    # Number of pixels
+    if 'subap_npx' in wfs_config:
+        npx = wfs_config['subap_npx']
+        parts.append(f"np{npx}")
+
+    return "_".join(parts) if parts else "wfs"
+
 
 def build_dm_filename_part(dm_config, config=None):
     """
-    Build filename part for DM parameters.
+    Build the DM-specific part of the filename.
     
     Args:
-        dm_config (dict): DM configuration
-        config (dict, optional): Full configuration (for DM reference in simple config)
+        dm_config (dict): DM configuration parameters
+        config (dict, optional): Full configuration for context
         
     Returns:
-        list: Filename parts for DM
+        str: DM filename component
     """
     parts = []
+    
+    # DM height
+    height = dm_config.get('height', 0.0)
+    parts.append(f"dmH{height:.1f}")
+    
+    # Influence function tag
+    if 'ifunc_tag' in dm_config:
+        ifunc_tag = dm_config['ifunc_tag']
+        parts.append(f"ifunc_{ifunc_tag}")
+    
+    # M2C tag if present
+    if 'm2c_tag' in dm_config:
+        m2c_tag = dm_config['m2c_tag']
+        parts.append(f"m2c_{m2c_tag}")
+    
+    return "_".join(parts) if parts else "dm"
 
-    height = dm_config.get('height', 0)
-    parts.append(f"dmH{height}")
-
-    # Check for custom influence functions - use config for simple configs
-    target_config = config['dm'] if config and 'dm' in config else dm_config
-
-    if 'ifunc_tag' in target_config:
-        parts.append(f"ifunc_{target_config['ifunc_tag']}")
-        if 'm2c_tag' in target_config:
-            parts.append(f"m2c_{target_config['m2c_tag']}")
-    elif 'ifunc_object' in target_config:
-        parts.append(f"ifunc_{target_config['ifunc_object']}")
-        if 'm2c_object' in target_config:
-            parts.append(f"m2c_{target_config['m2c_object']}")
-    elif 'type_str' in target_config:
-        nmodes = dm_config.get('nmodes', 0)
-        parts.append(f"nm{nmodes}_{target_config['type_str']}")
-    else:
-        # Default case
-        nmodes = dm_config.get('nmodes', 0)
-        parts.append(f"nm{nmodes}")
-
-    return parts
 
 def dm3d_to_2d(dm_array, mask):
     """
@@ -1532,260 +1537,168 @@ def extract_source_info(config, wfs_name):
 
     return source_info
 
-def generate_im_filename(config_file, wfs_type=None, wfs_index=None,
-                         dm_index=None, timestamp=False, verbose=False):
+
+def generate_im_filename(params_file, wfs_type=None, wfs_index=None, 
+                        dm_index=None, layer_index=None, timestamp=False, verbose=False):
     """
-    Generate a specific interaction matrix filename based on WFS and DM indices.
+    Generate the interaction matrix filename for a given WFS-DM/Layer combination.
     
     Args:
-        config_file (str): Path to YAML or PRO configuration file
-        wfs_type (str, optional): Type of WFS ('sh', 'pyr') or source type ('lgs', 'ngs', 'ref')
-        wfs_index (int, optional): Index of the WFS to use (1-based)
-        dm_index (int, optional): Index of the DM to use (1-based)
-        timestamp (bool, optional): Whether to include timestamp in the filename
-        verbose (bool, optional): Whether to print verbose output
+        params_file (str or dict): Path to configuration file or dictionary
+        wfs_type (str, optional): Type of WFS source ('lgs', 'ngs', 'ref')
+        wfs_index (int, optional): Index of the WFS (1-based)
+        dm_index (int, optional): Index of the DM (1-based)
+        layer_index (int, optional): Index of the Layer (1-based)
+        timestamp (bool): Whether to include a timestamp in the filename
+        verbose (bool): Whether to print detailed information
         
     Returns:
-        str: Filename for the interaction matrix with the specified parameters
+        str: Generated filename
     """
-    # Load configuration
-    if isinstance(config_file, str):
-        config = parse_params_file(config_file)
+    # Check that only one of dm_index or layer_index is specified
+    if dm_index is not None and layer_index is not None:
+        raise ValueError("Cannot specify both dm_index and layer_index")
+
+    if dm_index is None and layer_index is None:
+        raise ValueError("Must specify either dm_index or layer_index")
+
+    # Load configuration if needed
+    if isinstance(params_file, str):
+        params = parse_params_file(params_file)
+        config_basename = os.path.splitext(os.path.basename(params_file))[0]
     else:
-        # Assume it's already a parsed config dictionary
-        config = config_file
+        params = params_file
+        config_basename = "config"
 
-    # Convert indices to strings for comparison
-    wfs_index_str = str(wfs_index) if wfs_index is not None else None
-    dm_index_str = str(dm_index) if dm_index is not None else None
+    # Get main parameters
+    main_params = params.get('main', {})
+    pixel_pupil = main_params.get('pixel_pupil', 256)
 
-    # Determine if this is a simple or complex configuration
-    simple_config = is_simple_config(config)
+    # Find the WFS configuration
+    wfs_key = None
+    if wfs_type and wfs_index:
+        wfs_key = f"sh_{wfs_type}{wfs_index}"
+    elif wfs_type:
+        wfs_key = f"sh_{wfs_type}1"  # Default to first WFS of this type
 
-    # For simple configuration, there's typically only one WFS and DM
-    if simple_config:
-        if verbose:
-            print("Simple SCAO configuration detected")
-        # Just generate the single filename that would be created
-        filenames = generate_im_filenames(config)
+    if wfs_key and wfs_key not in params:
+        # Try without index
+        wfs_key = f"sh_{wfs_type}"
+        if wfs_key not in params:
+            if verbose:
+                print(f"Warning: WFS key {wfs_key} not found in configuration")
+            wfs_key = None
 
-        # Simple configs typically use NGS
-        if 'ngs' in filenames and filenames['ngs']:
-            return filenames['ngs'][0]
-        # Fall back to any available filename
-        for source_type in ['lgs', 'ref']:
-            if source_type in filenames and filenames[source_type]:
-                return filenames[source_type][0]
+    # Build filename components
+    filename_parts = ["IM_syn"]
 
-        # No valid filename found
-        return None
+    # Add source information
+    if wfs_key:
+        # Extract source configuration
+        source_config = extract_source_config(params, wfs_key)
+        source_info = build_source_filename_part(source_config)
+        filename_parts.append(source_info)
 
-    # For complex configuration, we need to find the matching WFS and DM
-    if verbose:
-        print("Complex MCAO configuration detected")
+        # Add WFS information
+        wfs_params = params[wfs_key]
+        wfs_info = build_wfs_filename_part(wfs_params, wfs_type)
+        filename_parts.append(wfs_info)
 
-    # Get lists of all WFSs and DMs
-    wfs_list = extract_wfs_list(config)
-    dm_list = extract_dm_list(config)
-
-    # Filter WFS list based on wfs_type and wfs_index
-    filtered_wfs = wfs_list
-    if wfs_type:
-        # Check if wfs_type is a sensor type ('sh', 'pyr')
-        if wfs_type in ['sh', 'pyr']:
-            filtered_wfs = [wfs for wfs in filtered_wfs if wfs['type'] == wfs_type]
-        # Check if wfs_type is a source type ('lgs', 'ngs', 'ref')
-        elif wfs_type in ['lgs', 'ngs', 'ref']:
-            filtered_wfs = [wfs for wfs in filtered_wfs if wfs_type in wfs['name']]
-
-    if wfs_index_str:
-        filtered_wfs = [wfs for wfs in filtered_wfs if wfs['index'] == wfs_index_str]
-
-    # Filter DM list based on dm_index
-    filtered_dm = dm_list
-    if dm_index_str:
-        filtered_dm = [dm for dm in filtered_dm if dm['index'] == dm_index_str]
-
-    # If we couldn't find matching WFS or DM, return None
-    if not filtered_wfs or not filtered_dm:
-        if verbose:
-            print("No matching WFS or DM found with the specified parameters")
-        return None
-
-    # Select the first WFS and DM from the filtered lists
-    selected_wfs = filtered_wfs[0]
-    selected_dm = filtered_dm[0]
-
-    if verbose:
-        print(f"Selected WFS: {selected_wfs['name']} (type: {selected_wfs['type']}, index: {selected_wfs['index']})")
-        print(f"Selected DM: {selected_dm['name']} (index: {selected_dm['index']})")
-
-    # Determine the source type from the WFS name
-    source_type = determine_source_type(selected_wfs['name'])
-
-    # Extract source information
-    source_coords = extract_source_coordinates(config, selected_wfs['name'])
-
-    height = extract_source_height(config, selected_wfs['name'])
-
-    # Generate filename parts
-    base_name = "IM_syn"
-    parts = [base_name]
-
-    # Source info
-    if source_coords is not None:
-        dist, angle = source_coords
-        parts.append(f"pd{dist:.1f}a{angle:.0f}")
-    if height is not None and not np.isinf(height):
-        parts.append(f"h{height:.0f}")
-
-    # WFS info
-    wfs_config = selected_wfs['config']
-    parts.extend(build_wfs_filename_part(wfs_config, selected_wfs['type']))
-
-    # Add DM-specific parts
-    parts.extend(build_dm_filename_part(selected_dm['config']))
+    # Add DM or Layer information
+    if dm_index is not None:
+        dm_key = f"dm{dm_index}"
+        if dm_key in params:
+            dm_info = build_dm_filename_part(params[dm_key], params)
+            filename_parts.append(dm_info)
+    else:
+        layer_key = f"layer{layer_index}"
+        if layer_key in params:
+            layer_info = build_layer_filename_part(params[layer_key], params)
+            filename_parts.append(layer_info)
 
     # Add timestamp if requested
     if timestamp:
-        ts = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
-        parts.append(ts)
+        from datetime import datetime
+        timestamp_str = datetime.now().strftime("%Y%m%d_%H%M%S")
+        filename_parts.append(timestamp_str)
 
-    # Join all parts with underscores and add extension
-    filename = "_".join(parts) + ".fits"
+    # Join parts and add extension
+    filename = "_".join(filename_parts) + ".fits"
+
     return filename
 
-def generate_im_filenames(config_file, timestamp=False):
+
+def build_layer_filename_part(layer_config, config=None):
     """
-    Generate interaction matrix filenames for all WFS-DM combinations, grouped by star type.
+    Build the layer-specific part of the filename.
     
     Args:
-        config_file (str or dict): Path to YAML/PRO file or config dictionary
-        timestamp (bool, optional): Whether to include timestamp in filenames
+        layer_config (dict): Layer configuration parameters
+        config (dict, optional): Full configuration for context
         
     Returns:
-        dict: Dictionary with star types as keys and list of filenames as values
+        str: Layer filename component
     """
-    # Load YAML or PRO configuration
-    if isinstance(config_file, str):
-        config = parse_params_file(config_file)
-    else:
-        config = config_file
+    parts = []
 
-    # Detect if simple or complex configuration
-    simple_config = is_simple_config(config)
+    # Layer height
+    height = layer_config.get('height', 0.0)
+    parts.append(f"layH{height:.1f}")
 
-    # Basic system info
-    base_name = 'IM_syn'
+    # Influence function tag
+    if 'ifunc_tag' in layer_config:
+        ifunc_tag = layer_config['ifunc_tag']
+        # Simplify the tag for the filename
+        ifunc_parts = ifunc_tag.split('_')
+        parts.append(f"ifunc_{ifunc_parts[0]}")
 
-    # Pupil parameters
-    pupil_params = {}
-    if 'main' in config:
-        pupil_params['pixel_pupil'] = config['main'].get('pixel_pupil', 0)
-        pupil_params['pixel_pitch'] = config['main'].get('pixel_pitch', 0)
-        zenith_angle = config['main'].get('zenithAngleInDeg', None)
-    else:
-        zenith_angle = None
+        # Add key info from ifunc tag
+        for part in ifunc_parts[1:]:
+            if 'pix' in part or 'nacts' in part or 'obs' in part:
+                parts.append(part)
 
-    if 'pupilstop' in config:
-        pupstop = config['pupilstop']
-        if isinstance(pupstop, dict):
-            pupil_params['obsratio'] = pupstop.get('obsratio', 0.0)
-            pupil_params['tag'] = pupstop.get('tag', '')
+    # M2C tag if present
+    if 'm2c_tag' in layer_config:
+        m2c_tag = layer_config['m2c_tag']
+        m2c_parts = m2c_tag.split('_')
+        parts.append(f"m2c_{m2c_parts[0]}")
 
-    # Output dictionary: key=star type, value=list of filenames
-    filenames_by_type = {
-        'lgs': [],
-        'ngs': [],
-        'ref': []
+        # Add key info from m2c tag
+        for part in m2c_parts[1:]:
+            if 'pix' in part or 'nacts' in part or 'zern' in part:
+                parts.append(part)
+
+    return "_".join(parts)
+
+
+def extract_source_config(params, wfs_key):
+    """
+    Extract source configuration from WFS key.
+    
+    Args:
+        params (dict): Full configuration
+        wfs_key (str): WFS key (e.g., 'sh_lgs1')
+        
+    Returns:
+        dict: Source configuration
+    """
+    # Extract source type and index from WFS key
+    import re
+    match = re.search(r'(lgs|ngs|ref)(\d*)', wfs_key)
+    if match:
+        source_type = match.group(1)
+        source_index = match.group(2) if match.group(2) else '1'
+        source_key = f"source_{source_type}{source_index}"
+
+        if source_key in params:
+            return params[source_key]
+
+    # Default configuration
+    return {
+        'polar_coordinate': [0.0, 0.0],
+        'height': float('inf') if 'ngs' in wfs_key or 'ref' in wfs_key else 90000.0
     }
-    # Extract all DM configurations
-    dm_list = extract_dm_list(config)
 
-    # For simple configurations with on-axis source
-    if simple_config:
-        # Simple SCAO configuration
-        wfs_type = None
-        wfs_params = {}
-
-        if 'pyramid' in config:
-            wfs_type = 'pyr'
-            wfs_params = config['pyramid']
-        elif 'sh' in config:
-            wfs_type = 'sh'
-            wfs_params = config['sh']
-
-        # Source info
-        source_config = config.get('on_axis_source', {})
-
-        # Build filename parts
-        for dm in dm_list:
-            parts = [base_name]  # <-- Ricomincia da capo per ogni DM
-            # Add source parts
-            parts.extend(build_source_filename_part(source_config, zenith_angle))
-            # Add pupil parts
-            parts.extend(build_pupil_filename_part(pupil_params))
-            # Add WFS parts
-            if wfs_type:
-                parts.extend(build_wfs_filename_part(wfs_params, wfs_type))
-            # Add DM parts - usa SOLO la funzione, non aggiungere dmH a mano!
-            parts.extend(build_dm_filename_part(dm['config'], config))
-            # Add timestamp if requested
-            if timestamp:
-                ts = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
-                parts.append(ts)
-            filename = "_".join(parts) + ".fits"
-            filenames_by_type['ngs'].append(filename)
-            break  # Only one DM in simple config
-    else:
-        # Complex MCAO configuration
-        wfs_list = extract_wfs_list(config)
-
-        # Generate filenames for all WFS-DM combinations
-        for wfs in wfs_list:
-            wfs_type = wfs['type']
-            wfs_params = wfs['config']
-
-            # Determine source type from WFS name
-            source_type = determine_source_type(wfs['name'])
-
-            # Get source information
-            source_config = {}
-            source_match = re.search(r'((?:lgs|ngs|ref)\d+)', wfs['name'])
-            if source_match:
-                source_key = f'source_{source_match.group(1)}'
-                if source_key in config:
-                    source_config = config[source_key]
-
-            # For each DM, generate a filename
-            for dm in dm_list:
-                dm_params = dm['config']
-
-                # Build filename parts
-                parts = [base_name]
-
-                # Add source parts
-                parts.extend(build_source_filename_part(source_config, zenith_angle))
-
-                # Add pupil parts
-                parts.extend(build_pupil_filename_part(pupil_params))
-
-                # Add WFS parts
-                parts.extend(build_wfs_filename_part(wfs_params, wfs_type))
-
-                # Add DM parts
-                parts.extend(build_dm_filename_part(dm_params))
-
-                # Add timestamp if requested
-                if timestamp:
-                    ts = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
-                    parts.append(ts)
-
-                # Join all parts with underscores and add extension
-                filename = "_".join(parts) + ".fits"
-                filenames_by_type[source_type].append(filename)
-
-    return filenames_by_type
 
 def generate_pm_filename(config_file, opt_index=None, dm_index=None, layer_index=None,
                         timestamp=False, verbose=False):

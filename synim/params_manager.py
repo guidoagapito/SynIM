@@ -375,7 +375,8 @@ class ParamsManager:
 
         return wfs_data
 
-    def prepare_interaction_matrix_params(self, wfs_type=None, wfs_index=None, dm_index=None):
+    def prepare_interaction_matrix_params(self, wfs_type=None, wfs_index=None, 
+                                        dm_index=None, layer_index=None):
         """
         Prepare parameters for computing an interaction matrix.
         
@@ -383,12 +384,25 @@ class ParamsManager:
             wfs_type (str, optional): Type of WFS ('sh', 'pyr') or source type ('lgs', 'ngs', 'ref')
             wfs_index (int, optional): Index of the WFS (1-based)
             dm_index (int, optional): Index of the DM (1-based)
+            layer_index (int, optional): Index of the Layer (1-based)
             
         Returns:
             dict: Parameters ready to be passed to synim.interaction_matrix
         """
-        # Get DM parameters
-        dm_params = self.get_dm_params(dm_index)
+        # Check that only one of dm_index or layer_index is specified
+        if dm_index is not None and layer_index is not None:
+            raise ValueError("Cannot specify both dm_index and layer_index")
+
+        if dm_index is None and layer_index is None:
+            raise ValueError("Must specify either dm_index or layer_index")
+
+        # Get DM or Layer parameters
+        if dm_index is not None:
+            component_params = self.get_dm_params(dm_index)
+            component_key = component_params['dm_key']
+        else:
+            component_params = self.get_dm_params(layer_index, is_layer=True)
+            component_key = component_params['dm_key']  # viene chiamato 'dm_key' anche per i layer
 
         # Get WFS parameters
         wfs_params = self.get_wfs_params(wfs_type, wfs_index)
@@ -397,10 +411,10 @@ class ParamsManager:
         params = {
             'pup_diam_m': self.pup_diam_m,
             'pup_mask': self.pup_mask,
-            'dm_array': dm_params['dm_array'],
-            'dm_mask': dm_params['dm_mask'],
-            'dm_height': dm_params['dm_height'],
-            'dm_rotation': dm_params['dm_rotation'],
+            'dm_array': component_params['dm_array'],
+            'dm_mask': component_params['dm_mask'],
+            'dm_height': component_params['dm_height'],
+            'dm_rotation': component_params['dm_rotation'],
             'wfs_key': wfs_params['wfs_key'],
             'wfs_type': wfs_params['wfs_type'],
             'wfs_nsubaps': wfs_params['wfs_nsubaps'],
@@ -411,35 +425,47 @@ class ParamsManager:
             'gs_pol_coo': wfs_params['gs_pol_coo'],
             'gs_height': wfs_params['gs_height'],
             'idx_valid_sa': wfs_params['idx_valid_sa'],
-            'dm_key': dm_params['dm_key'],
+            'dm_key': component_key if dm_index is not None else None,
+            'layer_key': component_key if layer_index is not None else None,
             'source_type': wfs_params['source_type']
         }
 
         return params
 
-    def compute_interaction_matrix(self, wfs_type=None, wfs_index=None, dm_index=None, verbose=None, display=False):
+    def compute_interaction_matrix(self, wfs_type=None, wfs_index=None, dm_index=None, 
+                                layer_index=None, verbose=None, display=False):
         """
-        Compute an interaction matrix for a specific WFS-DM combination.
+        Compute an interaction matrix for a specific WFS-DM/Layer combination.
 
         Args:
             wfs_type (str, optional): Type of WFS ('sh', 'pyr') or source type ('lgs', 'ngs', 'ref')
             wfs_index (int, optional): Index of the WFS (1-based)
             dm_index (int, optional): Index of the DM (1-based)
+            layer_index (int, optional): Index of the Layer (1-based)
             verbose (bool, optional): Override the class's verbose setting
             display (bool): Whether to display plots
 
         Returns:
             numpy.ndarray: Computed interaction matrix
         """
+        # Check that only one of dm_index or layer_index is specified
+        if dm_index is not None and layer_index is not None:
+            raise ValueError("Cannot specify both dm_index and layer_index")
+
+        if dm_index is None and layer_index is None:
+            raise ValueError("Must specify either dm_index or layer_index")
+
         # Use class verbose setting if not overridden
         verbose_flag = self.verbose if verbose is None else verbose
 
         # Prepare parameters
-        params = self.prepare_interaction_matrix_params(wfs_type, wfs_index, dm_index)
+        params = self.prepare_interaction_matrix_params(wfs_type, wfs_index, dm_index, layer_index)
+
+        component_name = params['dm_key'] if dm_index is not None else params['layer_key']
 
         if verbose_flag:
             print("Computing interaction matrix with parameters:")
-            print(f"      WFS: {params['wfs_key']}, DM: {params['dm_key']}")
+            print(f"      WFS: {params['wfs_key']}, Component: {component_name}")
             print(f"      WFS type: {params['wfs_type']}, nsubaps: {params['wfs_nsubaps']}")
             print(f"      Guide star: {params['gs_pol_coo']} at height {params['gs_height']} m")
 
@@ -471,7 +497,7 @@ class ParamsManager:
     def compute_interaction_matrices(self, output_im_dir, output_rec_dir,
                                 wfs_type=None, overwrite=False, verbose=None, display=False):
         """
-        Compute and save interaction matrices for all combinations of WFSs and DMs.
+        Compute and save interaction matrices for all combinations of WFSs and DMs/Layers.
         Reuses cached parameters to avoid redundant loading.
         
         Args:
@@ -483,14 +509,9 @@ class ParamsManager:
             display (bool, optional): Whether to display plots
             
         Returns:
-            dict: Dictionary mapping WFS-DM pairs to saved interaction matrix paths
+            dict: Dictionary mapping WFS-DM/Layer pairs to saved interaction matrix paths
         """
         saved_matrices = {}
-
-        # Find the SPECULA repository path for default paths
-        specula_init_path = specula.__file__
-        specula_package_dir = os.path.dirname(specula_init_path)
-        specula_repo_path = os.path.dirname(specula_package_dir)
 
         # Set up directories
         if output_im_dir is None:
@@ -514,8 +535,12 @@ class ParamsManager:
                 if wfs_type in wfs['name']:
                     filtered_wfs_list.append(wfs)
 
+        # Get layer list
+        layer_list = extract_layer_list(self.params)
+
         if verbose_flag:
-            print(f"Computing interaction matrices for {len(filtered_wfs_list)} WFS(s) and {len(self.dm_list)} DM(s)")
+            print(f"Computing interaction matrices for {len(filtered_wfs_list)} WFS(s), "
+                f"{len(self.dm_list)} DM(s), and {len(layer_list)} Layer(s)")
 
         # Process each WFS-DM combination using cached parameters
         for wfs in filtered_wfs_list:
@@ -525,12 +550,14 @@ class ParamsManager:
             # Determine source type from WFS name
             source_type = determine_source_type(wfs_name)
 
+            # Process DMs
             for dm in self.dm_list:
                 dm_idx = int(dm['index'])
                 dm_name = dm['name']
 
                 if verbose_flag:
-                    print(f"\nProcessing WFS {wfs_name} (index {wfs_idx}) and DM {dm_name} (index {dm_idx})")
+                    print(f"\nProcessing WFS {wfs_name} (index {wfs_idx}) and"
+                        f" DM {dm_name} (index {dm_idx})")
 
                 # Generate filename for this combination
                 im_filename = generate_im_filename(self.params_file, wfs_type=source_type,
@@ -579,16 +606,15 @@ class ParamsManager:
                 else:
                     config_name = "config"
 
-                # TODO: this must be the subapdata name
                 pupdata_tag = f"{config_name}_{wfs_info}"
 
                 # Create Intmat object and save it
                 intmat_obj = Intmat(
-                    im, 
+                    im,
                     pupdata_tag=pupdata_tag,
                     norm_factor=1.0,
-                    target_device_idx=None,  # Use default device
-                    precision=None    # Use default precision
+                    target_device_idx=None,
+                    precision=None
                 )
 
                 # Save the interaction matrix
@@ -597,6 +623,79 @@ class ParamsManager:
                     print(f"  Interaction matrix saved as: {im_path}")
 
                 saved_matrices[f"{wfs_name}_{dm_name}"] = im_path
+
+            # Process Layers
+            for layer in layer_list:
+                layer_idx = int(layer['index'])
+                layer_name = layer['name']
+
+                if verbose_flag:
+                    print(f"\nProcessing WFS {wfs_name} (index {wfs_idx}) and"
+                        f" Layer {layer_name} (index {layer_idx})")
+
+                # Generate filename for this combination
+                # Usa generate_im_filename ma con layer_index invece di dm_index
+                im_filename = generate_im_filename(self.params_file, wfs_type=source_type,
+                                                wfs_index=wfs_idx, layer_index=layer_idx)
+
+                # Full path for the file
+                im_path = os.path.join(output_im_dir, im_filename)
+
+                # Check if the file already exists
+                if os.path.exists(im_path) and not overwrite:
+                    if verbose_flag:
+                        print(f"  File {im_filename} already exists. Skipping computation.")
+                    saved_matrices[f"{wfs_name}_{layer_name}"] = im_path
+                    continue
+
+                # Calculate the interaction matrix using layer parameters
+                im = self.compute_interaction_matrix(
+                    wfs_type=source_type,
+                    wfs_index=wfs_idx,
+                    layer_index=layer_idx,  # Usa layer_index invece di dm_index
+                    verbose=verbose_flag,
+                    display=display
+                )
+
+                if verbose_flag:
+                    print(f"  Interaction matrix shape: {im.shape}")
+
+                # Display the matrix if requested
+                if display:
+                    plt.figure(figsize=(10, 8))
+                    plt.imshow(im, cmap='viridis')
+                    plt.colorbar()
+                    plt.title(f"Interaction Matrix: {wfs_name} - {layer_name}")
+                    plt.tight_layout()
+                    plt.show()
+
+                # Create the Intmat object
+                wfs_params = self.get_wfs_params(source_type, wfs_idx)
+                wfs_info = f"{wfs_params['wfs_type']}_{wfs_params['wfs_nsubaps']}"
+
+                # Create tag for the pupdata
+                if isinstance(self.params_file, str):
+                    config_name = os.path.basename(self.params_file).split('.')[0]
+                else:
+                    config_name = "config"
+
+                pupdata_tag = f"{config_name}_{wfs_info}"
+
+                # Create Intmat object and save it
+                intmat_obj = Intmat(
+                    im,
+                    pupdata_tag=pupdata_tag,
+                    norm_factor=1.0,
+                    target_device_idx=None,
+                    precision=None
+                )
+
+                # Save the interaction matrix
+                intmat_obj.save(im_path)
+                if verbose_flag:
+                    print(f"  Interaction matrix saved as: {im_path}")
+
+                saved_matrices[f"{wfs_name}_{layer_name}"] = im_path
 
         return saved_matrices
 
@@ -744,11 +843,6 @@ class ParamsManager:
         """
         saved_matrices = {}
 
-        # Find the SPECULA repository path for default paths
-        specula_init_path = specula.__file__
-        specula_package_dir = os.path.dirname(specula_init_path)
-        specula_repo_path = os.path.dirname(specula_package_dir)
-
         # Set up directories
         if output_dir is None:
             raise ValueError("output_dir must be specified.")
@@ -825,10 +919,13 @@ class ParamsManager:
                 dm_name = dm['name']
 
                 if verbose_flag:
-                    print(f"\nProcessing Source {source_name} (index {source_idx}) and DM {dm_name} (index {dm_idx})")
+                    print(f"\nProcessing Source {source_name} (index {source_idx})"
+                          f" and DM {dm_name} (index {dm_idx})")
 
                 # Generate filename for this combination
-                pm_filename = generate_pm_filename(self.params_file, opt_index=source_idx, dm_index=dm_idx)
+                pm_filename = generate_pm_filename(
+                    self.params_file, opt_index=source_idx, dm_index=dm_idx
+                )
 
                 # Full path for the file
                 pm_path = os.path.join(output_dir, pm_filename)
@@ -856,9 +953,11 @@ class ParamsManager:
                     base_inv_array = np.eye(n_valid_pixels)
 
                 if verbose_flag:
-                    print(f"  Computing projection matrix with base_inv_array shape: {base_inv_array.shape}")
+                    print(f"  Computing projection matrix with base_inv_array"
+                          f" shape: {base_inv_array.shape}")
                     print(f"  Source coordinates: {gs_pol_coo}, height: {gs_height}")
-                    print(f"  DM height: {dm_params['dm_height']}, rotation: {dm_params['dm_rotation']}")
+                    print(f"  DM height: {dm_params['dm_height']}, rotation:"
+                          f" {dm_params['dm_rotation']}")
 
                 # Calculate the projection matrix
                 pm = synim.projection_matrix(
@@ -881,7 +980,6 @@ class ParamsManager:
 
                 if verbose_flag:
                     print(f"  Projection matrix shape: {pm.shape}")
-                    #print(f"  First few values of PM: {pm[:min(5, pm.shape[0]), :min(5, pm.shape[1])]}")
 
                 # Display the matrix if requested
                 if display:
@@ -922,10 +1020,13 @@ class ParamsManager:
                 layer_name = layer['name']
 
                 if verbose_flag:
-                    print(f"\nProcessing Source {source_name} (index {source_idx}) and Layer {layer_name} (index {layer_idx})")
+                    print(f"\nProcessing Source {source_name} (index {source_idx}) "
+                          f" and Layer {layer_name} (index {layer_idx})")
 
                 # Generate filename for this combination
-                pm_filename = generate_pm_filename(self.params_file, opt_index=source_idx, layer_index=layer_idx)
+                pm_filename = generate_pm_filename(
+                    self.params_file, opt_index=source_idx, layer_index=layer_idx
+                )
 
                 # Full path for the file
                 pm_path = os.path.join(output_dir, pm_filename)
@@ -953,9 +1054,11 @@ class ParamsManager:
                     base_inv_array = np.eye(n_valid_pixels)
 
                 if verbose_flag:
-                    print(f"  Computing projection matrix with base_inv_array shape: {base_inv_array.shape}")
+                    print(f"  Computing projection matrix with base_inv_array shape"
+                          f": {base_inv_array.shape}")
                     print(f"  Source coordinates: {gs_pol_coo}, height: {gs_height}")
-                    print(f"  Layer height: {layer_params['dm_height']}, rotation: {layer_params['dm_rotation']}")
+                    print(f"  Layer height: {layer_params['dm_height']}, rotation"
+                          f": {layer_params['dm_rotation']}")
 
                 # Calculate the projection matrix
                 pm = synim.projection_matrix(
@@ -978,7 +1081,8 @@ class ParamsManager:
 
                 if verbose_flag:
                     print(f"  Projection matrix shape: {pm.shape}")
-                    print(f"  First few values of PM: {pm[:min(5, pm.shape[0]), :min(5, pm.shape[1])]}")
+                    print(f"  First few values of PM:"
+                          f" {pm[:min(5, pm.shape[0]), :min(5, pm.shape[1])]}")
 
                 # Display the matrix if requested
                 if display:
@@ -1019,22 +1123,29 @@ class ParamsManager:
         """
         Assemble 4D projection matrices from individual PM files and
         calculate the final projection matrix using the full DM and layer matrices.
-        This function computes the projection matrix using a weighted average of the individual matrices,
-        and applies a regularization term to ensure numerical stability.
+        This function computes the projection matrix using a weighted average
+        of the individual matrices, and applies a regularization term to ensure
+        numerical stability.
 
-        The regularization term is added to the diagonal of the pseudoinverse to prevent singularities.
+        The regularization term is added to the diagonal of the pseudoinverse
+        to prevent singularities.
         The function returns the final projection matrix.
 
         Args:
-            regFactor (float, optional): Regularization factor for the pseudoinverse calculation
+            regFactor (float, optional): Regularization factor for the pseudoinverse
+              calculation.
                 Default is 1e-8.
-            output_dir (str, optional): Directory where PM files are stored and where assembled matrices will be saved
+            output_dir (str, optional): Directory where PM files are stored and where
+              assembled matrices will be saved.
             save (bool): Whether to save the assembled matrices to disk
 
         Returns:
-            popt (numpy.ndarray): Final projection matrix (n_dm_modes, n_layer_modes)
-            pm_full_dm (numpy.ndarray): Full DM projection matrix (n_opt_sources, n_dm_modes, n_dm_modes)
-            pm_full_layer (numpy.ndarray): Full Layer projection matrix (n_opt_sources, n_layer_modes, n_layer_modes)
+            popt (numpy.ndarray): Final projection matrix
+              (n_dm_modes, n_layer_modes)
+            pm_full_dm (numpy.ndarray): Full DM projection matrix
+              (n_opt_sources, n_dm_modes, n_dm_modes)
+            pm_full_layer (numpy.ndarray): Full Layer projection matrix
+              (n_opt_sources, n_layer_modes, n_layer_modes)
         """
 
         # Set up output directory
@@ -1071,7 +1182,8 @@ class ParamsManager:
                     self.params_file, opt_index=opt_index, dm_index=dm_index
                 )
                 if pm_filename is None:
-                    raise ValueError(f"Could not generate filename for opt{opt_index}, dm{dm_index}")
+                    raise ValueError(f"Could not generate filename"
+                                     f" for opt{opt_index}, dm{dm_index}")
 
                 pm_path = os.path.join(output_dir, pm_filename)
                 if self.verbose:
@@ -1105,7 +1217,9 @@ class ParamsManager:
             for jj, layer in enumerate(layer_list):
                 layer_index = layer['index']
 
-                pm_filename = generate_pm_filename(self.params_file, opt_index=opt_index, layer_index=layer_index)
+                pm_filename = generate_pm_filename(
+                    self.params_file, opt_index=opt_index, layer_index=layer_index
+                )
                 if pm_filename is None:
                     if self.verbose:
                         print(f"Could not generate filename for opt{opt_index}, layer{layer_index}")
@@ -1136,9 +1250,11 @@ class ParamsManager:
         if self.verbose:
             print("\nFinal 3D projection matrices:")
             if pm_full_dm is not None:
-                print(f"DM projection matrix shape: {pm_full_dm.shape} (n_modes, n_sources, n_dm_modes)")
+                print(f"DM projection matrix shape:"
+                      f" {pm_full_dm.shape} (n_modes, n_sources, n_dm_modes)")
             if pm_full_layer is not None:
-                print(f"Layer projection matrix shape: {pm_full_layer.shape} (n_modes, n_sources, n_layer_modes)")
+                print(f"Layer projection matrix shape:"
+                      f" {pm_full_layer.shape} (n_modes, n_sources, n_layer_modes)")
 
         # Save the matrices if requested
         if save:
@@ -1187,9 +1303,11 @@ class ParamsManager:
         """Return source info for a given WFS."""
         return extract_source_info(self.params, wfs_name)
 
-    def generate_im_filename(self, wfs_type=None, wfs_index=None, dm_index=None, timestamp=False, verbose=False):
+    def generate_im_filename(self, wfs_type=None, wfs_index=None,
+                             dm_index=None, timestamp=False, verbose=False):
         """Generate the interaction matrix filename for a given WFS-DM combination."""
-        return generate_im_filename(self.params_file, wfs_type, wfs_index, dm_index, timestamp, verbose)
+        return generate_im_filename(self.params_file, wfs_type,
+                                    wfs_index, dm_index, timestamp, verbose)
 
     def generate_im_filenames(self, timestamp=False):
         """Generate all possible interaction matrix filenames."""
