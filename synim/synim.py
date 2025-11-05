@@ -163,12 +163,12 @@ def calculate_extrapolation_indices_coeffs(mask, debug=False, debug_pixels=None)
             y2, x2 = y + 2*dy, x + 2*dx
 
             # Check if the points are valid (inside the image and inside the mask)
-            valid_ref1 = (0 <= y1 < mask.shape[0] and 
-                          0 <= x1 < mask.shape[1] and 
+            valid_ref1 = (0 <= y1 < mask.shape[0] and
+                          0 <= x1 < mask.shape[1] and
                           binary_mask[y1, x1])
-        
-            valid_ref2 = (0 <= y2 < mask.shape[0] and 
-                          0 <= x2 < mask.shape[1] and 
+
+            valid_ref2 = (0 <= y2 < mask.shape[0] and
+                          0 <= x2 < mask.shape[1] and
                           binary_mask[y2, x2])
 
             if is_debug_pixel:
@@ -228,7 +228,8 @@ def calculate_extrapolation_indices_coeffs(mask, debug=False, debug_pixels=None)
                 problem_indices.append(i)
 
     if debug:
-        print(f"Average valid directions per pixel: {np.sum(coefficients != 0) / (len(edge_pixels[0]) * 2):.2f}")
+        print(f"Average valid directions per pixel:"
+              f" {np.sum(coefficients != 0) / (len(edge_pixels[0]) * 2):.2f}")
 
         # Display coefficient matrix for the first 10 pixels
         if len(edge_pixels[0]) >= 10:
@@ -285,7 +286,8 @@ def apply_extrapolation(data, edge_pixels, reference_indices, coefficients, debu
                     extrap_value += contrib
 
                     if is_problem_pixel:
-                        print(f"  Ref [{ref_y},{ref_x}] = {flat_data[ref_idx]} × {coefficients[i, j]:.4f} = {contrib:.4f}")
+                        print(f"  Ref [{ref_y},{ref_x}] = {flat_data[ref_idx]} ×"
+                              f"{coefficients[i, j]:.4f} = {contrib:.4f}")
 
             # Assign the extrapolated value
             flat_result[edge_idx] = extrap_value
@@ -511,19 +513,29 @@ def rotshiftzoom_array(input_array, dm_translation=(0.0, 0.0), dm_rotation=0.0, 
 
     # Initialize the output array
     if is_3d:
-        output = np.zeros((output_size[0], output_size[1], input_array.shape[2]), dtype=input_array.dtype)
+        output = np.zeros((output_size[0], output_size[1], input_array.shape[2]),
+                          dtype=input_array.dtype)
     else:
         output = np.zeros(output_size, dtype=input_array.dtype)
 
     # Create the transformation matrices
     # For DM transformation
-    dm_scale_matrix = np.array([[1.0/dm_magnification[0], 0], [0, 1.0/dm_magnification[1]]])
-    dm_rot_matrix = np.array([[np.cos(dm_rot_rad), -np.sin(dm_rot_rad)], [np.sin(dm_rot_rad), np.cos(dm_rot_rad)]])
+    dm_scale_matrix = np.array(
+        [[1.0/dm_magnification[0], 0], [0, 1.0/dm_magnification[1]]]
+    )
+    dm_rot_matrix = np.array(
+        [[np.cos(dm_rot_rad), -np.sin(dm_rot_rad)], [np.sin(dm_rot_rad), np.cos(dm_rot_rad)]]
+    )
     dm_matrix = np.dot(dm_rot_matrix, dm_scale_matrix)
 
     # For WFS transformation
-    wfs_scale_matrix = np.array([[1.0/wfs_magnification[0], 0], [0, 1.0/wfs_magnification[1]]])
-    wfs_rot_matrix = np.array([[np.cos(wfs_rot_rad), -np.sin(wfs_rot_rad)], [np.sin(wfs_rot_rad), np.cos(wfs_rot_rad)]])
+    wfs_scale_matrix = np.array(
+        [[1.0/wfs_magnification[0], 0], [0, 1.0/wfs_magnification[1]]]
+    )
+    wfs_rot_matrix = np.array(
+        [[np.cos(wfs_rot_rad), -np.sin(wfs_rot_rad)],
+         [np.sin(wfs_rot_rad), np.cos(wfs_rot_rad)]]
+    )
     wfs_matrix = np.dot(wfs_rot_matrix, wfs_scale_matrix)
 
     # Combine transformations (first DM, then WFS)
@@ -540,10 +552,12 @@ def rotshiftzoom_array(input_array, dm_translation=(0.0, 0.0), dm_rotation=0.0, 
     output_center = np.array(output_size) / 2.0
     if is_3d:
         # For 3D, calculate offset only for the first two dimensions
-        offset_2d = center[:2] - np.dot(combined_matrix[:2, :2], output_center) - np.dot(dm_matrix, dm_translation) - wfs_translation
+        offset_2d = center[:2] - np.dot(combined_matrix[:2, :2], output_center) \
+            - np.dot(dm_matrix, dm_translation) - wfs_translation
         offset = np.array([offset_2d[0], offset_2d[1], 0])
     else:
-        offset = center - np.dot(combined_matrix, output_center) - np.dot(dm_matrix, dm_translation) - wfs_translation
+        offset = center - np.dot(combined_matrix, output_center) \
+            - np.dot(dm_matrix, dm_translation) - wfs_translation
 
     # Apply transformation
     output = affine_transform(
@@ -556,93 +570,663 @@ def rotshiftzoom_array(input_array, dm_translation=(0.0, 0.0), dm_rotation=0.0, 
 
     return output
 
-def update_dm_pup(pup_diam_m, pup_mask, dm_array, dm_mask, dm_height, dm_rotation,
-                  wfs_rotation, wfs_translation, wfs_magnification,
-                  gs_pol_coo, gs_height, verbose=False, specula_convention=True):
+
+def _has_transformations(rotation, translation, magnification):
     """
-    Update the DM and pupil array to be used in the computation of interaction or projection matrix.
-    From Guido Agapito.
-
-    Parameters:
-    - pup_diam_m: float, size in m of the side of the pupil
-    - pup_mask: numpy 2D array, mask
-    - dm_array: numpy 3D array, Deformable Mirror 2D shapes
-    - dm_mask: numpy 2D array, mask
-    - dm_height: float, conjugation altitude of the Deformable Mirror
-    - dm_rotation: float, rotation in deg of the Deformable Mirror with respect to the pupil
-    - wfs_rotation
-    - wfs_translation
-    - wfs_magnification
-    - gs_pol_coo: tuple, polar coordinates of the gudie star radius in arcsec and angle in deg
-    - gs_height: float, altitude of the guide star
-    - verbose, optional
-    - specula_convention, optional
-
+    Helper function to check if there are any non-trivial transformations.
+    
     Returns:
-    - trans_dm_array: DM array
-    - trans_dm_mask: DM mask
-    - trans_pup_mask: pupil mask
+    - bool: True if there are transformations, False otherwise
+    """
+    # Check rotation
+    has_rotation = rotation != 0.0
+
+    # Check translation
+    if hasattr(translation, '__len__'):
+        has_translation = not all(t == 0.0 for t in translation)
+    else:
+        has_translation = translation != 0.0
+
+    # Check magnification
+    if hasattr(magnification, '__len__'):
+        has_magnification = not all(m == 1.0 for m in magnification)
+    else:
+        has_magnification = magnification != 1.0
+
+    return has_rotation or has_translation or has_magnification
+
+
+def apply_dm_transformations_separated(pup_diam_m, pup_mask, dm_array, dm_mask, 
+                                       dm_height, dm_rotation,
+                                       gs_pol_coo, gs_height, 
+                                       verbose=False, specula_convention=True):
+    """
+    Apply ONLY DM transformations (for separated workflow).
+    Returns derivatives that need WFS transformations applied separately.
     """
 
     if specula_convention:
-        # transpose the DM array, mask and pupil mask to match the specula convention
         dm_array = np.transpose(dm_array, (1, 0, 2))
         dm_mask = np.transpose(dm_mask)
         pup_mask = np.transpose(pup_mask)
 
     pup_diam_pix = pup_mask.shape[0]
-    pixel_pitch = pup_diam_m/pup_diam_pix
-
-    if dm_mask.shape[0] != dm_array.shape[0]:
-        raise ValueError('Error in input data, the dm and mask array must have the same dimensions.')
-
     pixel_pitch = pup_diam_m / pup_diam_pix
 
-    dm_translation, dm_magnification = shiftzoom_from_source_dm_params(gs_pol_coo, gs_height, dm_height, pixel_pitch)
-    output_size = (pup_diam_pix,pup_diam_pix)
+    if dm_mask.shape[0] != dm_array.shape[0]:
+        raise ValueError('DM and mask arrays must have the same dimensions.')
 
-    #Extraction of patch seen by GS and application of DM rotation
-    trans_dm_array = rotshiftzoom_array(dm_array, dm_translation=dm_translation, dm_rotation=dm_rotation, dm_magnification=dm_magnification,
-                                        wfs_translation=wfs_translation, wfs_rotation=wfs_rotation, wfs_magnification=wfs_magnification,
-                                        output_size=output_size)
-    # apply transformation to the DM mask
-    trans_dm_mask  = rotshiftzoom_array(dm_mask, dm_translation=dm_translation, dm_rotation=dm_rotation, dm_magnification=dm_magnification,
-                                        wfs_translation=(0,0), wfs_rotation=0, wfs_magnification=(1,1),
-                                        output_size=output_size)
-    trans_dm_mask[trans_dm_mask<0.5] = 0
+    dm_translation, dm_magnification = shiftzoom_from_source_dm_params(
+        gs_pol_coo, gs_height, dm_height, pixel_pitch
+    )
+    output_size = (pup_diam_pix, pup_diam_pix)
+
+    if verbose:
+        print(f'DM transformations (separated):')
+        print(f'  Translation: {dm_translation} pixels')
+        print(f'  Rotation: {dm_rotation} deg')
+        print(f'  Magnification: {dm_magnification}')
+
+    # Apply ONLY DM transformations
+    trans_dm_array = rotshiftzoom_array(
+        dm_array,
+        dm_translation=dm_translation,
+        dm_rotation=dm_rotation,
+        dm_magnification=dm_magnification,
+        wfs_translation=(0, 0),
+        wfs_rotation=0,
+        wfs_magnification=(1, 1),
+        output_size=output_size
+    )
+
+    trans_dm_mask = rotshiftzoom_array(
+        dm_mask,
+        dm_translation=dm_translation,
+        dm_rotation=dm_rotation,
+        dm_magnification=dm_magnification,
+        wfs_translation=(0, 0),
+        wfs_rotation=0,
+        wfs_magnification=(1, 1),
+        output_size=output_size
+    )
+    trans_dm_mask[trans_dm_mask < 0.5] = 0
+
     if np.max(trans_dm_mask) <= 0:
-        raise ValueError('Error in input data, the rotated dm mask is empty.')
+        raise ValueError('Transformed DM mask is empty.')
 
-    # apply transformation to the pupil mask
-    trans_pup_mask  = rotshiftzoom_array(pup_mask, dm_translation=(0,0), dm_rotation=0, dm_magnification=(1,1),
-                                        wfs_translation=wfs_translation, wfs_rotation=wfs_rotation, wfs_magnification=wfs_magnification,
-                                        output_size=output_size)
-    trans_pup_mask[trans_pup_mask<0.5] = 0
+    trans_dm_array = apply_mask(trans_dm_array, trans_dm_mask)
+
+    # Compute derivatives on DM-transformed array
+    derivatives_x, derivatives_y = compute_derivatives_with_extrapolation(
+        trans_dm_array, mask=trans_dm_mask
+    )
+
+    if verbose:
+        print(f'  ✓ DM array transformed, shape: {trans_dm_array.shape}')
+        print(f'  ✓ Derivatives computed')
+
+    # Return the ORIGINAL pupil mask (not transformed), so WFS transformations can be applied later
+    return trans_dm_array, trans_dm_mask, pup_mask, derivatives_x, derivatives_y
+
+
+def apply_dm_transformations_combined(pup_diam_m, pup_mask, dm_array, dm_mask, 
+                                      dm_height, dm_rotation,
+                                      wfs_rotation, wfs_translation, wfs_magnification,
+                                      gs_pol_coo, gs_height, 
+                                      verbose=False, specula_convention=True):
+    """
+    Apply DM and WFS transformations COMBINED (single interpolation step).
+    This avoids cumulative interpolation errors when both DM and WFS have rotations.
+    """
+
+    if specula_convention:
+        dm_array = np.transpose(dm_array, (1, 0, 2))
+        dm_mask = np.transpose(dm_mask)
+        pup_mask = np.transpose(pup_mask)
+
+    pup_diam_pix = pup_mask.shape[0]
+    pixel_pitch = pup_diam_m / pup_diam_pix
+
+    if dm_mask.shape[0] != dm_array.shape[0]:
+        raise ValueError('DM and mask arrays must have the same dimensions.')
+
+    dm_translation, dm_magnification = shiftzoom_from_source_dm_params(
+        gs_pol_coo, gs_height, dm_height, pixel_pitch
+    )
+    output_size = (pup_diam_pix, pup_diam_pix)
+
+    if verbose:
+        print(f'Combined DM+WFS transformations:')
+        print(f'  DM translation: {dm_translation} pixels')
+        print(f'  DM rotation: {dm_rotation} deg')
+        print(f'  DM magnification: {dm_magnification}')
+        print(f'  WFS translation: {wfs_translation} pixels')
+        print(f'  WFS rotation: {wfs_rotation} deg')
+        print(f'  WFS magnification: {wfs_magnification}')
+
+    # Apply ALL transformations in one step
+    trans_dm_array = rotshiftzoom_array(
+        dm_array,
+        dm_translation=dm_translation,
+        dm_rotation=dm_rotation,
+        dm_magnification=dm_magnification,
+        wfs_translation=wfs_translation,  # Include WFS
+        wfs_rotation=wfs_rotation,
+        wfs_magnification=wfs_magnification,
+        output_size=output_size
+    )
+
+    # DM mask (only DM transformations)
+    trans_dm_mask = rotshiftzoom_array(
+        dm_mask,
+        dm_translation=dm_translation,
+        dm_rotation=dm_rotation,
+        dm_magnification=dm_magnification,
+        wfs_translation=(0, 0),
+        wfs_rotation=0,
+        wfs_magnification=(1, 1),
+        output_size=output_size
+    )
+    trans_dm_mask[trans_dm_mask < 0.5] = 0
+
+    # Pupil mask (only WFS transformations)
+    trans_pup_mask = rotshiftzoom_array(
+        pup_mask,
+        dm_translation=(0, 0),
+        dm_rotation=0,
+        dm_magnification=(1, 1),
+        wfs_translation=wfs_translation,
+        wfs_rotation=wfs_rotation,
+        wfs_magnification=wfs_magnification,
+        output_size=output_size
+    )
+    trans_pup_mask[trans_pup_mask < 0.5] = 0
+
+    if np.max(trans_dm_mask) <= 0:
+        raise ValueError('Transformed DM mask is empty.')
+    if np.max(trans_pup_mask) <= 0:
+        raise ValueError('Transformed pupil mask is empty.')
+
+    trans_dm_array = apply_mask(trans_dm_array, trans_dm_mask)
+
+    # Compute derivatives on already-transformed array
+    derivatives_x, derivatives_y = compute_derivatives_with_extrapolation(
+        trans_dm_array, mask=trans_dm_mask
+    )
+
+    if verbose:
+        print(f'  ✓ Combined transformation applied, shape: {trans_dm_array.shape}')
+        print(f'  ✓ Derivatives computed')
+
+    return trans_dm_array, trans_dm_mask, trans_pup_mask, derivatives_x, derivatives_y
+
+
+def apply_wfs_transformations_separated(derivatives_x, derivatives_y, pup_mask, dm_mask,
+                                        wfs_nsubaps, wfs_rotation, wfs_translation, wfs_magnification,
+                                        wfs_fov_arcsec, pup_diam_m, idx_valid_sa=None,
+                                        verbose=False, specula_convention=True):
+    """
+    Apply WFS transformations to derivatives (for separated workflow).
+    """
+
+    output_size = pup_mask.shape
+
+    # Transform pupil mask
+    trans_pup_mask = rotshiftzoom_array(
+        pup_mask,
+        dm_translation=(0, 0),
+        dm_rotation=0,
+        dm_magnification=(1, 1),
+        wfs_translation=wfs_translation,
+        wfs_rotation=wfs_rotation,
+        wfs_magnification=wfs_magnification,
+        output_size=output_size
+    )
+    trans_pup_mask[trans_pup_mask < 0.5] = 0
 
     if np.max(trans_pup_mask) <= 0:
-        raise ValueError('Error in input data, the rotated pup mask is empty.')
+        raise ValueError('Transformed pupil mask is empty.')
 
     if verbose:
-        print(f'DM rotation ({dm_rotation} deg), translation ({dm_translation} pixel), magnification ({dm_magnification})')
-        print(f'WFS translation ({wfs_translation} pixel), wfs rotation ({wfs_rotation} deg), wfs magnification ({wfs_magnification})')
-        print('done.')
+        print(f'WFS transformations (separated):')
+        print(f'  Translation: {wfs_translation} pixels')
+        print(f'  Rotation: {wfs_rotation} deg')
+        print(f'  Magnification: {wfs_magnification}')
 
-    # apply mask
-    trans_dm_array = apply_mask(trans_dm_array,trans_dm_mask)
-    if np.max(trans_dm_array) <= 0:
-        raise ValueError('Error in input data, the rotated dm array is empty.')
+    # Transform derivatives
+    trans_der_x = rotshiftzoom_array(
+        derivatives_x,
+        dm_translation=(0, 0),
+        dm_rotation=0,
+        dm_magnification=(1, 1),
+        wfs_translation=wfs_translation,
+        wfs_rotation=wfs_rotation,
+        wfs_magnification=wfs_magnification,
+        output_size=output_size
+    )
+
+    trans_der_y = rotshiftzoom_array(
+        derivatives_y,
+        dm_translation=(0, 0),
+        dm_rotation=0,
+        dm_magnification=(1, 1),
+        wfs_translation=wfs_translation,
+        wfs_rotation=wfs_rotation,
+        wfs_magnification=wfs_magnification,
+        output_size=output_size
+    )
+
+    # Continue with rebinning and slope computation
+    return _compute_slopes_from_derivatives(
+        trans_der_x, trans_der_y, trans_pup_mask, dm_mask,
+        wfs_nsubaps, wfs_fov_arcsec, pup_diam_m, idx_valid_sa,
+        verbose, specula_convention
+    )
+
+
+def apply_wfs_transformations_combined(derivatives_x, derivatives_y, trans_pup_mask, dm_mask,
+                                       wfs_nsubaps, wfs_fov_arcsec, pup_diam_m, idx_valid_sa=None,
+                                       verbose=False, specula_convention=True):
+    """
+    Compute slopes from pre-transformed derivatives (for combined workflow).
+    No additional transformations needed.
+    """
+
+    # Derivatives are already transformed - just compute slopes
+    return _compute_slopes_from_derivatives(
+        derivatives_x, derivatives_y, trans_pup_mask, dm_mask,
+        wfs_nsubaps, wfs_fov_arcsec, pup_diam_m, idx_valid_sa,
+        verbose, specula_convention
+    )
+
+
+def _compute_slopes_from_derivatives(derivatives_x, derivatives_y, pup_mask, dm_mask,
+                                     wfs_nsubaps, wfs_fov_arcsec, pup_diam_m, idx_valid_sa,
+                                     verbose, specula_convention):
+    """
+    Common function to compute slopes from derivatives.
+    Used by both separated and combined workflows.
+    """
+
+    # Clean up masks
+    if np.isnan(pup_mask).any():
+        np.nan_to_num(pup_mask, copy=False, nan=0.0)
+    if np.isnan(dm_mask).any():
+        np.nan_to_num(dm_mask, copy=False, nan=0.0)
+
+    # Rebin masks to WFS resolution
+    pup_mask_sa = rebin(pup_mask, (wfs_nsubaps, wfs_nsubaps), method='sum')
+    pup_mask_sa = pup_mask_sa / np.max(pup_mask_sa) if np.max(pup_mask_sa) > 0 else pup_mask_sa
+
+    dm_mask_sa = rebin(dm_mask, (wfs_nsubaps, wfs_nsubaps), method='sum')
+    if np.max(dm_mask_sa) <= 0:
+        raise ValueError('DM mask is empty after rebinning.')
+    dm_mask_sa = dm_mask_sa / np.max(dm_mask_sa)
+
+    # Clean derivatives
+    if np.isnan(derivatives_x).any():
+        np.nan_to_num(derivatives_x, copy=False, nan=0.0)
+    if np.isnan(derivatives_y).any():
+        np.nan_to_num(derivatives_y, copy=False, nan=0.0)
+
+    # Apply pupil mask
+    trans_der_x = apply_mask(derivatives_x, pup_mask, fill_value=np.nan)
+    trans_der_y = apply_mask(derivatives_y, pup_mask, fill_value=np.nan)
+
+    # Rebin derivatives
+    scale_factor = (trans_der_x.shape[0] / wfs_nsubaps) / \
+                   np.median(rebin(pup_mask, (wfs_nsubaps, wfs_nsubaps), method='average'))
+
+    wfs_signal_x = rebin(trans_der_x, (wfs_nsubaps, wfs_nsubaps), method='nanmean') * scale_factor
+    wfs_signal_y = rebin(trans_der_y, (wfs_nsubaps, wfs_nsubaps), method='nanmean') * scale_factor
+
+    # Combined mask
+    combined_mask_sa = (dm_mask_sa > 0.0) & (pup_mask_sa > 0.0)
+
+    # Apply mask
+    wfs_signal_x = apply_mask(wfs_signal_x, combined_mask_sa, fill_value=0)
+    wfs_signal_y = apply_mask(wfs_signal_y, combined_mask_sa, fill_value=0)
+
+    # Reshape
+    wfs_signal_x_2D = wfs_signal_x.reshape((-1, wfs_signal_x.shape[2]))
+    wfs_signal_y_2D = wfs_signal_y.reshape((-1, wfs_signal_y.shape[2]))
+
+    # Select valid subapertures
+    if idx_valid_sa is not None:
+        if specula_convention and len(idx_valid_sa.shape) > 1 and idx_valid_sa.shape[1] == 2:
+            sa2D = np.zeros((wfs_nsubaps, wfs_nsubaps))
+            sa2D[idx_valid_sa[:, 0], idx_valid_sa[:, 1]] = 1
+            sa2D = np.transpose(sa2D)
+            idx_temp = np.where(sa2D > 0)
+            idx_valid_sa_new = np.zeros_like(idx_valid_sa)
+            idx_valid_sa_new[:, 0] = idx_temp[0]
+            idx_valid_sa_new[:, 1] = idx_temp[1]
+        else:
+            idx_valid_sa_new = idx_valid_sa
+
+        if len(idx_valid_sa_new.shape) > 1 and idx_valid_sa_new.shape[1] == 2:
+            width = wfs_nsubaps
+            linear_indices = idx_valid_sa_new[:, 0] * width + idx_valid_sa_new[:, 1]
+            wfs_signal_x_2D = wfs_signal_x_2D[linear_indices.astype(int), :]
+            wfs_signal_y_2D = wfs_signal_y_2D[linear_indices.astype(int), :]
+        else:
+            wfs_signal_x_2D = wfs_signal_x_2D[idx_valid_sa_new.astype(int), :]
+            wfs_signal_y_2D = wfs_signal_y_2D[idx_valid_sa_new.astype(int), :]
+
+    # Concatenate
+    if specula_convention:
+        im = np.concatenate((wfs_signal_y_2D, wfs_signal_x_2D))
+    else:
+        im = np.concatenate((wfs_signal_x_2D, wfs_signal_y_2D))
+
+    # Convert to slope units
+    pup_diam_pix = pup_mask.shape[0]
+    pixel_pitch = pup_diam_m / pup_diam_pix
+    coeff = 1e-9 / (pup_diam_m / wfs_nsubaps) * 206265
+    coeff *= 1 / (0.5 * wfs_fov_arcsec)
+    im = im * coeff
 
     if verbose:
-        print('Mask applied.')
+        print(f'  ✓ Slopes computed, shape: {im.shape}')
 
-    return trans_dm_array, trans_dm_mask, trans_pup_mask
+    return im
+
+
+def interaction_matrix(pup_diam_m, pup_mask, dm_array, dm_mask, dm_height, dm_rotation,
+                       wfs_nsubaps, wfs_rotation, wfs_translation, wfs_magnification,
+                       wfs_fov_arcsec, gs_pol_coo, gs_height, idx_valid_sa=None,
+                       verbose=False, display=False, specula_convention=True):
+    """
+    Computes interaction matrix using intelligent workflow selection.
+    
+    Automatically chooses between:
+    - Separated workflow: When transformations are only in DM OR WFS (2 interpolation steps)
+    - Combined workflow: When both DM and WFS have transformations (1 interpolation step)
+    """
+
+    # Detect which transformations are present
+    has_dm_transform = _has_transformations(dm_rotation, (0, 0), (1, 1)) or \
+                       gs_pol_coo != (0, 0) or dm_height != 0
+    has_wfs_transform = _has_transformations(wfs_rotation, wfs_translation, wfs_magnification)
+
+    # Choose workflow
+    use_combined = has_dm_transform and has_wfs_transform
+
+    if verbose:
+        print(f"\n{'='*60}")
+        print(f"Interaction Matrix Computation")
+        print(f"{'='*60}")
+        print(f"DM transformations: {has_dm_transform}")
+        print(f"WFS transformations: {has_wfs_transform}")
+        print(f"Using {'COMBINED' if use_combined else 'SEPARATED'} workflow")
+        print(f"{'='*60}\n")
+
+    if use_combined:
+        # Combined workflow: single interpolation
+        trans_dm_array, trans_dm_mask, trans_pup_mask, derivatives_x, derivatives_y = \
+            apply_dm_transformations_combined(
+                pup_diam_m, pup_mask, dm_array, dm_mask,
+                dm_height, dm_rotation,
+                wfs_rotation, wfs_translation, wfs_magnification,
+                gs_pol_coo, gs_height,
+                verbose=verbose, specula_convention=specula_convention
+            )
+
+        im = apply_wfs_transformations_combined(
+            derivatives_x, derivatives_y, trans_pup_mask, trans_dm_mask,
+            wfs_nsubaps, wfs_fov_arcsec, pup_diam_m, idx_valid_sa=idx_valid_sa,
+            verbose=verbose, specula_convention=specula_convention
+        )
+    else:
+        # Separated workflow: two interpolation steps (more flexible)
+        trans_dm_array, trans_dm_mask, pup_mask_conv, derivatives_x, derivatives_y = \
+            apply_dm_transformations_separated(
+                pup_diam_m, pup_mask, dm_array, dm_mask,
+                dm_height, dm_rotation,
+                gs_pol_coo, gs_height,
+                verbose=verbose, specula_convention=specula_convention
+            )
+
+        im = apply_wfs_transformations_separated(
+            derivatives_x, derivatives_y, pup_mask_conv, trans_dm_mask,
+            wfs_nsubaps, wfs_rotation, wfs_translation, wfs_magnification,
+            wfs_fov_arcsec, pup_diam_m, idx_valid_sa=idx_valid_sa,
+            verbose=verbose, specula_convention=specula_convention
+        )
+
+    if display:
+        idx_plot = [2, 5]
+        fig, axs = plt.subplots(2, 2)
+        im3 = axs[0, 0].imshow(trans_dm_array[:, :, idx_plot[0]], cmap='seismic')
+        axs[0, 1].imshow(trans_dm_array[:, :, idx_plot[0]], cmap='seismic')
+        axs[1, 0].imshow(trans_dm_array[:, :, idx_plot[1]], cmap='seismic')
+        axs[1, 1].imshow(trans_dm_array[:, :, idx_plot[1]], cmap='seismic')
+        fig.suptitle(f'DM shapes (modes {idx_plot[0]} and {idx_plot[1]})')
+        fig.colorbar(im3, ax=axs.ravel().tolist(), fraction=0.02)
+        plt.show()
+
+    return im
+
+
+def interaction_matrices_multi_wfs(pup_diam_m, pup_mask, dm_array, dm_mask, dm_height, dm_rotation,
+                                   wfs_configs, gs_pol_coo=None, gs_height=None,
+                                   verbose=False, specula_convention=True):
+    """
+    Computes interaction matrices for multiple WFS configurations.
+    
+    Each WFS can have its own guide star position (gs_pol_coo) and height (gs_height).
+    
+    Parameters:
+    - pup_diam_m: float, pupil diameter in meters
+    - pup_mask: numpy 2D array, pupil mask (n_pup x n_pup)
+    - dm_array: numpy 3D array, DM modes (n x n x n_dm_modes)
+    - dm_mask: numpy 2D array, DM mask (n x n)
+    - dm_height: float, DM conjugation altitude
+    - dm_rotation: float, DM rotation in degrees
+    - wfs_configs: list of dict, each containing WFS parameters:
+        {
+            'nsubaps': int,
+            'rotation': float (default 0.0),
+            'translation': tuple (default (0.0, 0.0)),
+            'magnification': tuple or float (default (1.0, 1.0)),
+            'fov_arcsec': float,
+            'idx_valid_sa': array or None,
+            'gs_pol_coo': tuple (radius_arcsec, angle_deg) - REQUIRED if gs_pol_coo=None
+            'gs_height': float - REQUIRED if gs_height=None
+            'name': str (optional)
+        }
+    - gs_pol_coo: tuple or None (DEPRECATED - use wfs_config['gs_pol_coo'] instead)
+        If provided, uses this for all WFS (backward compatibility)
+    - gs_height: float or None (DEPRECATED - use wfs_config['gs_height'] instead)
+        If provided, uses this for all WFS (backward compatibility)
+    - verbose: bool, optional
+    - specula_convention: bool, optional
+    
+    Returns:
+    - im_dict: dict, interaction matrices keyed by WFS name or index
+    - derivatives_info: dict with metadata about the computation
+    """
+
+    if verbose:
+        print(f"\n{'='*60}")
+        print(f"Computing interaction matrices for {len(wfs_configs)} WFS")
+        print(f"{'='*60}")
+
+    # Check if using deprecated global gs_pol_coo/gs_height
+    use_global_gs = gs_pol_coo is not None and gs_height is not None
+
+    if use_global_gs and verbose:
+        print("WARNING: Using global gs_pol_coo and gs_height for all WFS (deprecated)")
+        print("         Consider specifying gs_pol_coo and gs_height in each wfs_config")
+
+    # Extract gs_pol_coo and gs_height for each WFS
+    wfs_gs_info = []
+    for i, wfs_config in enumerate(wfs_configs):
+        if use_global_gs:
+            # Backward compatibility: use global values
+            wfs_gs_pol_coo = gs_pol_coo
+            wfs_gs_height = gs_height
+        else:
+            # New method: get from wfs_config
+            if 'gs_pol_coo' not in wfs_config:
+                raise ValueError(f"WFS {i}: 'gs_pol_coo' must be"
+                                 f" specified in wfs_config when gs_pol_coo=None")
+            if 'gs_height' not in wfs_config:
+                raise ValueError(f"WFS {i}: 'gs_height' must be"
+                                 f"specified in wfs_config when gs_height=None")
+
+            wfs_gs_pol_coo = wfs_config['gs_pol_coo']
+            wfs_gs_height = wfs_config['gs_height']
+
+        wfs_gs_info.append((wfs_gs_pol_coo, wfs_gs_height))
+
+    # Check if all WFS see DM from the same direction
+    all_gs_same = all(gs_info == wfs_gs_info[0] for gs_info in wfs_gs_info)
+
+    # Detect transformations
+    has_dm_transform_list = []
+    wfs_transforms = []
+
+    for gs_pol_coo_wfs, gs_height_wfs in wfs_gs_info:
+        has_dm = _has_transformations(dm_rotation, (0, 0), (1, 1)) or \
+                 gs_pol_coo_wfs != (0, 0) or gs_height_wfs != 0
+        has_dm_transform_list.append(has_dm)
+
+    for config in wfs_configs:
+        wfs_rot = config.get('rotation', 0.0)
+        wfs_trans = config.get('translation', (0.0, 0.0))
+        wfs_mag = config.get('magnification', (1.0, 1.0))
+        wfs_transforms.append((wfs_rot, wfs_trans, wfs_mag))
+
+    # Check if all WFS transforms are identical
+    all_wfs_same = all(t == wfs_transforms[0] for t in wfs_transforms)
+
+    # Decide workflow:
+    # SEPARATED: if all WFS see DM from same direction AND have same WFS transforms
+    # COMBINED: otherwise (each WFS computed independently)
+    use_separated = all_gs_same and all_wfs_same
+
+    if verbose:
+        print(f"All WFS see DM from same direction: {all_gs_same}")
+        print(f"All WFS have same transforms: {all_wfs_same}")
+        print(f"Using {'SEPARATED' if use_separated else 'COMBINED'} workflow")
+        print(f"{'='*60}\n")
+
+    im_dict = {}
+    derivatives_info = {
+        'workflow': 'separated' if use_separated else 'combined',
+        'all_gs_same': all_gs_same,
+        'all_wfs_same': all_wfs_same
+    }
+
+    if use_separated:
+        # SEPARATED WORKFLOW: Compute DM transformations once
+        if verbose:
+            print("[Step 1/2] Computing DM transformations and derivatives...")
+
+        # Use first WFS's gs_pol_coo and gs_height (they're all the same)
+        gs_pol_coo_ref, gs_height_ref = wfs_gs_info[0]
+
+        trans_dm_array, trans_dm_mask, pup_mask_conv, derivatives_x, derivatives_y = \
+            apply_dm_transformations_separated(
+                pup_diam_m, pup_mask, dm_array, dm_mask,
+                dm_height, dm_rotation,
+                gs_pol_coo_ref, gs_height_ref,
+                verbose=verbose, specula_convention=specula_convention
+            )
+
+        if verbose:
+            print(f"  ✓ DM transformed: {trans_dm_array.shape}")
+            print(f"  ✓ Derivatives computed: {derivatives_x.shape}")
+            print(f"\n[Step 2/2] Computing slopes for each WFS...")
+
+        # Store derivatives for potential reuse
+        derivatives_info['derivatives_x'] = derivatives_x
+        derivatives_info['derivatives_y'] = derivatives_y
+        derivatives_info['dm_array'] = trans_dm_array
+        derivatives_info['dm_mask'] = trans_dm_mask
+
+        # Apply WFS transformations for each WFS
+        for i, wfs_config in enumerate(wfs_configs):
+            wfs_name = wfs_config.get('name', f'wfs_{i}')
+            wfs_nsubaps = wfs_config['nsubaps']
+            wfs_rotation = wfs_config.get('rotation', 0.0)
+            wfs_translation = wfs_config.get('translation', (0.0, 0.0))
+            wfs_magnification = wfs_config.get('magnification', (1.0, 1.0))
+            wfs_fov_arcsec = wfs_config['fov_arcsec']
+            idx_valid_sa = wfs_config.get('idx_valid_sa', None)
+
+            if verbose:
+                print(f"\n  Processing {wfs_name}:")
+                print(f"    Subapertures: {wfs_nsubaps}x{wfs_nsubaps}")
+                print(f"    FOV: {wfs_fov_arcsec}''")
+
+            im = apply_wfs_transformations_separated(
+                derivatives_x, derivatives_y, pup_mask_conv, trans_dm_mask,
+                wfs_nsubaps, wfs_rotation, wfs_translation, wfs_magnification,
+                wfs_fov_arcsec, pup_diam_m, idx_valid_sa=idx_valid_sa,
+                verbose=verbose, specula_convention=specula_convention
+            )
+
+            im_dict[wfs_name] = im
+
+            if verbose:
+                print(f"    ✓ IM shape: {im.shape}")
+
+    else:
+        # COMBINED WORKFLOW: Compute each WFS independently
+        if verbose:
+            print("Computing each WFS independently with combined DM+WFS transformations...")
+
+        for i, wfs_config in enumerate(wfs_configs):
+            wfs_name = wfs_config.get('name', f'wfs_{i}')
+            wfs_nsubaps = wfs_config['nsubaps']
+            wfs_rotation = wfs_config.get('rotation', 0.0)
+            wfs_translation = wfs_config.get('translation', (0.0, 0.0))
+            wfs_magnification = wfs_config.get('magnification', (1.0, 1.0))
+            wfs_fov_arcsec = wfs_config['fov_arcsec']
+            idx_valid_sa = wfs_config.get('idx_valid_sa', None)
+
+            # Get WFS-specific gs_pol_coo and gs_height
+            gs_pol_coo_wfs, gs_height_wfs = wfs_gs_info[i]
+
+            if verbose:
+                print(f"\n  [{i+1}/{len(wfs_configs)}] Processing {wfs_name}:")
+                print(f"    Subapertures: {wfs_nsubaps}x{wfs_nsubaps}")
+                print(f"    FOV: {wfs_fov_arcsec}''")
+                print(f"    GS position: {gs_pol_coo_wfs}")
+                print(f"    GS height: {gs_height_wfs} m")
+
+            # Use interaction_matrix which already handles workflow selection
+            im = interaction_matrix(
+                pup_diam_m, pup_mask, dm_array, dm_mask,
+                dm_height, dm_rotation,
+                wfs_nsubaps, wfs_rotation, wfs_translation, wfs_magnification,
+                wfs_fov_arcsec, gs_pol_coo_wfs, gs_height_wfs,
+                idx_valid_sa=idx_valid_sa,
+                verbose=verbose, display=False, specula_convention=specula_convention
+            )
+
+            im_dict[wfs_name] = im
+
+            if verbose:
+                print(f"    ✓ IM shape: {im.shape}")
+
+    if verbose:
+        print(f"\n{'='*60}")
+        print(f"Completed {len(im_dict)} interaction matrices")
+        print(f"Workflow: {derivatives_info['workflow'].upper()}")
+        print(f"{'='*60}\n")
+
+    return im_dict, derivatives_info
+
 
 def projection_matrix(pup_diam_m, pup_mask, dm_array, dm_mask, base_inv_array,
                       dm_height, dm_rotation, base_rotation, base_translation, base_magnification,
                       gs_pol_coo, gs_height, verbose=False, display=False, specula_convention=True):
     """
     Computes a projection matrix for DM modes onto a desired basis.
-    From Guido Agapito.
+    Uses intelligent workflow selection like interaction_matrix.
 
     Parameters:
     - pup_diam_m: float, size in m of the side of the pupil
@@ -665,10 +1249,151 @@ def projection_matrix(pup_diam_m, pup_mask, dm_array, dm_mask, base_inv_array,
     - pm: numpy 2D array, projection matrix (n_base_modes x n_dm_modes)
     """
 
-    trans_dm_array, trans_dm_mask, trans_pup_mask = update_dm_pup(
-                  pup_diam_m, pup_mask, dm_array, dm_mask, dm_height, dm_rotation,
-                  base_rotation, base_translation, base_magnification,
-                  gs_pol_coo,gs_height, verbose=verbose, specula_convention=specula_convention)
+    # Detect which transformations are present
+    has_dm_transform = _has_transformations(dm_rotation, (0, 0), (1, 1)) or \
+                       gs_pol_coo != (0, 0) or dm_height != 0
+    has_base_transform = _has_transformations(base_rotation, base_translation, base_magnification)
+
+    # Choose workflow
+    use_combined = has_dm_transform and has_base_transform
+
+    if verbose:
+        print(f"\n{'='*60}")
+        print(f"Projection Matrix Computation")
+        print(f"{'='*60}")
+        print(f"DM transformations: {has_dm_transform}")
+        print(f"Base transformations: {has_base_transform}")
+        print(f"Using {'COMBINED' if use_combined else 'SEPARATED'} workflow")
+        print(f"{'='*60}\n")
+
+    if specula_convention:
+        dm_array = np.transpose(dm_array, (1, 0, 2))
+        dm_mask = np.transpose(dm_mask)
+        pup_mask = np.transpose(pup_mask)
+
+    pup_diam_pix = pup_mask.shape[0]
+    pixel_pitch = pup_diam_m / pup_diam_pix
+
+    if dm_mask.shape[0] != dm_array.shape[0]:
+        raise ValueError('DM and mask arrays must have the same dimensions.')
+
+    # Calculate DM transformations
+    dm_translation, dm_magnification = shiftzoom_from_source_dm_params(
+        gs_pol_coo, gs_height, dm_height, pixel_pitch
+    )
+    output_size = (pup_diam_pix, pup_diam_pix)
+
+    if use_combined:
+        # COMBINED: Apply DM + Base transformations together (single interpolation)
+        if verbose:
+            print(f'Combined DM+Base transformations:')
+            print(f'  DM translation: {dm_translation} pixels')
+            print(f'  DM rotation: {dm_rotation} deg')
+            print(f'  DM magnification: {dm_magnification}')
+            print(f'  Base translation: {base_translation} pixels')
+            print(f'  Base rotation: {base_rotation} deg')
+            print(f'  Base magnification: {base_magnification}')
+
+        # Transform DM array with both DM and Base transformations
+        trans_dm_array = rotshiftzoom_array(
+            dm_array,
+            dm_translation=dm_translation,
+            dm_rotation=dm_rotation,
+            dm_magnification=dm_magnification,
+            wfs_translation=base_translation,
+            wfs_rotation=base_rotation,
+            wfs_magnification=base_magnification,
+            output_size=output_size
+        )
+
+        # Transform DM mask (only DM transformations)
+        trans_dm_mask = rotshiftzoom_array(
+            dm_mask,
+            dm_translation=dm_translation,
+            dm_rotation=dm_rotation,
+            dm_magnification=dm_magnification,
+            wfs_translation=(0, 0),
+            wfs_rotation=0,
+            wfs_magnification=(1, 1),
+            output_size=output_size
+        )
+        trans_dm_mask[trans_dm_mask < 0.5] = 0
+
+        # Transform pupil mask (only Base transformations)
+        trans_pup_mask = rotshiftzoom_array(
+            pup_mask,
+            dm_translation=(0, 0),
+            dm_rotation=0,
+            dm_magnification=(1, 1),
+            wfs_translation=base_translation,
+            wfs_rotation=base_rotation,
+            wfs_magnification=base_magnification,
+            output_size=output_size
+        )
+        trans_pup_mask[trans_pup_mask < 0.5] = 0
+
+    else:
+        # SEPARATED: Apply DM transformations only, then Base transformations
+        if verbose:
+            print(f'Separated workflow:')
+            print(f'  DM translation: {dm_translation} pixels')
+            print(f'  DM rotation: {dm_rotation} deg')
+            print(f'  DM magnification: {dm_magnification}')
+
+        # Transform DM array (only DM transformations)
+        trans_dm_array = rotshiftzoom_array(
+            dm_array,
+            dm_translation=dm_translation,
+            dm_rotation=dm_rotation,
+            dm_magnification=dm_magnification,
+            wfs_translation=(0, 0),
+            wfs_rotation=0,
+            wfs_magnification=(1, 1),
+            output_size=output_size
+        )
+
+        # Transform DM mask (only DM transformations)
+        trans_dm_mask = rotshiftzoom_array(
+            dm_mask,
+            dm_translation=dm_translation,
+            dm_rotation=dm_rotation,
+            dm_magnification=dm_magnification,
+            wfs_translation=(0, 0),
+            wfs_rotation=0,
+            wfs_magnification=(1, 1),
+            output_size=output_size
+        )
+        trans_dm_mask[trans_dm_mask < 0.5] = 0
+
+        # Transform pupil mask (only Base transformations)
+        trans_pup_mask = rotshiftzoom_array(
+            pup_mask,
+            dm_translation=(0, 0),
+            dm_rotation=0,
+            dm_magnification=(1, 1),
+            wfs_translation=base_translation,
+            wfs_rotation=base_rotation,
+            wfs_magnification=base_magnification,
+            output_size=output_size
+        )
+        trans_pup_mask[trans_pup_mask < 0.5] = 0
+
+        if has_base_transform and verbose:
+            print(f'  Base translation: {base_translation} pixels')
+            print(f'  Base rotation: {base_rotation} deg')
+            print(f'  Base magnification: {base_magnification}')
+
+    # Check validity
+    if np.max(trans_dm_mask) <= 0:
+        raise ValueError('Transformed DM mask is empty.')
+    if np.max(trans_pup_mask) <= 0:
+        raise ValueError('Transformed pupil mask is empty.')
+
+    # Apply DM mask
+    trans_dm_array = apply_mask(trans_dm_array, trans_dm_mask)
+
+    if verbose:
+        print(f'  ✓ DM array transformed, shape: {trans_dm_array.shape}')
 
     # Create mask for valid pixels (both in DM and pupil)
     valid_mask = trans_dm_mask * trans_pup_mask
@@ -682,6 +1407,7 @@ def projection_matrix(pup_diam_m, pup_mask, dm_array, dm_mask, base_inv_array,
     for i in range(n_modes):
         dm_valid_values[:, i] = trans_dm_array[:, :, i][valid_pixels]
 
+    # Extract valid pixels from base_inv_array
     height_base, width_base, n_modes_base = base_inv_array.shape
     base_valid_values = np.zeros((n_valid_pixels, n_modes_base))
 
@@ -692,7 +1418,8 @@ def projection_matrix(pup_diam_m, pup_mask, dm_array, dm_mask, base_inv_array,
     projection = np.dot(dm_valid_values.T, base_valid_values)
 
     if verbose:
-        print('Matrix multiplication done, projection shape:', projection.shape)
+        print(f'  ✓ Projection computed, shape: {projection.shape}')
+        print(f'  ✓ Valid pixels: {n_valid_pixels}')
 
     if display:
         # Display valid pixels mask
@@ -714,8 +1441,8 @@ def projection_matrix(pup_diam_m, pup_mask, dm_array, dm_mask, base_inv_array,
 
         # Display projection coefficients
         plt.figure()
-        for i in range(min(5, projection.shape[0])):
-            plt.plot(projection[:,i], label=f'Basis mode {i}')
+        for i in range(min(5, projection.shape[1])):
+            plt.plot(projection[:, i], label=f'Basis mode {i}')
         plt.legend()
         plt.title('Projection coefficients')
         plt.xlabel('DM mode index')
@@ -724,237 +1451,213 @@ def projection_matrix(pup_diam_m, pup_mask, dm_array, dm_mask, base_inv_array,
 
         # Display projection array
         plt.figure()
-        plt.imshow(projection, cmap='seismic', origin='lower')
-        plt.legend()
-        plt.title('Projection coefficients')
-        plt.xlabel('DM mode index')
-        plt.ylabel('Basis mode index')
+        plt.imshow(projection, cmap='seismic', origin='lower', aspect='auto')
+        plt.title('Projection matrix')
+        plt.xlabel('Basis mode index')
+        plt.ylabel('DM mode index')
+        plt.colorbar()
         plt.grid(True)
         plt.show()
 
     return projection
 
-def interaction_matrix(pup_diam_m, pup_mask, dm_array, dm_mask, dm_height, dm_rotation,
-                       wfs_nsubaps, wfs_rotation, wfs_translation, wfs_magnification,
-                       wfs_fov_arcsec, gs_pol_coo, gs_height, idx_valid_sa=None,
-                       verbose=False, display=False, specula_convention=True):
+
+def projection_matrices_multi_base(pup_diam_m, pup_mask, dm_array, dm_mask,
+                                   dm_height, dm_rotation, base_configs,
+                                   gs_pol_coo, gs_height,
+                                   verbose=False, specula_convention=True):
     """
-    Computes a single interaction matrix.
-    From Guido Agapito.
-
-    Parameters:
-    - pup_diam_m: float, size in m of the side of the pupil
-    - pup_mask: numpy 2D array, mask
-    - dm_array: numpy 3D array, Deformable Mirror 2D shapes
-    - dm_mask: numpy 2D array, mask
-    - dm_height: float, conjugation altitude of the Deformable Mirror
-    - dm_rotation: float, rotation in deg of the Deformable Mirror with respect to the pupil
-    - wfs_nsubaps: int, number of sub-aperture of the wavefront sensor
-    - wfs_rotation
-    - wfs_translation
-    - wfs_magnification
-    - wfs_fov_arcsec: float, field of view of the wavefront sensor in arcsec
-    - gs_pol_coo: tuple, polar coordinates of the gudie star radius in arcsec and angle in deg
-    - gs_height: float, altitude of the guide star
-    - idx_valid_sa: numpy 1D array, indices of the valid sub-apertures
-    - verbose, optional
-    - display, optional
-    - specula_convention, optional
-
-    Returns:
-    - im: numpy 2D array, set of signals
+    Computes projection matrices for multiple basis configurations efficiently.
     """
 
-    trans_dm_array, trans_dm_mask, trans_pup_mask = update_dm_pup(
-                  pup_diam_m, pup_mask, dm_array, dm_mask, dm_height, dm_rotation,
-                  wfs_rotation, wfs_translation, wfs_magnification,
-                  gs_pol_coo, gs_height, verbose=verbose, specula_convention=specula_convention)
+    if verbose:
+        print(f"\n{'='*60}")
+        print(f"Computing projection matrices for {len(base_configs)} bases")
+        print(f"{'='*60}")
 
-    # Derivative of DM modes shape
-    der_dx, der_dy = compute_derivatives_with_extrapolation(trans_dm_array,mask=trans_dm_mask)
+    # Check if all bases have the same transformations
+    base_transforms = []
+    for config in base_configs:
+        rot = config.get('rotation', 0.0)
+        trans = config.get('translation', (0.0, 0.0))
+        mag = config.get('magnification', (1.0, 1.0))
+        base_transforms.append((rot, trans, mag))
+
+    all_base_same = all(t == base_transforms[0] for t in base_transforms)
+
+    # Detect DM transformations
+    has_dm_transform = _has_transformations(dm_rotation, (0, 0), (1, 1)) or \
+                       gs_pol_coo != (0, 0) or dm_height != 0
+
+    # IMPORTANT: Even if all bases have same transforms, we need to check
+    # if there are any base transforms at all
+    has_base_transform = _has_transformations(base_transforms[0][0], 
+                                              base_transforms[0][1], 
+                                              base_transforms[0][2])
+
+    # Use separated workflow ONLY if all bases have same transforms AND
+    # either no DM transforms OR no base transforms (not both)
+    use_separated = all_base_same and not (has_dm_transform and has_base_transform)
 
     if verbose:
-        print('Derivatives done, size of der_dx and der_dy:', der_dx.shape, der_dy.shape)
+        print(f"All bases have same transforms: {all_base_same}")
+        print(f"DM has transformations: {has_dm_transform}")
+        print(f"Base has transformations: {has_base_transform}")
+        print(f"Using {'SEPARATED' if use_separated else 'COMBINED'} workflow")
+        print(f"{'='*60}\n")
 
-    # estimate an array proportional to flux per sub-aperture from the mask
-    if np.isnan(trans_pup_mask).any():
-        np.nan_to_num(trans_pup_mask, copy=False, nan=0.0, posinf=None, neginf=None)
-    if np.isnan(trans_dm_mask).any():
-        np.nan_to_num(trans_dm_mask, copy=False, nan=0.0, posinf=None, neginf=None)
+    pm_dict = {}
+    transform_info = {
+        'workflow': 'separated' if use_separated else 'combined',
+        'all_base_same': all_base_same,
+        'has_dm_transform': has_dm_transform,
+        'has_base_transform': has_base_transform
+    }
 
-    pup_mask_sa = rebin(trans_pup_mask, (wfs_nsubaps,wfs_nsubaps), method='sum')
-    pup_mask_sa = pup_mask_sa * 1/np.max(pup_mask_sa)
-
-    dm_mask_sa = rebin(trans_dm_mask, (wfs_nsubaps,wfs_nsubaps), method='sum')
-    if np.max(dm_mask_sa) <= 0:
-        raise ValueError('Error in input data, the dm mask is empty.')
-    dm_mask_sa = dm_mask_sa * 1/np.max(dm_mask_sa)
-
-    # rebin the array to get the correct signal size
-    if np.isnan(der_dx).any():
-        np.nan_to_num(der_dx, copy=False, nan=0.0, posinf=None, neginf=None)
-    if np.isnan(der_dy).any():
-        np.nan_to_num(der_dy, copy=False, nan=0.0, posinf=None, neginf=None)
-
-    # apply pup mask with NaN on pixels outside the mask
-    der_dx = apply_mask(der_dx, trans_pup_mask, fill_value=np.nan)
-    der_dy = apply_mask(der_dy, trans_pup_mask, fill_value=np.nan)
-
-    scale_factor = (der_dx.shape[0]/wfs_nsubaps)/np.median(rebin(trans_pup_mask, (wfs_nsubaps,wfs_nsubaps), method='average'))
-    wfs_signal_x = rebin(der_dx, (wfs_nsubaps,wfs_nsubaps), method='nanmean') * scale_factor
-    wfs_signal_y = rebin(der_dy, (wfs_nsubaps,wfs_nsubaps), method='nanmean') * scale_factor
-
-    debug_rebin_plot = False
-    if debug_rebin_plot:
-        # compare derivative before and after rebining
-        idx_mode = 2 # you can change this value as you wish
-
-        fig, axs = plt.subplots(4, 2, figsize=(12, 14))
-
-        # first line: DM shape
-        im0 = axs[0, 0].imshow(trans_dm_array[:, :, idx_mode], cmap='seismic')
-        axs[0, 0].set_title(f'DM shape (mode {idx_mode})')
-        fig.colorbar(im0, ax=axs[0, 0])
-        axs[0, 1].axis('off') # empty cell
-
-        # second line: Derivate
-        vmax = np.nanmax(np.abs([
-            der_dx[:, :, idx_mode],
-            der_dy[:, :, idx_mode],
-        ]))
-        vmin = -vmax
-        im1 = axs[1, 0].imshow(der_dx[:, :, idx_mode], cmap='seismic', vmin=vmin, vmax=vmax)
-        axs[1, 0].set_title(f'Derivative dx (mode {idx_mode})')
-        fig.colorbar(im1, ax=axs[1, 0])
-        im2 = axs[1, 1].imshow(der_dy[:, :, idx_mode], cmap='seismic', vmin=vmin, vmax=vmax)
-        axs[1, 1].set_title(f'Derivative dy (mode {idx_mode})')
-        fig.colorbar(im2, ax=axs[1, 1])
-
-        # Third line: WFS signals
-        vmax = np.nanmax(np.abs([
-            wfs_signal_x[:, :, idx_mode],
-            wfs_signal_y[:, :, idx_mode]
-        ]))
-        vmin = -vmax
-        im3 = axs[2, 0].imshow(wfs_signal_x[:, :, idx_mode], cmap='seismic', vmin=vmin, vmax=vmax)
-        axs[2, 0].set_title(f'WFS signal x (mode {idx_mode})')
-        fig.colorbar(im3, ax=axs[2, 0])
-        im4 = axs[2, 1].imshow(wfs_signal_y[:, :, idx_mode], cmap='seismic', vmin=vmin, vmax=vmax)
-        axs[2, 1].set_title(f'WFS signal y (mode {idx_mode})')
-        fig.colorbar(im4, ax=axs[2, 1])
-        fig.suptitle(f'DM, derivatives, and WFS signals (mode {idx_mode})')
-        plt.tight_layout()
-
-    if verbose:
-        print('Rebin done, size of wfs_signal_x and wfs_signal_y:', wfs_signal_x.shape, wfs_signal_y.shape)
-
-    # Create a combined mask for the valid sub-aperture
-    combined_mask_sa = (dm_mask_sa > 0.0) & (pup_mask_sa > 0.0)
-
-    # Apply the combined mask to the WFS signals
-    wfs_signal_x = apply_mask(wfs_signal_x, combined_mask_sa, fill_value=0)
-    wfs_signal_y = apply_mask(wfs_signal_y, combined_mask_sa, fill_value=0)
-
-    if verbose:
-        print('Mask applied.')
-
-    wfs_signal_x_2D = wfs_signal_x.reshape((-1,wfs_signal_x.shape[2]))
-    wfs_signal_y_2D = wfs_signal_y.reshape((-1,wfs_signal_y.shape[2]))
-
-    if debug_rebin_plot:
-        # Third line: WFS signals
-        vmax = np.nanmax(np.abs([
-            wfs_signal_x[:, :, idx_mode],
-            wfs_signal_y[:, :, idx_mode]
-        ]))
-        vmin = -vmax
-        im5 = axs[3, 0].imshow(wfs_signal_x[:, :, idx_mode], cmap='seismic', vmin=vmin, vmax=vmax)
-        axs[3, 0].set_title(f'WFS signal x (mode {idx_mode})')
-        fig.colorbar(im5, ax=axs[3, 0])
-        im6 = axs[3, 1].imshow(wfs_signal_y[:, :, idx_mode], cmap='seismic', vmin=vmin, vmax=vmax)
-        axs[3, 1].set_title(f'WFS signal y (mode {idx_mode})')
-        fig.colorbar(im6, ax=axs[3, 1])
-        fig.suptitle(f'DM, derivatives, and WFS signals (mode {idx_mode})')
-        plt.tight_layout()
-
-        plt.show()
-
-    if idx_valid_sa is not None:
+    if use_separated and all_base_same:
+        # SEPARATED: Can only be used when there are NO base transforms
+        # or NO DM transforms (not both)
+        if verbose:
+            print("[Step 1/2] Transforming DM array...")
 
         if specula_convention:
-            # transpose idx_valid_sa to match the specula convention
-            sa2D = np.zeros((wfs_nsubaps,wfs_nsubaps))
-            sa2D[idx_valid_sa[:,0], idx_valid_sa[:,1]] = 1
-            sa2D = np.transpose(sa2D)
-            idx_temp = np.where(sa2D>0)
-            idx_valid_sa_new = idx_valid_sa*0.
-            idx_valid_sa_new[:,0] = idx_temp[0]
-            idx_valid_sa_new[:,1] = idx_temp[1]
-        else:
-            idx_valid_sa_new = idx_valid_sa
+            dm_array = np.transpose(dm_array, (1, 0, 2))
+            dm_mask = np.transpose(dm_mask)
+            pup_mask = np.transpose(pup_mask)
 
-        if len(idx_valid_sa_new.shape) > 1 and idx_valid_sa_new.shape[1] == 2:
-            # Convert 2D coordinates [y,x] to linear indices
-            # Formula: linear_index = y * width + x
-            width = wfs_nsubaps  # Width of the original 2D array
-            linear_indices = idx_valid_sa_new[:,0] * width + idx_valid_sa_new[:,1]
+        pup_diam_pix = pup_mask.shape[0]
+        pixel_pitch = pup_diam_m / pup_diam_pix
 
-            # Use these linear indices to select elements from flattened arrays
-            wfs_signal_x_2D = wfs_signal_x_2D[linear_indices.astype(int),:]
-            wfs_signal_y_2D = wfs_signal_y_2D[linear_indices.astype(int),:]
-        else:
-            # Use 1D array directly
-            wfs_signal_x_2D = wfs_signal_x_2D[idx_valid_sa_new.astype(int),:]
-            wfs_signal_y_2D = wfs_signal_y_2D[idx_valid_sa_new.astype(int),:]
+        dm_translation, dm_magnification = shiftzoom_from_source_dm_params(
+            gs_pol_coo, gs_height, dm_height, pixel_pitch
+        )
+        output_size = (pup_diam_pix, pup_diam_pix)
+
+        # Transform DM (only DM transformations)
+        trans_dm_array = rotshiftzoom_array(
+            dm_array,
+            dm_translation=dm_translation,
+            dm_rotation=dm_rotation,
+            dm_magnification=dm_magnification,
+            wfs_translation=(0, 0),
+            wfs_rotation=0,
+            wfs_magnification=(1, 1),
+            output_size=output_size
+        )
+
+        trans_dm_mask = rotshiftzoom_array(
+            dm_mask,
+            dm_translation=dm_translation,
+            dm_rotation=dm_rotation,
+            dm_magnification=dm_magnification,
+            wfs_translation=(0, 0),
+            wfs_rotation=0,
+            wfs_magnification=(1, 1),
+            output_size=output_size
+        )
+        trans_dm_mask[trans_dm_mask < 0.5] = 0
+        trans_dm_array = apply_mask(trans_dm_array, trans_dm_mask)
+
+        # Get base transformations (same for all)
+        base_rot = base_configs[0].get('rotation', 0.0)
+        base_trans = base_configs[0].get('translation', (0.0, 0.0))
+        base_mag = base_configs[0].get('magnification', (1.0, 1.0))
+
+        # Transform pupil mask with base transformations
+        trans_pup_mask = rotshiftzoom_array(
+            pup_mask,
+            dm_translation=(0, 0),
+            dm_rotation=0,
+            dm_magnification=(1, 1),
+            wfs_translation=base_trans,
+            wfs_rotation=base_rot,
+            wfs_magnification=base_mag,
+            output_size=output_size
+        )
+        trans_pup_mask[trans_pup_mask < 0.5] = 0
+
+        valid_mask = trans_dm_mask * trans_pup_mask
+        valid_pixels = valid_mask > 0.5
+        n_valid_pixels = np.sum(valid_pixels)
+
+        # Extract DM valid values once
+        n_modes = trans_dm_array.shape[2]
+        dm_valid_values = np.zeros((n_valid_pixels, n_modes))
+        for i in range(n_modes):
+            dm_valid_values[:, i] = trans_dm_array[:, :, i][valid_pixels]
+
         if verbose:
-            print('Indices selected.')
+            print(f"  ✓ DM transformed: {trans_dm_array.shape}")
+            print(f"  ✓ Valid pixels: {n_valid_pixels}")
+            print(f"\n[Step 2/2] Computing projections for each basis...")
 
-    if specula_convention:
-        im = np.concatenate((wfs_signal_y_2D, wfs_signal_x_2D))
+        # Compute projection for each basis
+        for i, base_config in enumerate(base_configs):
+            base_name = base_config.get('name', f'base_{i}')
+            base_inv_array = base_config['base_inv_array']
+
+            # IMPORTANT: The base_inv_array is in the original pupil coordinates
+            # We need to apply the SAME transformations to match the pupil mask
+            # Only if there are base transformations
+            if has_base_transform:
+                # This case should not happen with the corrected use_separated logic
+                # but let's handle it anyway by using the combined workflow
+                if verbose:
+                    print(f"  ! Warning: Switching to combined workflow for {base_name}")
+
+                pm = projection_matrix(
+                    pup_diam_m, pup_mask, dm_array, dm_mask, base_inv_array,
+                    dm_height, dm_rotation, base_rot, base_trans, base_mag,
+                    gs_pol_coo, gs_height,
+                    verbose=False, display=False, specula_convention=specula_convention
+                )
+                pm_dict[base_name] = pm
+            else:
+                # No base transformations - can use the already-computed values
+                # Extract base valid values from the original basis
+                n_modes_base = base_inv_array.shape[2]
+                base_valid_values = np.zeros((n_valid_pixels, n_modes_base))
+                for j in range(n_modes_base):
+                    base_valid_values[:, j] = base_inv_array[:, :, j][valid_pixels]
+
+                # Compute projection
+                projection = np.dot(dm_valid_values.T, base_valid_values)
+                pm_dict[base_name] = projection
+
+                if verbose:
+                    print(f"  ✓ {base_name}: {projection.shape}")
+
     else:
-        im = np.concatenate((wfs_signal_x_2D, wfs_signal_y_2D))
+        # COMBINED: Compute each basis independently
+        if verbose:
+            print("Computing each basis independently...")
 
-    # Here we consider that tilt give a 4nm/SA derivative
-    # Conversion from 4nm tilt derivative to arcsec
-    coeff = 1e-9/(pup_diam_m/wfs_nsubaps) * 206265
-    # Conversion from arcsec to slope
-    coeff *= 1/(0.5 * wfs_fov_arcsec)
-    im = im * coeff
+        for i, base_config in enumerate(base_configs):
+            base_name = base_config.get('name', f'base_{i}')
+            base_inv_array = base_config['base_inv_array']
+            base_rot = base_config.get('rotation', 0.0)
+            base_trans = base_config.get('translation', (0.0, 0.0))
+            base_mag = base_config.get('magnification', (1.0, 1.0))
+
+            if verbose:
+                print(f"\n  [{i+1}/{len(base_configs)}] Processing {base_name}...")
+
+            pm = projection_matrix(
+                pup_diam_m, pup_mask, dm_array, dm_mask, base_inv_array,
+                dm_height, dm_rotation, base_rot, base_trans, base_mag,
+                gs_pol_coo, gs_height,
+                verbose=verbose, display=False, specula_convention=specula_convention
+            )
+
+            pm_dict[base_name] = pm
+
+            if verbose:
+                print(f"    ✓ PM shape: {pm.shape}")
 
     if verbose:
-        print('WFS signals reformed, IM size is:', im.shape)
+        print(f"\n{'='*60}")
+        print(f"Completed {len(pm_dict)} projection matrices")
+        print(f"Workflow: {transform_info['workflow'].upper()}")
+        print(f"{'='*60}\n")
 
-    if display:
-        fig, _ = plt.subplots()
-        plt.imshow(pup_mask_sa)
-        plt.title('Pupil masks rebinned on WFS sub-apertures')
-        plt.colorbar()
-
-        idx_plot = [2,5]
-
-        fig, axs = plt.subplots(2,2)
-        im3 = axs[0,0].imshow(trans_dm_array[:,:,idx_plot[0]], cmap='seismic')
-        im3 = axs[0,1].imshow(trans_dm_array[:,:,idx_plot[0]], cmap='seismic')
-        im3 = axs[1,0].imshow(trans_dm_array[:,:,idx_plot[1]], cmap='seismic')
-        im3 = axs[1,1].imshow(trans_dm_array[:,:,idx_plot[1]], cmap='seismic')
-        fig.suptitle('DM shapes seen on the WFS direction (idx {idx_plot[0]} and {idx_plot[1]})')
-        fig.colorbar(im3, ax=axs.ravel().tolist(),fraction=0.02)
-
-        fig, axs = plt.subplots(2,2)
-        im4 = axs[0,0].imshow(der_dx[:,:,idx_plot[0]], cmap='seismic')
-        im4 = axs[0,1].imshow(der_dy[:,:,idx_plot[0]], cmap='seismic')
-        im4 = axs[1,0].imshow(der_dx[:,:,idx_plot[1]], cmap='seismic')
-        im4 = axs[1,1].imshow(der_dy[:,:,idx_plot[1]], cmap='seismic')
-        fig.suptitle('X and Y derivative of DM shapes seen on the WFS direction (idx {idx_plot[0]} and {idx_plot[1]})')
-        fig.colorbar(im4, ax=axs.ravel().tolist(),fraction=0.02)
-
-        fig, axs = plt.subplots(2,2)
-        im5 = axs[0,0].imshow(wfs_signal_x[:,:,idx_plot[0]], cmap='seismic')
-        im5 = axs[0,1].imshow(wfs_signal_y[:,:,idx_plot[0]], cmap='seismic')
-        im5 = axs[1,0].imshow(wfs_signal_x[:,:,idx_plot[1]], cmap='seismic')
-        im5 = axs[1,1].imshow(wfs_signal_y[:,:,idx_plot[1]], cmap='seismic')
-        fig.suptitle('X and Y WFS signals')
-        fig.colorbar(im5, ax=axs.ravel().tolist(),fraction=0.02)
-        plt.show()
-
-    return im
+    return pm_dict, transform_info
