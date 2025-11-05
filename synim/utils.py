@@ -919,34 +919,32 @@ def build_wfs_filename_part(wfs_config, wfs_type=None):
     return "_".join(parts) if parts else "wfs"
 
 
-def build_dm_filename_part(dm_config, config=None):
+def build_component_filename_part(component_config, component_type='dm', include_height=True):
     """
-    Build the DM-specific part of the filename.
+    Build the DM/Layer-specific part of the filename.
     
     Args:
-        dm_config (dict): DM configuration parameters
-        config (dict, optional): Full configuration for context
+        component_config (dict): DM or Layer configuration parameters
+        component_type (str): Type of component ('dm' or 'layer')
+        include_height (bool): Whether to include height in the output
         
     Returns:
-        str: DM filename component
+        str: DM or Layer filename component
     """
     parts = []
     
-    # DM height
-    height = dm_config.get('height', 0.0)
-    parts.append(f"dmH{height:.1f}")
-    
-    # Influence function tag
-    if 'ifunc_tag' in dm_config:
-        ifunc_tag = dm_config['ifunc_tag']
-        parts.append(f"ifunc_{ifunc_tag}")
-    
-    # M2C tag if present
-    if 'm2c_tag' in dm_config:
-        m2c_tag = dm_config['m2c_tag']
-        parts.append(f"m2c_{m2c_tag}")
-    
-    return "_".join(parts) if parts else "dm"
+    # Only include height if requested
+    if include_height:
+        prefix = 'layH' if component_type == 'layer' else 'dmH'
+        parts.append(f"{prefix}{component_config.get('height', 0.0):.1f}")
+
+    if 'ifunc_tag' in component_config:
+        parts.append(f"ifunc_{component_config['ifunc_tag']}")
+
+    if 'm2c_tag' in component_config:
+        parts.append(f"m2c_{component_config['m2c_tag']}")
+
+    return "_".join(parts) if parts else component_type
 
 
 def dm3d_to_2d(dm_array, mask):
@@ -1608,12 +1606,12 @@ def generate_im_filename(params_file, wfs_type=None, wfs_index=None,
     if dm_index is not None:
         dm_key = f"dm{dm_index}"
         if dm_key in params:
-            dm_info = build_dm_filename_part(params[dm_key], params)
+            dm_info = build_component_filename_part(params[dm_key], 'dm')
             filename_parts.append(dm_info)
     else:
         layer_key = f"layer{layer_index}"
         if layer_key in params:
-            layer_info = build_layer_filename_part(params[layer_key], params)
+            layer_info = build_component_filename_part(params[layer_key], 'layer')
             filename_parts.append(layer_info)
 
     # Add timestamp if requested
@@ -1626,49 +1624,6 @@ def generate_im_filename(params_file, wfs_type=None, wfs_index=None,
     filename = "_".join(filename_parts) + ".fits"
 
     return filename
-
-
-def build_layer_filename_part(layer_config, config=None):
-    """
-    Build the layer-specific part of the filename.
-    
-    Args:
-        layer_config (dict): Layer configuration parameters
-        config (dict, optional): Full configuration for context
-        
-    Returns:
-        str: Layer filename component
-    """
-    parts = []
-
-    # Layer height
-    height = layer_config.get('height', 0.0)
-    parts.append(f"layH{height:.1f}")
-
-    # Influence function tag
-    if 'ifunc_tag' in layer_config:
-        ifunc_tag = layer_config['ifunc_tag']
-        # Simplify the tag for the filename
-        ifunc_parts = ifunc_tag.split('_')
-        parts.append(f"ifunc_{ifunc_parts[0]}")
-
-        # Add key info from ifunc tag
-        for part in ifunc_parts[1:]:
-            if 'pix' in part or 'nacts' in part or 'obs' in part:
-                parts.append(part)
-
-    # M2C tag if present
-    if 'm2c_tag' in layer_config:
-        m2c_tag = layer_config['m2c_tag']
-        m2c_parts = m2c_tag.split('_')
-        parts.append(f"m2c_{m2c_parts[0]}")
-
-        # Add key info from m2c tag
-        for part in m2c_parts[1:]:
-            if 'pix' in part or 'nacts' in part or 'zern' in part:
-                parts.append(part)
-
-    return "_".join(parts)
 
 
 def extract_source_config(params, wfs_key):
@@ -1720,6 +1675,9 @@ def generate_pm_filename(config_file, opt_index=None, dm_index=None, layer_index
     if dm_index is not None and layer_index is not None:
         raise ValueError("Cannot specify both dm_index and layer_index at the same time")
 
+    if dm_index is None and layer_index is None:
+        raise ValueError("Must specify either dm_index or layer_index")
+
     # Load configuration
     if isinstance(config_file, str):
         config = parse_params_file(config_file)
@@ -1769,8 +1727,10 @@ def generate_pm_filename(config_file, opt_index=None, dm_index=None, layer_index
     selected_component = filtered_components[0]
 
     if verbose:
-        print(f"Selected optical source: {selected_source['name']} (index: {selected_source['index']})")
-        print(f"Selected {component_type}: {selected_component['name']} (index: {selected_component['index']})")
+        print(f"Selected optical source: {selected_source['name']}"
+              f" (index: {selected_source['index']})")
+        print(f"Selected {component_type}: {selected_component['name']}"
+              f" (index: {selected_component['index']})")
 
     # Extract source information
     source_config = selected_source['config']
@@ -1796,15 +1756,21 @@ def generate_pm_filename(config_file, opt_index=None, dm_index=None, layer_index
     if not np.isinf(source_height):
         parts.append(f"h{source_height:.0f}")
 
-    # Component info
+    # Component info (type and index)
     parts.append(f"{component_type}{selected_component['index']}")
-    parts.append(f"H{component_height}")
 
-    # Add component-specific parts
-    parts.extend(build_dm_filename_part(selected_component['config']))
+    # Add component-specific parts including height
+    comp_part = build_component_filename_part(
+        selected_component['config'],
+        component_type,
+        include_height=True
+    )
+    if comp_part:
+        parts.append(comp_part)
 
     # Add timestamp if requested
     if timestamp:
+        import datetime
         ts = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
         parts.append(ts)
 
@@ -1869,7 +1835,7 @@ def generate_pm_filenames(config_file, timestamp=False):
             parts.append(f"dmH{dm_height}")
 
             # Add DM-specific parts
-            parts.extend(build_dm_filename_part(dm_config))
+            parts.extend(build_component_filename_part(dm_config, 'dm'))
 
             # Add timestamp if requested
             if timestamp:
@@ -1927,7 +1893,8 @@ def compute_mmse_reconstructor(interaction_matrix, C_atm, noise_variance=None, C
         raise ValueError(f"A ({A.shape}) and C_atm ({C_atm.shape}) must have compatible dimensions")
 
     if C_noise is not None and A.shape[0] != C_noise.shape[0]:
-        raise ValueError(f"A ({A.shape}) and C_noise ({C_noise.shape}) must have compatible dimensions")
+        raise ValueError(f"A ({A.shape}) and C_noise"
+                         f" ({C_noise.shape}) must have compatible dimensions")
 
     # Compute inverses if needed
     if not cinverse:
