@@ -488,7 +488,7 @@ class ParamsManager:
                                 wfs_type=None, overwrite=False, verbose=None, display=False):
         """
         Compute and save interaction matrices for all combinations of WFSs and DMs/Layers.
-        Optimized version: loads each DM/layer only once and iterates over WFSs.
+        Uses multi-WFS optimization when possible.
         
         Args:
             output_im_dir (str): Output directory for saved matrices
@@ -537,7 +537,6 @@ class ParamsManager:
                 print(f"  {comp['type'].upper()}: {comp['name']} (index: {comp['index']})")
 
         # ==================== PROCESS EACH COMPONENT ====================
-        # Iterate over components first (DMs and layers)
         for component in components:
             comp_idx = component['index']
             comp_name = component['name']
@@ -559,14 +558,14 @@ class ParamsManager:
                 print(f"  Component height: {component_params['dm_height']}")
                 print(f"  Component rotation: {component_params['dm_rotation']}")
 
-            # Now iterate over all WFS for this component
+            # ========== BUILD WFS CONFIGURATIONS FOR MULTI-WFS ==========
+            wfs_configs = []
+            wfs_to_compute = []  # Track which WFS need computation
+
             for wfs in filtered_wfs_list:
                 wfs_idx = int(wfs['index'])
                 wfs_name = wfs['name']
                 source_type = determine_source_type(wfs_name)
-
-                if verbose_flag:
-                    print(f"\n  Processing WFS {wfs_name} (index {wfs_idx})")
 
                 # Generate filename
                 im_filename = generate_im_filename(
@@ -582,72 +581,94 @@ class ParamsManager:
                 # Check if file exists
                 if os.path.exists(im_path) and not overwrite:
                     if verbose_flag:
-                        print(f"    File already exists: {im_filename}")
+                        print(f"  File already exists: {im_filename}")
                     saved_matrices[f"{wfs_name}_{comp_name}"] = im_path
                     continue
 
                 # Get WFS parameters
                 wfs_params = self.get_wfs_params(source_type, wfs_idx)
 
-                if verbose_flag:
-                    print(f"    WFS type: {wfs_params['wfs_type']}, "
-                        f"nsubaps: {wfs_params['wfs_nsubaps']}")
-                    print(f"    Guide star: {wfs_params['gs_pol_coo']} "
-                        f"at height {wfs_params['gs_height']} m")
+                # Add to configurations for multi-WFS computation
+                wfs_configs.append({
+                    'nsubaps': wfs_params['wfs_nsubaps'],
+                    'rotation': wfs_params['wfs_rotation'],
+                    'translation': wfs_params['wfs_translation'],
+                    'magnification': wfs_params['wfs_magnification'],
+                    'fov_arcsec': wfs_params['wfs_fov_arcsec'],
+                    'idx_valid_sa': wfs_params['idx_valid_sa'],
+                    'gs_pol_coo': wfs_params['gs_pol_coo'],
+                    'gs_height': wfs_params['gs_height'],
+                    'name': wfs_name
+                })
 
-                # Calculate interaction matrix
-                im = synim.interaction_matrix(
+                wfs_to_compute.append({
+                    'name': wfs_name,
+                    'index': wfs_idx,
+                    'source_type': source_type,
+                    'filename': im_filename,
+                    'path': im_path,
+                    'params': wfs_params
+                })
+
+            # ========== COMPUTE INTERACTION MATRICES ==========
+            if len(wfs_configs) > 0:
+                if verbose_flag:
+                    print(f"\n  Computing {len(wfs_configs)} interaction"
+                          f" matrices using multi-WFS...")
+
+                # Use multi-WFS computation
+                im_dict, derivatives_info = synim.interaction_matrices_multi_wfs(
                     pup_diam_m=self.pup_diam_m,
                     pup_mask=self.pup_mask,
                     dm_array=component_params['dm_array'],
                     dm_mask=component_params['dm_mask'],
                     dm_height=component_params['dm_height'],
                     dm_rotation=component_params['dm_rotation'],
-                    wfs_nsubaps=wfs_params['wfs_nsubaps'],
-                    wfs_rotation=wfs_params['wfs_rotation'],
-                    wfs_translation=wfs_params['wfs_translation'],
-                    wfs_magnification=wfs_params['wfs_magnification'],
-                    wfs_fov_arcsec=wfs_params['wfs_fov_arcsec'],
-                    gs_pol_coo=wfs_params['gs_pol_coo'],
-                    gs_height=wfs_params['gs_height'],
-                    idx_valid_sa=wfs_params['idx_valid_sa'],
-                    verbose=False,  # Suppress synim verbose output
-                    display=display
+                    wfs_configs=wfs_configs,
+                    verbose=verbose_flag,
+                    specula_convention=True
                 )
 
-                # Transpose to be coherent with SPECULA convention
-                im = im.transpose()
-
                 if verbose_flag:
-                    print(f"    Interaction matrix shape: {im.shape}")
+                    print(f"  Used {derivatives_info['workflow'].upper()} workflow")
 
-                # Display if requested
-                if display:
-                    plt.figure(figsize=(10, 8))
-                    plt.imshow(im, cmap='viridis')
-                    plt.colorbar()
-                    plt.title(f"IM: {wfs_name} - {comp_name}")
-                    plt.tight_layout()
-                    plt.show()
+                # Save each computed interaction matrix
+                for wfs_info in wfs_to_compute:
+                    wfs_name = wfs_info['name']
+                    im = im_dict[wfs_name]
 
-                # Save interaction matrix
-                config_name = (os.path.basename(self.params_file).split('.')[0]
-                            if isinstance(self.params_file, str) else "config")
-                pupdata_tag = f"{config_name}_{wfs_params['wfs_type']}_{wfs_params['wfs_nsubaps']}"
+                    # Transpose to be coherent with SPECULA convention
+                    im = im.transpose()
 
-                intmat_obj = Intmat(
-                    im, 
-                    pupdata_tag=pupdata_tag,
-                    norm_factor=1.0,
-                    target_device_idx=None,
-                    precision=None
-                )
-                intmat_obj.save(im_path)
+                    if verbose_flag:
+                        print(f"  Saving {wfs_name}: {wfs_info['filename']}")
+                        print(f"    IM shape: {im.shape}")
 
-                if verbose_flag:
-                    print(f"    Saved: {im_filename}")
+                    # Display if requested
+                    if display:
+                        plt.figure(figsize=(10, 8))
+                        plt.imshow(im, cmap='viridis')
+                        plt.colorbar()
+                        plt.title(f"IM: {wfs_name} - {comp_name}")
+                        plt.tight_layout()
+                        plt.show()
 
-                saved_matrices[f"{wfs_name}_{comp_name}"] = im_path
+                    # Save interaction matrix
+                    config_name = (os.path.basename(self.params_file).split('.')[0]
+                                if isinstance(self.params_file, str) else "config")
+                    pupdata_tag = f"{config_name}_{wfs_info['params']['wfs_type']}"
+                    pupdata_tag += f"_{wfs_info['params']['wfs_nsubaps']}"
+
+                    intmat_obj = Intmat(
+                        im,
+                        pupdata_tag=pupdata_tag,
+                        norm_factor=1.0,
+                        target_device_idx=None,
+                        precision=None
+                    )
+                    intmat_obj.save(wfs_info['path'])
+
+                    saved_matrices[f"{wfs_name}_{comp_name}"] = wfs_info['path']
 
         if verbose_flag:
             print(f"\n{'='*60}")
@@ -655,6 +676,7 @@ class ParamsManager:
             print(f"{'='*60}\n")
 
         return saved_matrices
+
 
     def assemble_interaction_matrices(self, wfs_type='ngs', output_im_dir=None, 
                                     component_type='dm', save=False):
