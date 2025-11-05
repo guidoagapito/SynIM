@@ -1214,7 +1214,8 @@ class ParamsManager:
                     )
 
                     if pm_filename is None:
-                        raise ValueError(f"Could not generate filename for opt{opt_index}, dm{dm_index}")
+                        raise ValueError(f"Could not generate filename"
+                                         f" for opt{opt_index}, dm{dm_index}")
 
                     pm_path = os.path.join(output_dir, pm_filename)
 
@@ -1392,3 +1393,259 @@ class ParamsManager:
             timestamp=timestamp,
             verbose=verbose
         )
+
+    def compute_covariance_matrices(self, r0, L0, component_type='layer',
+                                    output_dir=None, overwrite=False,
+                                    full_modes=True, verbose=None):
+        """
+        Compute atmospheric covariance matrices for all components (DMs or layers).
+        
+        Args:
+            r0 (float): Fried parameter in meters
+            L0 (float): Outer scale in meters
+            component_type (str): Type of component ('dm' or 'layer')
+            output_dir (str, optional): Directory to save covariance matrices
+            overwrite (bool): Whether to overwrite existing files
+            full_modes (bool): If True, compute covariance for ALL modes available.
+                            If False, use only modes from modal_combination.
+            verbose (bool, optional): Override the class's verbose setting
+            
+        Returns:
+            dict: Dictionary with:
+                - 'C_atm_blocks': List of covariance matrices for each component
+                - 'component_indices': List of component indices
+                - 'n_modes_per_component': List of number of modes for each component
+                - 'start_modes': List of start mode indices for each component
+        """
+        from specula.lib.modal_base_generator import compute_ifs_covmat
+
+        verbose_flag = self.verbose if verbose is None else verbose
+
+        # Validate component_type
+        if component_type not in ['dm', 'layer']:
+            raise ValueError("component_type must be either 'dm' or 'layer'")
+
+        # Get component list
+        if component_type == 'dm':
+            component_list = self.dm_list
+        else:
+            component_list = extract_layer_list(self.params)
+
+        if verbose_flag:
+            print(f"\nComputing covariance matrices:")
+            print(f"  r0 = {r0} m")
+            print(f"  L0 = {L0} m")
+            print(f"  Component type: {component_type}")
+            print(f"  Full modes: {full_modes}")
+
+        component_indices = []
+        C_atm_blocks = []
+        n_modes_per_component = []
+        start_modes = []
+
+        # Compute covariance for each component
+        for comp in component_list:
+            comp_idx = int(comp['index'])
+            component_indices.append(comp_idx)
+
+            if verbose_flag:
+                print(f"\n[{len(component_indices)}/{len(component_list)}] "
+                    f"Processing {component_type}{comp_idx}...")
+
+            # Get component parameters
+            comp_params = self.get_component_params(
+                comp_idx,
+                is_layer=(component_type == 'layer'),
+                cut_start_mode=False  # Load ALL modes, we'll cut later if needed
+            )
+
+            # Check for start_mode
+            comp_key = f'{component_type}{comp_idx}'
+            if comp_key in self.params and 'start_mode' in self.params[comp_key]:
+                start_mode = self.params[comp_key]['start_mode']
+            else:
+                start_mode = 0
+            start_modes.append(start_mode)
+
+            # Total modes available
+            total_modes = comp_params['dm_array'].shape[2]
+
+            if full_modes:
+                # Use ALL modes
+                modes_to_use = list(range(total_modes))
+                mode_label = "all"
+            else:
+                # Use only modes after start_mode (already handled by get_component_params)
+                modes_to_use = list(range(total_modes))
+                mode_label = f"start{start_mode}"
+
+            n_modes = len(modes_to_use)
+            n_modes_per_component.append(total_modes)  # Store total available modes
+
+            if verbose_flag:
+                print(f"  Total modes available: {total_modes}")
+                print(f"  Start mode: {start_mode}")
+                print(f"  Computing covariance for: {n_modes} modes ({mode_label})")
+
+            # Check if file already exists
+            if output_dir is not None:
+                os.makedirs(output_dir, exist_ok=True)
+                cov_filename = (f"C_atm_{component_type}{comp_idx}_"
+                            f"r0{r0:.3f}_L0{L0:.1f}_modes{mode_label}.npy")
+                cov_path = os.path.join(output_dir, cov_filename)
+
+                if os.path.exists(cov_path) and not overwrite:
+                    if verbose_flag:
+                        print(f"  Loading existing: {cov_filename}")
+                    C_atm = np.load(cov_path)
+                    C_atm_blocks.append(C_atm)
+                    continue
+
+            # Convert 3D DM array to 2D
+            dm2d = dm3d_to_2d(comp_params['dm_array'], comp_params['dm_mask'])
+
+            # Select modes
+            dm2d_selected = dm2d[modes_to_use, :]
+
+            if verbose_flag:
+                print(f"  dm2d_selected shape: {dm2d_selected.shape}")
+                print(f"  Computing covariance matrix...")
+
+            # Compute covariance matrix
+            C_atm = compute_ifs_covmat(
+                comp_params['dm_mask'],
+                self.pup_diam_m,
+                dm2d_selected,
+                r0,
+                L0,
+                oversampling=2,
+                verbose=False
+            )
+
+            if verbose_flag:
+                print(f"  ✓ Covariance computed: {C_atm.shape}")
+
+            # Save if output_dir is specified
+            if output_dir is not None:
+                np.save(cov_path, C_atm)
+                if verbose_flag:
+                    print(f"  ✓ Saved to: {cov_filename}")
+
+            C_atm_blocks.append(C_atm)
+
+        if verbose_flag:
+            print(f"\n{'='*60}")
+            print(f"Completed covariance computation for {len(C_atm_blocks)} components")
+            print(f"{'='*60}\n")
+
+        return {
+            'C_atm_blocks': C_atm_blocks,
+            'component_indices': component_indices,
+            'n_modes_per_component': n_modes_per_component,
+            'start_modes': start_modes,
+            'r0': r0,
+            'L0': L0
+        }
+
+
+    def assemble_covariance_matrix(self, C_atm_blocks, component_indices, 
+                                    mode_indices=None, weights=None,
+                                    wfs_type=None, component_type='layer',
+                                    verbose=None):
+        """
+        Assemble the full covariance matrix from individual blocks,
+        extracting only the modes specified in mode_indices.
+        
+        Args:
+            C_atm_blocks (list): List of covariance matrices for each component
+            component_indices (list): List of component indices
+            mode_indices (list, optional): List of mode index arrays for each component.
+                                        If None, uses modal_combination.
+            weights (list, optional): Weights for each component. If None, uses equal weights.
+            wfs_type (str, optional): WFS type for modal_combination lookup
+            component_type (str): Type of component ('dm' or 'layer')
+            verbose (bool, optional): Override the class's verbose setting
+            
+        Returns:
+            np.ndarray: Full covariance matrix with selected modes
+        """
+        verbose_flag = self.verbose if verbose is None else verbose
+
+        # If mode_indices not provided, get from modal_combination
+        if mode_indices is None:
+            if wfs_type is None:
+                raise ValueError("Either mode_indices or wfs_type must be provided")
+
+            modal_key = f'modes_{wfs_type}_{component_type}'
+            if ('modal_combination' not in self.params or
+                modal_key not in self.params['modal_combination']):
+                raise ValueError(f"modal_combination.{modal_key} not found in params")
+
+            modes_config = self.params['modal_combination'][modal_key]
+            mode_indices = []
+
+            for i, (comp_idx, n_modes_cfg) in enumerate(zip(component_indices, modes_config)):
+                if n_modes_cfg > 0:
+                    # Get start_mode
+                    comp_key = f'{component_type}{comp_idx}'
+                    if comp_key in self.params and 'start_mode' in self.params[comp_key]:
+                        start_mode = self.params[comp_key]['start_mode']
+                    else:
+                        start_mode = 0
+
+                    mode_indices.append(list(range(start_mode, start_mode + n_modes_cfg)))
+                else:
+                    mode_indices.append([])
+
+            if verbose_flag:
+                print(f"Using modal_combination: {modal_key}")
+                print(f"  Mode counts: {modes_config}")
+
+        # Set default weights
+        if weights is None:
+            weights = [1.0] * len(component_indices)
+
+        # Calculate total modes
+        total_modes = sum(len(mi) for mi in mode_indices)
+
+        if verbose_flag:
+            print(f"\nAssembling covariance matrix:")
+            print(f"  Components: {component_indices}")
+            print(f"  Modes per component: {[len(mi) for mi in mode_indices]}")
+            print(f"  Total modes: {total_modes}")
+            print(f"  Weights: {weights}")
+
+        # Initialize full covariance matrix
+        C_atm_full = np.zeros((total_modes, total_modes))
+
+        # Conversion factor (nm to rad^2 at 500nm)
+        conversion_factor = (500 / 2 / np.pi) ** 2
+
+        # Fill the blocks
+        current_idx = 0
+        for i, (C_atm_block, modes, weight) in enumerate(zip(C_atm_blocks, mode_indices, weights)):
+            if len(modes) == 0:
+                continue
+
+            n_modes = len(modes)
+
+            # Extract the sub-block for selected modes
+            # C_atm_block has shape (n_total_modes, n_total_modes)
+            # We want to extract modes[i] × modes[j]
+            idx_modes = np.ix_(modes, modes)
+            C_atm_sub = C_atm_block[idx_modes]
+
+            # Place in full matrix
+            idx_full = slice(current_idx, current_idx + n_modes)
+            C_atm_full[idx_full, idx_full] = C_atm_sub * weight * conversion_factor
+
+            if verbose_flag:
+                print(f"  Component {i+1}: modes {modes[0]}-{modes[-1]} → "
+                    f"full matrix [{current_idx}:{current_idx + n_modes}]")
+
+            current_idx += n_modes
+
+        if verbose_flag:
+            print(f"\n  ✓ Full covariance matrix assembled: {C_atm_full.shape}")
+
+        return C_atm_full

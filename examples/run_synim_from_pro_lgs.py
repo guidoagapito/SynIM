@@ -48,29 +48,46 @@ print('im_full shape:', im_full.shape)
 print('n_slopes_per_wfs:', n_slopes_per_wfs)
 print('dm_indices:', dm_indices)
 
-# Computation of rec matrix with MMSE
-# 1 Compute atmospheric covariance matrix using the compute_ifs_covmat function
+# -------------------------------------------------------------------
+# STEP 1: Compute/Load full covariance matrices (done once, saved)
+# -------------------------------------------------------------------
 r0 = 0.2
 L0 = 25
-C_atm_full = np.zeros((im_full.shape[0], im_full.shape[0]))
-weights = [1,0.15]
-for i, dm in enumerate(dm_indices):
-    params = params_mgr.prepare_interaction_matrix_params(wfs_type='lgs',
-                                                         wfs_index=1, dm_index=dm)
-    dm2d = dm3d_to_2d(params['dm_array'],params['dm_mask'])
-    dm2d = dm2d[mode_indices[i],:]   # Select only the first n modes
-    print("dm2d shape", dm2d.shape)
-    print("computing covariance matrix for DM", i+1)
-    print("params['pup_diam_m']", params['pup_diam_m'])
-    C_atm = compute_ifs_covmat(
-        params['dm_mask'], params['pup_diam_m'], dm2d, r0, L0,
-        oversampling=2, verbose=False
-    )
-    print("Done.")
-    # Create proper indexing for block assignment using np.ix_
-    idx = np.ix_(mode_indices[i], mode_indices[i])
-    C_atm_full[idx] = C_atm * weights[i] * (500/2/np.pi)**2
 
+cov_result = params_mgr.compute_covariance_matrices(
+    r0=r0,
+    L0=L0,
+    component_type='layer',
+    output_dir=os.path.join(root_dir, "covariance"),
+    overwrite=False,
+    full_modes=True,  # Compute for ALL modes
+    verbose=True
+)
+
+# -------------------------------------------------------------------
+# STEP 2: Assemble only the modes you need (fast, uses modal_combination)
+# -------------------------------------------------------------------
+weights = [1.0, 0.15]
+
+C_atm_full = params_mgr.assemble_covariance_matrix(
+    C_atm_blocks=cov_result['C_atm_blocks'],
+    component_indices=cov_result['component_indices'],
+    mode_indices=mode_indices,  # From assemble_interaction_matrices
+    weights=weights,
+    verbose=True
+)
+
+# Or equivalently, using wfs_type:
+# C_atm_full = params_mgr.assemble_covariance_matrix(
+#     C_atm_blocks=cov_result['C_atm_blocks'],
+#     component_indices=cov_result['component_indices'],
+#     wfs_type='lgs',
+#     component_type='layer',
+#     weights=weights,
+#     verbose=True
+# )
+
+# Visualize
 display_covmat = True
 if display_covmat:
     plt.figure(figsize=(10, 8))
