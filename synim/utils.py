@@ -632,7 +632,7 @@ def load_influence_functions(cm, dm_params, pixel_pupil, verbose=False):
             ifunc.influence_function = ifunc.influence_function[:dm_params['nmodes'],:]
 
         # Convert influence function from 2D to 3D
-        if ifunc.mask_inf_func is not None:           
+        if ifunc.mask_inf_func is not None:
             # Create empty 3D array (height, width, n_modes)
             dm_array = dm2d_to_3d(ifunc.influence_function, ifunc.mask_inf_func)
             if verbose:
