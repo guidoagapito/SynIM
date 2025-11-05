@@ -656,7 +656,8 @@ class ParamsManager:
 
         return saved_matrices
 
-    def assemble_interaction_matrices(self, wfs_type='ngs', output_im_dir=None, save=False):
+    def assemble_interaction_matrices(self, wfs_type='ngs', output_im_dir=None, 
+                                    component_type='dm', save=False):
         """
         Assemble interaction matrices for a specific type of WFS into
         a single full interaction matrix.
@@ -664,17 +665,21 @@ class ParamsManager:
         Args:
             wfs_type (str): The type of WFS to assemble matrices for ('ngs', 'lgs', 'ref')
             output_im_dir (str, optional): Directory where IM files are stored
+            component_type (str): Type of component to assemble ('dm' or 'layer')
             save (bool): Whether to save the assembled matrix to disk
             
         Returns:
-            tuple: (im_full, n_slopes_per_wfs, mode_indices, dm_indices) -
+            tuple: (im_full, n_slopes_per_wfs, mode_indices, component_indices) -
                 Assembled matrix and associated parameters
         """
         # Set up output directory
         if output_im_dir is None:
             raise ValueError("output_im_dir must be specified.")
 
-        # Calculate total dimensions
+        # Validate component_type
+        if component_type not in ['dm', 'layer']:
+            raise ValueError("component_type must be either 'dm' or 'layer'")
+
         # Count WFSs of the specified type in the configuration
         wfs_list = [wfs for wfs in self.wfs_list if wfs_type in wfs['name']]
         n_wfs = len(wfs_list)
@@ -697,63 +702,89 @@ class ParamsManager:
         if self.verbose:
             print(f"Each WFS has {n_slopes_per_wfs} slopes")
 
-        # DM indices and start modes based on config
-        dm_indices = []
-        dm_start_modes = []
+        # Get component list based on type
+        if component_type == 'dm':
+            component_list = self.dm_list
+        else:
+            component_list = extract_layer_list(self.params)
+
+        # Component indices and start modes based on config
+        component_indices = []
+        component_start_modes = []
         mode_indices = []
         total_modes = 0
 
-        if 'modal_combination' in self.params:
-            if f'modes_{wfs_type}' in self.params['modal_combination']:
-                modes_config = self.params['modal_combination'][f'modes_{wfs_type}']
-                for i, n_modes in enumerate(modes_config):
-                    if n_modes > 0:
-                        # Check for start_mode in DM config
-                        if f'dm{i+1}' in self.params and 'start_mode' in self.params[f'dm{i+1}']:
-                            dm_start_mode = self.params[f'dm{i+1}']['start_mode']
-                        else:
-                            dm_start_mode = 0
+        # Check if modal_combination exists for this WFS type and component type
+        modal_key = f'modes_{wfs_type}_{component_type}'
+        has_modal_combination = ('modal_combination' in self.params and 
+                                modal_key in self.params['modal_combination'])
 
-                        dm_start_modes.append(dm_start_mode)
-                        dm_indices.append(i + 1)
-                        mode_indices.append(list(range(dm_start_mode, dm_start_mode + n_modes)))
-                        total_modes += n_modes
+        if has_modal_combination:
+            if self.verbose:
+                print(f"Using modal_combination for {component_type}s")
+
+            modes_config = self.params['modal_combination'][modal_key]
+            for i, n_modes in enumerate(modes_config):
+                if n_modes > 0:
+                    # Check for start_mode in component config
+                    comp_key = f'{component_type}{i+1}'
+                    if comp_key in self.params and 'start_mode' in self.params[comp_key]:
+                        comp_start_mode = self.params[comp_key]['start_mode']
+                    else:
+                        comp_start_mode = 0
+
+                    component_start_modes.append(comp_start_mode)
+                    component_indices.append(i + 1)
+                    mode_indices.append(list(range(comp_start_mode, comp_start_mode + n_modes)))
+                    total_modes += n_modes
         else:
-            # Default: use all DMs with all modes
-            for dm in self.dm_list:
-                dm_idx = int(dm['index'])
-                dm_params = self.get_component_params(dm_idx)
-                n_modes = dm_params['dm_array'].shape[2]
-                dm_start_mode = 0
+            # Default: use all components with all modes
+            if self.verbose:
+                print(f"No modal_combination found, using all {component_type}s with all modes")
 
-                dm_start_modes.append(dm_start_mode)
-                dm_indices.append(dm_idx)
-                mode_indices.append(list(range(dm_start_mode, dm_start_mode + n_modes)))
+            for comp in component_list:
+                comp_idx = int(comp['index'])
+                comp_params = self.get_component_params(
+                    comp_idx, 
+                    is_layer=(component_type == 'layer')
+                )
+                n_modes = comp_params['dm_array'].shape[2]
+
+                # Check for start_mode
+                comp_key = f'{component_type}{comp_idx}'
+                if comp_key in self.params and 'start_mode' in self.params[comp_key]:
+                    comp_start_mode = self.params[comp_key]['start_mode']
+                else:
+                    comp_start_mode = 0
+
+                component_start_modes.append(comp_start_mode)
+                component_indices.append(comp_idx)
+                mode_indices.append(list(range(comp_start_mode, comp_start_mode + n_modes)))
                 total_modes += n_modes
+
         n_tot_modes = total_modes  # Total number of modes
 
         if self.verbose:
             print(f"Total modes: {n_tot_modes}, Total slopes: {n_tot_slopes}")
-            print(f"DM indices for {wfs_type}: {dm_indices}")
-            print(f"DM start modes: {dm_start_modes}")
+            print(f"{component_type.upper()} indices for {wfs_type}: {component_indices}")
+            print(f"{component_type.upper()} start modes: {component_start_modes}")
 
         # Create the full interaction matrix
         im_full = np.zeros((n_tot_modes, n_tot_slopes))
 
         # Load and assemble the interaction matrices
         for ii in range(n_wfs):
-            for jj, dm_ind in enumerate(dm_indices):
-                # Get the appropriate mode indices for this DM
+            for jj, comp_ind in enumerate(component_indices):
+                # Get the appropriate mode indices for this component
                 mode_idx = mode_indices[jj]
 
                 # Generate and load the interaction matrix file
-                # CORREZIONE: specifica esplicitamente dm_index e layer_index=None
                 im_filename = generate_im_filename(
                     self.params_file,
                     wfs_type=wfs_type,
                     wfs_index=ii+1,
-                    dm_index=dm_ind,
-                    layer_index=None  # Specifica esplicitamente None per layer_index
+                    dm_index=comp_ind if component_type == 'dm' else None,
+                    layer_index=comp_ind if component_type == 'layer' else None
                 )
                 im_path = os.path.join(output_im_dir, im_filename)
 
@@ -771,8 +802,22 @@ class ParamsManager:
                     idx_start = 0
                 else:
                     idx_start = sum(n_slopes_list[:ii])
-                im_full[mode_idx, idx_start: idx_start+n_slopes_list[ii]] \
-                    = intmat_obj.intmat[mode_idx, :]
+
+                # Check if we have enough modes in the loaded IM
+                n_modes_available = intmat_obj.intmat.shape[0]
+                n_modes_requested = len(mode_idx)
+
+                if n_modes_available < n_modes_requested:
+                    if self.verbose:
+                        print(f"    Warning: IM has only {n_modes_available} modes, "
+                            f"requested {n_modes_requested}. Using available modes.")
+                    # Use only available modes
+                    actual_mode_idx = mode_idx[:n_modes_available]
+                else:
+                    actual_mode_idx = mode_idx
+
+                im_full[actual_mode_idx, idx_start:idx_start+n_slopes_list[ii]] = \
+                    intmat_obj.intmat[actual_mode_idx, :]
 
         # Display summary
         if self.verbose:
@@ -780,12 +825,12 @@ class ParamsManager:
 
         # Save the full interaction matrix if requested
         if save:
-            output_filename = f"im_full_{wfs_type}.npy"
+            output_filename = f"im_full_{wfs_type}_{component_type}.npy"
             np.save(os.path.join(output_im_dir, output_filename), im_full)
             if self.verbose:
                 print(f"Saved full interaction matrix to {output_filename}")
 
-        return im_full, n_slopes_per_wfs, mode_indices, dm_indices
+        return im_full, n_slopes_per_wfs, mode_indices, component_indices
 
     def compute_projection_matrices(self, output_dir=None, overwrite=False,
                                 verbose=None, display=False):
