@@ -936,7 +936,7 @@ class ParamsManager:
 
 
     def compute_projection_matrices(self, output_dir=None, overwrite=False,
-                                    verbose=None, display=False):
+                                    verbose=None):
         """
         Compute and save projection matrices for all combinations of optical sources and DMs/layers.
         Uses multi-base optimization when possible.
@@ -1058,7 +1058,6 @@ class ParamsManager:
                     gs_pol_coo=gs_pol_coo_ref,
                     gs_height=gs_height_ref,
                     verbose=verbose_flag,
-                    display=display,
                     specula_convention=True
                 )
 
