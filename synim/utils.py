@@ -711,7 +711,7 @@ def load_influence_functions(cm, dm_params, pixel_pupil, verbose=False, is_inver
         return dm_array, dm_mask
     else:
         raise ValueError("No valid influence function configuration found."
-                         " Need either 'ifunc_tag', 'ifunc_object', or 'type_str'.")ype_str'.")
+                         " Need either 'ifunc_tag', 'ifunc_object', or 'type_str'.")
 
 def find_subapdata(cm, wfs_params, wfs_key, params, verbose=False):
     """
