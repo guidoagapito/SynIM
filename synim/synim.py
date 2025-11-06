@@ -1388,7 +1388,7 @@ def projection_matrix(pup_diam_m, pup_mask, dm_array, dm_mask, base_inv_array,
         raise ValueError('Transformed DM mask is empty.')
     if np.max(trans_pup_mask) <= 0:
         raise ValueError('Transformed pupil mask is empty.')
-    
+
     # Apply DM mask
     trans_dm_array = apply_mask(trans_dm_array, trans_dm_mask)
 
@@ -1407,15 +1407,30 @@ def projection_matrix(pup_diam_m, pup_mask, dm_array, dm_mask, base_inv_array,
 
     # *** OPTIMIZED: Handle base_inv_array format ***
     if base_inv_array.ndim == 2:
-        # 2D inverse basis: shape is (n_modes, n_pixels_total)
-        n_modes_base = base_inv_array.shape[0]
+        n_rows, n_cols = base_inv_array.shape
+
+        # Determine format based on which dimension matches valid pixels
+        if n_cols == n_valid_pixels:
+            # Format: (nmodes, npixels_valid) - IFunc style
+            n_modes_base = n_rows
+            base_valid_values = base_inv_array.T  # (npixels_valid, nmodes)
+            base_format = "IFunc (nmodes, npixels)"
+
+        elif n_rows == n_valid_pixels:
+            # Format: (npixels_valid, nmodes) - IFuncInv style
+            n_modes_base = n_cols
+            base_valid_values = base_inv_array  # No transpose!
+            base_format = "IFuncInv (npixels, nmodes)"
+
+        else:
+            raise ValueError(
+                f"Cannot determine base format: shape {base_inv_array.shape} "
+                f"does not match valid pixels ({n_valid_pixels})"
+            )
 
         if verbose:
-            print(f'  Inverse basis 2D shape: {base_inv_array.shape}')
-
-        # Select columns corresponding to valid pixels
-        # Transpose to get (n_valid_pixels, n_modes)
-        base_valid_values = base_inv_array[:, valid_indices].T
+            print(f'  Inverse basis format: {base_format}')
+            print(f'  Shape: {base_inv_array.shape} → {base_valid_values.shape}')
 
     elif base_inv_array.ndim == 3:
         # 3D basis: shape is (height, width, n_modes)
@@ -1633,26 +1648,32 @@ def projection_matrices_multi_base(pup_diam_m, pup_mask, dm_array, dm_mask,
                 print(f"\n  [{i+1}/{len(base_configs)}] Processing {base_name}:")
 
             # *** OPTIMIZED: Handle 2D and 3D base formats ***
+            # *** DETECT BASE FORMAT ***
             if base_inv_array.ndim == 2:
-                # 2D inverse basis: shape (n_modes, n_pixels_valid)
-                n_modes_base = base_inv_array.shape[0]
-                n_pixels_base = base_inv_array.shape[1]
+                n_rows, n_cols = base_inv_array.shape
 
-                if verbose:
-                    print(f"    Inverse basis 2D: {base_inv_array.shape}")
-                    print(f"    Valid mask has {n_valid_pixels} valid pixels")
-
-                # inverse base has only valid pixels
-                # so check consistency
-                if n_pixels_base != n_valid_pixels:
+                # Determine format based on which dimension matches valid pixels
+                if n_cols == n_valid_pixels:
+                    # Format: (nmodes, npixels_valid) - IFunc style
+                    n_modes_base = n_rows
+                    base_valid_values = base_inv_array.T  # (npixels_valid, nmodes)
+                    if verbose:
+                        print(f"    Inverse basis 2D (IFunc format): {base_inv_array.shape}")
+                        print(f"    → Transposed to: {base_valid_values.shape}")
+                        
+                elif n_rows == n_valid_pixels:
+                    # Format: (npixels_valid, nmodes) - IFuncInv style
+                    n_modes_base = n_cols
+                    base_valid_values = base_inv_array  # No transpose needed!
+                    if verbose:
+                        print(f"    Inverse basis 2D (IFuncInv format): {base_inv_array.shape}")
+                        print(f"    → Direct use (no transpose)")
+                        
+                else:
                     raise ValueError(
-                        f"Mismatch between base inverse pixels ({n_pixels_base}) "
-                        f"and valid mask pixels ({n_valid_pixels}). "
-                        f"The inverse basis should have exactly the same valid pixels as the mask."
+                        f"Cannot determine base format: shape {base_inv_array.shape} "
+                        f"does not match valid pixels ({n_valid_pixels})"
                     )
-
-                # transpose to have (n_valid_pixels, n_modes)
-                base_valid_values = base_inv_array.T
 
             elif base_inv_array.ndim == 3:
                 # 3D basis: shape (height, width, n_modes)
