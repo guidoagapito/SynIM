@@ -1439,7 +1439,7 @@ def projection_matrix(pup_diam_m, pup_mask, dm_array, dm_mask, base_inv_array,
 
     if verbose:
         print(f'  ✓ Projection computed: {projection.shape}')
-        print(f'  ✓ Valid pixels: {n_valid_pixels}'))
+        print(f'  ✓ Valid pixels: {n_valid_pixels}')
 
     if display:
         # Display valid pixels mask
