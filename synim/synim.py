@@ -1224,6 +1224,148 @@ def interaction_matrices_multi_wfs(pup_diam_m, pup_mask, dm_array, dm_mask, dm_h
     return im_dict, derivatives_info
 
 
+def _transpose_base_array_for_specula(base_inv_array, pup_mask_original, verbose=False):
+    """
+    Transpose base_inv_array for SPECULA convention.
+    
+    CRITICAL: Requires the ORIGINAL (non-transposed) pupil mask to correctly
+    extract and re-map pixel indices after transposition.
+    
+    Handles both 2D and 3D base arrays:
+    - 3D arrays: simple transpose (height, width, nmodes) → (width, height, nmodes)
+    - 2D arrays: reconstructs 3D using ORIGINAL mask, transposes, then re-extracts
+    
+    Parameters:
+    - base_inv_array: 2D or 3D numpy array
+        - 2D can be: (nmodes, npixels_total) [IFunc] or (npixels_total, nmodes) [IFuncInv]
+        - 3D: (height, width, nmodes)
+    - pup_mask_original: numpy 2D array, ORIGINAL (non-transposed) pupil mask
+    - verbose: bool, print debug information
+    
+    Returns:
+    - transposed_array: numpy array with swapped X-Y coordinates
+    """
+    
+    if base_inv_array.ndim == 3:
+        # ============================================================
+        # SIMPLE CASE: 3D array - just transpose
+        # ============================================================
+        transposed = np.transpose(base_inv_array, (1, 0, 2))
+        
+        if verbose:
+            print(f"  Transposed 3D base: {base_inv_array.shape} → {transposed.shape}")
+        
+        return transposed
+    
+    elif base_inv_array.ndim == 2:
+        # ============================================================
+        # COMPLEX CASE: 2D array - need original mask indices
+        # ============================================================
+        n_rows, n_cols = base_inv_array.shape
+        
+        # Get original mask info
+        pup_shape_orig = pup_mask_original.shape
+        pup_pixels_total = pup_shape_orig[0] * pup_shape_orig[1]
+        idx_valid_orig = np.where(pup_mask_original > 0.5)
+        n_valid_pixels = len(idx_valid_orig[0])
+        
+        # Try to identify format and reconstruct 3D
+        if n_cols == pup_pixels_total:
+            # IFunc format: (nmodes, npixels_total)
+            n_modes_base = n_rows
+            base_2d = base_inv_array
+            format_name = "IFunc (full pupil)"
+            
+        elif n_rows == pup_pixels_total:
+            # IFuncInv format: (npixels_total, nmodes)
+            n_modes_base = n_cols
+            base_2d = base_inv_array.T  # Convert to IFunc format
+            format_name = "IFuncInv (full pupil)"
+            
+        elif n_cols == n_valid_pixels:
+            # IFunc format with only valid pixels: (nmodes, npixels_valid)
+            n_modes_base = n_rows
+            base_2d = base_inv_array
+            format_name = "IFunc (valid pixels only)"
+            
+        elif n_rows == n_valid_pixels:
+            # IFuncInv format with only valid pixels: (npixels_valid, nmodes)
+            n_modes_base = n_cols
+            base_2d = base_inv_array.T
+            format_name = "IFuncInv (valid pixels only)"
+            
+        else:
+            # Cannot determine format
+            if verbose:
+                print(f"  ERROR: Cannot determine format of 2D base")
+                print(f"    Shape: {base_inv_array.shape}")
+                print(f"    Total pixels: {pup_pixels_total}")
+                print(f"    Valid pixels: {n_valid_pixels}")
+            raise ValueError(f"Cannot determine format of 2D base array with shape {base_inv_array.shape}")
+        
+        if verbose:
+            print(f"  Detected format: {format_name}")
+            print(f"  Shape: {base_inv_array.shape}")
+            print(f"  Modes: {n_modes_base}")
+        
+        # *** RECONSTRUCTION WITH ORIGINAL MASK ***
+        # Step 1: Reconstruct full 3D using ORIGINAL (non-transposed) dimensions
+        base_3d_orig = np.zeros((pup_shape_orig[0], pup_shape_orig[1], n_modes_base))
+        
+        if n_cols == pup_pixels_total or n_rows == pup_pixels_total:
+            # Full pupil format - reshape each mode
+            for i in range(n_modes_base):
+                base_3d_orig[:, :, i] = base_2d[i, :].reshape(pup_shape_orig)
+        else:
+            # Valid pixels only format - use original indices
+            for i in range(n_modes_base):
+                base_3d_orig[idx_valid_orig[0], idx_valid_orig[1], i] = base_2d[i, :]
+        
+        if verbose:
+            print(f"  Reconstructed 3D with original mask: {base_3d_orig.shape}")
+        
+        # Step 2: Transpose the 3D
+        base_3d_transposed = np.transpose(base_3d_orig, (1, 0, 2))
+        
+        if verbose:
+            print(f"  Transposed 3D: {base_3d_transposed.shape}")
+        
+        # Step 3: If original was valid-pixels-only, extract back to 2D
+        # using transposed mask indices
+        if n_cols == n_valid_pixels or n_rows == n_valid_pixels:
+            # Get indices from TRANSPOSED mask
+            pup_mask_transposed = np.transpose(pup_mask_original)
+            idx_valid_transposed = np.where(pup_mask_transposed > 0.5)
+            
+            # Extract valid pixels from transposed 3D
+            base_2d_transposed = np.zeros((n_modes_base, n_valid_pixels))
+            for i in range(n_modes_base):
+                base_2d_transposed[i, :] = base_3d_transposed[
+                    idx_valid_transposed[0], 
+                    idx_valid_transposed[1], 
+                    i
+                ]
+            
+            if verbose:
+                print(f"  Re-extracted to 2D (valid pixels): {base_2d_transposed.shape}")
+            
+            # Return in same format as input
+            if n_rows == n_valid_pixels:
+                # Was IFuncInv, return transposed
+                return base_2d_transposed.T
+            else:
+                # Was IFunc, return as-is
+                return base_2d_transposed
+        else:
+            # Full pupil - return 3D transposed
+            if verbose:
+                print(f"  Returning full 3D transposed: {base_3d_transposed.shape}")
+            return base_3d_transposed
+    
+    else:
+        raise ValueError(f"base_inv_array must be 2D or 3D, got {base_inv_array.ndim}D")
+
+
 def projection_matrix(pup_diam_m, pup_mask, dm_array, dm_mask, base_inv_array,
                       dm_height, dm_rotation, base_rotation, base_translation, base_magnification,
                       gs_pol_coo, gs_height, verbose=False, display=False, specula_convention=True):
@@ -1292,51 +1434,21 @@ def projection_matrix(pup_diam_m, pup_mask, dm_array, dm_mask, base_inv_array,
     # ================================================================
     # NOTE: This MUST be done BEFORE any transformations
     if specula_convention:
+        # *** SAVE ORIGINAL MASK BEFORE TRANSPOSING ***
+        pup_mask_original = pup_mask.copy()
+
         # Transpose all 3D arrays: (height, width, modes) → (width, height, modes)
         # This swaps X and Y coordinates
         dm_array = np.transpose(dm_array, (1, 0, 2))
         dm_mask = np.transpose(dm_mask)
         pup_mask = np.transpose(pup_mask)
 
-        # *** CRITICAL: Also transpose base_inv_array if 3D ***
-        if base_inv_array.ndim == 3:
-            base_inv_array = np.transpose(base_inv_array, (1, 0, 2))
-            if verbose:
-                print(f"  Transposed 3D base: {base_inv_array.shape}")
-
-        elif base_inv_array.ndim == 2:
-            # Complex case: need to reconstruct 3D, transpose, then will re-extract later
-            n_rows, n_cols = base_inv_array.shape
-            pup_pixels_total = pup_mask.shape[0] * pup_mask.shape[1]
-
-            # Try to reconstruct 3D if possible
-            if n_cols == pup_pixels_total:
-                # IFunc format: (nmodes, npixels_total)
-                n_modes_base = n_rows
-                base_2d = base_inv_array
-            elif n_rows == pup_pixels_total:
-                # IFuncInv format: (npixels_total, nmodes) 
-                n_modes_base = n_cols
-                base_2d = base_inv_array.T  # Convert to IFunc format
-            else:
-                # Cannot reconstruct - will use 2D directly (already valid pixels only)
-                # This means base_inv_array was created AFTER transformations
-                # So we DON'T transpose it
-                if verbose:
-                    print(f"  Keeping 2D base as-is (already has valid pixels only)")
-                base_2d = None
-
-            if base_2d is not None:
-                # Reconstruct 3D: (height, width, nmodes)
-                base_3d = np.zeros((pup_mask.shape[0], pup_mask.shape[1], n_modes_base))
-                for i in range(n_modes_base):
-                    base_3d[:, :, i] = base_2d[i, :].reshape(pup_mask.shape)
-
-                # Transpose 3D
-                base_inv_array = np.transpose(base_3d, (1, 0, 2))
-
-                if verbose:
-                    print(f"  Reconstructed 2D→3D and transposed: {base_inv_array.shape}")
+        # *** USE HELPER FUNCTION WITH ORIGINAL MASK ***
+        base_inv_array = _transpose_base_array_for_specula(
+            base_inv_array, 
+            pup_mask_original,  # Pass original mask!
+            verbose=verbose
+        )
 
     # ================================================================
     # STEP 3: Setup basic parameters
@@ -1698,52 +1810,21 @@ def projection_matrices_multi_base(pup_diam_m, pup_mask, dm_array, dm_mask,
 
         # *** SPECULA CONVENTION ***
         if specula_convention:
+            # *** SAVE ORIGINAL MASK ***
+            pup_mask_original = pup_mask.copy()
+
+            # Transpose arrays
             dm_array = np.transpose(dm_array, (1, 0, 2))
             dm_mask = np.transpose(dm_mask)
             pup_mask = np.transpose(pup_mask)
 
-            # *** FIX: Transpose base_inv_array for all configs if 3D ***
+            # *** USE HELPER FUNCTION WITH ORIGINAL MASK ***
             for idx, config in enumerate(base_configs):
-                base_inv = config['base_inv_array']
-
-                if base_inv.ndim == 3:
-                    # Simple: just transpose
-                    config['base_inv_array'] = np.transpose(base_inv, (1, 0, 2))
-                    if verbose:
-                        print(f"  Transposed 3D base {idx}")
-
-                elif base_inv.ndim == 2:
-                    # Complex: try to reconstruct 3D
-                    n_rows, n_cols = base_inv.shape
-                    pup_pixels_total = pup_mask.shape[0] * pup_mask.shape[1]
-
-                    # Try to reconstruct 3D if possible
-                    if n_cols == pup_pixels_total:
-                        # IFunc format: (nmodes, npixels_total)
-                        n_modes_base = n_rows
-                        base_2d = base_inv
-                    elif n_rows == pup_pixels_total:
-                        # IFuncInv format: (npixels_total, nmodes)
-                        n_modes_base = n_cols
-                        base_2d = base_inv.T  # Convert to IFunc format
-                    else:
-                        # Cannot reconstruct - already valid pixels only
-                        # Don't transpose it
-                        if verbose:
-                            print(f"  Keeping 2D base {idx} as-is (already valid pixels)")
-                        base_2d = None
-
-                    if base_2d is not None:
-                        # Reconstruct 3D: (height, width, nmodes)
-                        base_3d = np.zeros((pup_mask.shape[0], pup_mask.shape[1], n_modes_base))
-                        for i in range(n_modes_base):
-                            base_3d[:, :, i] = base_2d[i, :].reshape(pup_mask.shape)
-
-                        # Transpose 3D
-                        config['base_inv_array'] = np.transpose(base_3d, (1, 0, 2))
-
-                        if verbose:
-                            print(f"  Reconstructed 2D→3D and transposed base {idx}")
+                config['base_inv_array'] = _transpose_base_array_for_specula(
+                    config['base_inv_array'],
+                    pup_mask_original,  # Pass original mask!
+                    verbose=verbose
+                )
 
         pup_diam_pix = pup_mask.shape[0]
         pixel_pitch = pup_diam_m / pup_diam_pix

@@ -58,16 +58,16 @@ def update_dm_pup(pup_diam_m, pup_mask, dm_array, dm_mask, dm_height, dm_rotatio
     
     trans_dm_mask = rotshiftzoom_array(
         dm_mask, 
-        dm_translation=dm_translation, 
+        dm_translation=dm_translation,
         dm_rotation=dm_rotation,
         dm_magnification=dm_magnification,
-        wfs_translation=(0, 0), 
-        wfs_rotation=0, 
+        wfs_translation=(0, 0),
+        wfs_rotation=0,
         wfs_magnification=(1, 1),
         output_size=output_size
     )
     trans_dm_mask[trans_dm_mask < 0.5] = 0
-    
+
     if np.max(trans_dm_mask) <= 0:
         raise ValueError('Error in input data, the rotated dm mask is empty.')
 
@@ -143,7 +143,7 @@ def projection_matrix_former(pup_diam_m, pup_mask,
     elif base_inv_array.ndim == 2:
         # 2D: Handle IFunc or IFuncInv format
         n_rows, n_cols = base_inv_array.shape
-        
+
         if n_cols == n_valid_pixels:
             # IFunc: (nmodes, npixels_valid)
             base_valid_values = base_inv_array.T
@@ -173,7 +173,7 @@ class TestProjection(unittest.TestCase):
         """Set up common test parameters"""
         # Pupil parameters
         self.pixel_pupil = 100
-        self.dm_meta_pupil = 100
+        self.dm_meta_pupil = 120
         self.pixel_pitch = 0.01  # 1cm per pixel -> 1m pupil
         self.pup_diam_m = self.pixel_pupil * self.pixel_pitch
 
@@ -182,7 +182,7 @@ class TestProjection(unittest.TestCase):
 
         # DM parameters
         self.dm_height = 1000.0  # meters
-        self.dm_rotation = 0 #10.0  # degrees
+        self.dm_rotation = 10.0  # degrees
         self.nmodes_dm = 50  # DM Zernike modes
         self.nmodes_base = 30  # Basis modes (e.g., KL modes)
 
