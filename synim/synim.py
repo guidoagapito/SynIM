@@ -761,10 +761,13 @@ def apply_dm_transformations_combined(pup_diam_m, pup_mask, dm_array, dm_mask,
     return trans_dm_array, trans_dm_mask, trans_pup_mask, derivatives_x, derivatives_y
 
 
-def apply_wfs_transformations_separated(derivatives_x, derivatives_y, pup_mask, dm_mask,
-                                        wfs_nsubaps, wfs_rotation, wfs_translation, wfs_magnification,
-                                        wfs_fov_arcsec, pup_diam_m, idx_valid_sa=None,
-                                        verbose=False, specula_convention=True):
+def apply_wfs_transformations_separated(derivatives_x, derivatives_y,
+                                        pup_mask, dm_mask,
+                                        wfs_nsubaps, wfs_rotation,
+                                        wfs_translation, wfs_magnification,
+                                        wfs_fov_arcsec, pup_diam_m,
+                                        idx_valid_sa=None, verbose=False,
+                                        specula_convention=True):
     """
     Apply WFS transformations to derivatives (for separated workflow).
     """
@@ -1233,28 +1236,40 @@ def projection_matrix(pup_diam_m, pup_mask, dm_array, dm_mask, base_inv_array,
     - pup_mask: numpy 2D array, pupil mask (n_pup x n_pup)
     - dm_array: numpy 3D array, Deformable Mirror 2D shapes (n x n x n_dm_modes)
     - dm_mask: numpy 2D array, DM mask (n x n)
-    - base_inv_array: numpy 3D array, inverted basis for projection (n_pup x n_pup x n_base_modes)
+    - base_inv_array: numpy 2D or 3D array, inverted basis for projection
+                      Can be:
+                      - 2D: (nmodes, npixels_valid) - IFunc format
+                      - 2D: (npixels_valid, nmodes) - IFuncInv format  
+                      - 3D: (npix, npix, nmodes) - full 3D array
     - dm_height: float, conjugation altitude of the Deformable Mirror
     - dm_rotation: float, rotation in deg of the Deformable Mirror with respect to the pupil
     - base_rotation: float, rotation of the basis in deg
-    - base_translation: tuple, translation of the basis
-    - base_magnification: tuple, magnification of the basis
+    - base_translation: tuple, translation of the basis (x, y) in pixels
+    - base_magnification: tuple, magnification of the basis (x, y)
     - gs_pol_coo: tuple, polar coordinates of the guide star radius in arcsec and angle in deg
     - gs_height: float, altitude of the guide star
     - verbose: bool, optional, display verbose output
     - display: bool, optional, display plots
-    - specula_convention: bool, optional, use SPECULA convention
+    - specula_convention: bool, optional, use SPECULA convention (transpose arrays)
 
     Returns:
-    - pm: numpy 2D array, projection matrix (n_base_modes x n_dm_modes)
+    - projection: numpy 2D array, projection matrix (n_dm_modes, n_base_modes)
+    
+    Workflow Selection:
+    - SEPARATED: Used when EITHER DM OR Base has transformations (not both)
+                 Applies transformations in 2 steps (more flexible)
+    - COMBINED: Used when BOTH DM AND Base have transformations
+                Applies transformations in 1 step (avoids double interpolation)
     """
 
-    # Detect which transformations are present
+    # ================================================================
+    # STEP 1: Detect which transformations are present
+    # ================================================================
     has_dm_transform = _has_transformations(dm_rotation, (0, 0), (1, 1)) or \
                        gs_pol_coo != (0, 0) or dm_height != 0
     has_base_transform = _has_transformations(base_rotation, base_translation, base_magnification)
 
-    # Choose workflow
+    # Choose workflow: COMBINED only if BOTH have transformations
     use_combined = has_dm_transform and has_base_transform
 
     if verbose:
@@ -1262,97 +1277,164 @@ def projection_matrix(pup_diam_m, pup_mask, dm_array, dm_mask, base_inv_array,
         print(f"Projection Matrix Computation")
         print(f"{'='*60}")
         print(f"DM transformations: {has_dm_transform}")
+        print(f"  - Height: {dm_height} m")
+        print(f"  - Rotation: {dm_rotation}°")
+        print(f"  - GS position: {gs_pol_coo}")
         print(f"Base transformations: {has_base_transform}")
+        print(f"  - Rotation: {base_rotation}°")
+        print(f"  - Translation: {base_translation}")
+        print(f"  - Magnification: {base_magnification}")
         print(f"Using {'COMBINED' if use_combined else 'SEPARATED'} workflow")
         print(f"{'='*60}\n")
 
+    # ================================================================
+    # STEP 2: Apply SPECULA convention (transpose arrays)
+    # ================================================================
+    # NOTE: This MUST be done BEFORE any transformations
     if specula_convention:
+        # Transpose all 3D arrays: (height, width, modes) → (width, height, modes)
+        # This swaps X and Y coordinates
         dm_array = np.transpose(dm_array, (1, 0, 2))
         dm_mask = np.transpose(dm_mask)
         pup_mask = np.transpose(pup_mask)
 
+        # *** CRITICAL: Also transpose base_inv_array if 3D ***
+        if base_inv_array.ndim == 3:
+            base_inv_array = np.transpose(base_inv_array, (1, 0, 2))
+            if verbose:
+                print(f"  Transposed 3D base: {base_inv_array.shape}")
+
+        elif base_inv_array.ndim == 2:
+            # Complex case: need to reconstruct 3D, transpose, then will re-extract later
+            n_rows, n_cols = base_inv_array.shape
+            pup_pixels_total = pup_mask.shape[0] * pup_mask.shape[1]
+
+            # Try to reconstruct 3D if possible
+            if n_cols == pup_pixels_total:
+                # IFunc format: (nmodes, npixels_total)
+                n_modes_base = n_rows
+                base_2d = base_inv_array
+            elif n_rows == pup_pixels_total:
+                # IFuncInv format: (npixels_total, nmodes) 
+                n_modes_base = n_cols
+                base_2d = base_inv_array.T  # Convert to IFunc format
+            else:
+                # Cannot reconstruct - will use 2D directly (already valid pixels only)
+                # This means base_inv_array was created AFTER transformations
+                # So we DON'T transpose it
+                if verbose:
+                    print(f"  Keeping 2D base as-is (already has valid pixels only)")
+                base_2d = None
+
+            if base_2d is not None:
+                # Reconstruct 3D: (height, width, nmodes)
+                base_3d = np.zeros((pup_mask.shape[0], pup_mask.shape[1], n_modes_base))
+                for i in range(n_modes_base):
+                    base_3d[:, :, i] = base_2d[i, :].reshape(pup_mask.shape)
+
+                # Transpose 3D
+                base_inv_array = np.transpose(base_3d, (1, 0, 2))
+
+                if verbose:
+                    print(f"  Reconstructed 2D→3D and transposed: {base_inv_array.shape}")
+
+    # ================================================================
+    # STEP 3: Setup basic parameters
+    # ================================================================
     pup_diam_pix = pup_mask.shape[0]
     pixel_pitch = pup_diam_m / pup_diam_pix
 
     if dm_mask.shape[0] != dm_array.shape[0]:
         raise ValueError('DM and mask arrays must have the same dimensions.')
 
-    # Calculate DM transformations
+    # Calculate DM transformations based on guide star geometry
     dm_translation, dm_magnification = shiftzoom_from_source_dm_params(
         gs_pol_coo, gs_height, dm_height, pixel_pitch
     )
     output_size = (pup_diam_pix, pup_diam_pix)
 
+    # ================================================================
+    # STEP 4: Apply transformations (COMBINED or SEPARATED)
+    # ================================================================
     if use_combined:
-        # COMBINED: Apply DM + Base transformations together (single interpolation)
+        # ============================================================
+        # COMBINED WORKFLOW: Apply DM + Base transformations together
+        # ============================================================
+        # This uses a SINGLE interpolation step, avoiding cumulative errors
+
         if verbose:
-            print(f'Combined DM+Base transformations:')
+            print(f'[COMBINED] Applying DM+Base transformations in one step:')
             print(f'  DM translation: {dm_translation} pixels')
-            print(f'  DM rotation: {dm_rotation} deg')
+            print(f'  DM rotation: {dm_rotation}°')
             print(f'  DM magnification: {dm_magnification}')
             print(f'  Base translation: {base_translation} pixels')
-            print(f'  Base rotation: {base_rotation} deg')
+            print(f'  Base rotation: {base_rotation}°')
             print(f'  Base magnification: {base_magnification}')
 
-        # Transform DM array with both DM and Base transformations
+        # Transform DM array with BOTH DM and Base transformations
         trans_dm_array = rotshiftzoom_array(
             dm_array,
-            dm_translation=dm_translation,
-            dm_rotation=dm_rotation,
-            dm_magnification=dm_magnification,
-            wfs_translation=base_translation,
-            wfs_rotation=base_rotation,
-            wfs_magnification=base_magnification,
+            dm_translation=dm_translation,      # From guide star geometry
+            dm_rotation=dm_rotation,            # DM rotation
+            dm_magnification=dm_magnification,  # From guide star geometry
+            wfs_translation=base_translation,   # Base translation
+            wfs_rotation=base_rotation,         # Base rotation
+            wfs_magnification=base_magnification, # Base magnification
             output_size=output_size
         )
 
-        # Transform DM mask (only DM transformations)
+        # Transform DM mask (ONLY DM transformations, not base)
         trans_dm_mask = rotshiftzoom_array(
             dm_mask,
             dm_translation=dm_translation,
             dm_rotation=dm_rotation,
             dm_magnification=dm_magnification,
-            wfs_translation=(0, 0),
+            wfs_translation=(0, 0),  # No base transformation for mask
             wfs_rotation=0,
             wfs_magnification=(1, 1),
             output_size=output_size
         )
         trans_dm_mask[trans_dm_mask < 0.5] = 0
 
-        # Transform pupil mask (only Base transformations)
+        # Transform pupil mask (ONLY Base transformations, not DM)
         trans_pup_mask = rotshiftzoom_array(
             pup_mask,
-            dm_translation=(0, 0),
+            dm_translation=(0, 0),  # No DM transformation for pupil
             dm_rotation=0,
             dm_magnification=(1, 1),
-            wfs_translation=base_translation,
-            wfs_rotation=base_rotation,
-            wfs_magnification=base_magnification,
+            wfs_translation=base_translation,   # Base translation
+            wfs_rotation=base_rotation,         # Base rotation
+            wfs_magnification=base_magnification, # Base magnification
             output_size=output_size
         )
         trans_pup_mask[trans_pup_mask < 0.5] = 0
 
     else:
-        # SEPARATED: Apply DM transformations only, then Base transformations
-        if verbose:
-            print(f'Separated workflow:')
-            print(f'  DM translation: {dm_translation} pixels')
-            print(f'  DM rotation: {dm_rotation} deg')
-            print(f'  DM magnification: {dm_magnification}')
+        # ============================================================
+        # SEPARATED WORKFLOW: Apply DM and Base transformations separately
+        # ============================================================
+        # This uses TWO interpolation steps but is more flexible
 
-        # Transform DM array (only DM transformations)
+        if verbose:
+            print(f'[SEPARATED] Applying transformations in two steps:')
+            print(f'  Step 1 - DM transformations:')
+            print(f'    Translation: {dm_translation} pixels')
+            print(f'    Rotation: {dm_rotation}°')
+            print(f'    Magnification: {dm_magnification}')
+
+        # Transform DM array (ONLY DM transformations)
         trans_dm_array = rotshiftzoom_array(
             dm_array,
             dm_translation=dm_translation,
             dm_rotation=dm_rotation,
             dm_magnification=dm_magnification,
-            wfs_translation=(0, 0),
+            wfs_translation=(0, 0),  # No base transformation yet
             wfs_rotation=0,
             wfs_magnification=(1, 1),
             output_size=output_size
         )
 
-        # Transform DM mask (only DM transformations)
+        # Transform DM mask (ONLY DM transformations)
         trans_dm_mask = rotshiftzoom_array(
             dm_mask,
             dm_translation=dm_translation,
@@ -1365,118 +1447,172 @@ def projection_matrix(pup_diam_m, pup_mask, dm_array, dm_mask, base_inv_array,
         )
         trans_dm_mask[trans_dm_mask < 0.5] = 0
 
-        # Transform pupil mask (only Base transformations)
+        # Transform pupil mask (ONLY Base transformations)
         trans_pup_mask = rotshiftzoom_array(
             pup_mask,
-            dm_translation=(0, 0),
+            dm_translation=(0, 0),  # No DM transformation
             dm_rotation=0,
             dm_magnification=(1, 1),
-            wfs_translation=base_translation,
-            wfs_rotation=base_rotation,
-            wfs_magnification=base_magnification,
+            wfs_translation=base_translation,   # Base translation
+            wfs_rotation=base_rotation,         # Base rotation
+            wfs_magnification=base_magnification, # Base magnification
             output_size=output_size
         )
         trans_pup_mask[trans_pup_mask < 0.5] = 0
 
         if has_base_transform and verbose:
-            print(f'  Base translation: {base_translation} pixels')
-            print(f'  Base rotation: {base_rotation} deg')
-            print(f'  Base magnification: {base_magnification}')
+            print(f'  Step 2 - Base transformations:')
+            print(f'    Translation: {base_translation} pixels')
+            print(f'    Rotation: {base_rotation}°')
+            print(f'    Magnification: {base_magnification}')
 
-    # Check validity
+    # ================================================================
+    # STEP 5: Validate transformed arrays
+    # ================================================================
     if np.max(trans_dm_mask) <= 0:
         raise ValueError('Transformed DM mask is empty.')
     if np.max(trans_pup_mask) <= 0:
         raise ValueError('Transformed pupil mask is empty.')
 
-    # Apply DM mask
+    # Apply DM mask to DM array
     trans_dm_array = apply_mask(trans_dm_array, trans_dm_mask)
 
     if verbose:
-        print(f'  ✓ DM array transformed, shape: {trans_dm_array.shape}')
+        print(f'  ✓ DM array transformed: {trans_dm_array.shape}')
+        print(f'  ✓ DM mask valid pixels: {np.sum(trans_dm_mask > 0.5)}')
+        print(f'  ✓ Pupil mask valid pixels: {np.sum(trans_pup_mask > 0.5)}')
 
-    # Create mask for valid pixels (both in DM and pupil)
+    # ================================================================
+    # STEP 6: Find valid pixels (intersection of DM and pupil)
+    # ================================================================
     valid_mask = trans_dm_mask * trans_pup_mask
-    idx_valid = np.where(valid_mask > 0.5)  # Tuple of (row_indices, col_indices)
+    idx_valid = np.where(valid_mask > 0.5)  # Returns tuple: (row_indices, col_indices)
     n_valid_pixels = len(idx_valid[0])
 
-    # Extract valid pixels from DM array (always 3D)
-    height, width, n_modes = trans_dm_array.shape
-    dm_valid_values = trans_dm_array[idx_valid[0], idx_valid[1], :]  # (n_valid_pixels, n_modes)
+    if verbose:
+        print(f'  ✓ Valid pixels (intersection): {n_valid_pixels}')
 
-    # *** OPTIMIZED: Handle base_inv_array format ***
+    # ================================================================
+    # STEP 7: Extract valid pixel values from DM array
+    # ================================================================
+    # trans_dm_array shape: (height, width, n_modes)
+    # We want: (n_valid_pixels, n_modes)
+
+    height, width, n_modes = trans_dm_array.shape
+
+    # Use advanced indexing: extract all modes at valid pixel locations
+    dm_valid_values = trans_dm_array[idx_valid[0], idx_valid[1], :]
+    # Result shape: (n_valid_pixels, n_modes)
+
+    if verbose:
+        print(f'  ✓ DM valid values extracted: {dm_valid_values.shape}')
+
+    # ================================================================
+    # STEP 8: Extract valid pixel values from base_inv_array
+    # ================================================================
+    # Handle different input formats:
+
     if base_inv_array.ndim == 2:
+        # --------------------------------------------------------
+        # 2D FORMAT: Could be IFunc or IFuncInv
+        # --------------------------------------------------------
         n_rows, n_cols = base_inv_array.shape
 
         if n_cols == n_valid_pixels:
-            # IFunc: (nmodes, npixels_valid)
-            base_valid_values = base_inv_array.T
-            base_format = "IFunc"
+            # IFunc format: (nmodes, npixels_valid)
+            # Each ROW is a mode, need to transpose
+            base_valid_values = base_inv_array.T  # → (npixels_valid, nmodes)
+            base_format = "IFunc (nmodes, npixels)"
+
         elif n_rows == n_valid_pixels:
-            # IFuncInv: (npixels_valid, nmodes)
+            # IFuncInv format: (npixels_valid, nmodes)
+            # Already in correct format!
             base_valid_values = base_inv_array
-            base_format = "IFuncInv"
+            base_format = "IFuncInv (npixels, nmodes)"
+
         else:
             raise ValueError(
-                f"Base shape {base_inv_array.shape} doesn't match {n_valid_pixels} valid pixels"
+                f"Base 2D shape {base_inv_array.shape} doesn't match "
+                f"{n_valid_pixels} valid pixels. "
+                f"Expected either ({n_valid_pixels}, nmodes) or (nmodes, {n_valid_pixels})"
             )
 
         if verbose:
-            print(f'  Inverse basis format: {base_format}')
-            print(f'  Shape: {base_inv_array.shape} → {base_valid_values.shape}')
+            print(f'  Base format detected: {base_format}')
+            print(f'  Base shape: {base_inv_array.shape} → {base_valid_values.shape}')
 
     elif base_inv_array.ndim == 3:
-        # 3D: Extract using same indices
+        # --------------------------------------------------------
+        # 3D FORMAT: (height, width, n_modes)
+        # --------------------------------------------------------
+        # Extract using the SAME indices as DM
         base_valid_values = base_inv_array[idx_valid[0], idx_valid[1], :]
+        # Result shape: (n_valid_pixels, n_modes_base)
 
         if verbose:
-            print(f'  Basis 3D: {base_inv_array.shape} → {base_valid_values.shape}')
+            print(f'  Base 3D: {base_inv_array.shape} → {base_valid_values.shape}')
+
     else:
         raise ValueError(f"base_inv_array must be 2D or 3D, got {base_inv_array.ndim}D")
 
-    # Compute projection (same for both cases)
+    # ================================================================
+    # STEP 9: Compute projection matrix
+    # ================================================================
+    # Matrix multiplication:
+    # dm_valid_values:   (n_valid_pixels, n_dm_modes)
+    # base_valid_values: (n_valid_pixels, n_base_modes)
+    # 
+    # We want: projection = DM^T × Base
+    # Result: (n_dm_modes, n_base_modes)
+
     projection = np.dot(dm_valid_values.T, base_valid_values)
 
     if verbose:
-        print(f'  ✓ Projection computed: {projection.shape}')
-        print(f'  ✓ Valid pixels: {n_valid_pixels}')
+        print(f'\n  ✓ PROJECTION COMPUTED: {projection.shape}')
+        print(f'    DM modes: {projection.shape[0]}')
+        print(f'    Base modes: {projection.shape[1]}')
+        print(f'    Valid pixels used: {n_valid_pixels}')
+        print(f'{"="*60}\n')
 
+    # ================================================================
+    # STEP 10: Optional display
+    # ================================================================
     if display:
         # Display valid pixels mask
-        plt.figure()
-        plt.imshow(valid_mask)
-        plt.title('Valid pixels mask')
+        plt.figure(figsize=(8, 6))
+        plt.imshow(valid_mask, cmap='gray')
+        plt.title(f'Valid Pixels Mask ({n_valid_pixels} pixels)')
         plt.colorbar()
 
         # Display a couple of DM modes
-        plt.figure(figsize=(10, 5))
+        plt.figure(figsize=(12, 5))
         plt.subplot(1, 2, 1)
         plt.imshow(trans_dm_array[:, :, 0], cmap='seismic')
-        plt.title('DM Mode 0')
+        plt.title('Transformed DM Mode 0')
         plt.colorbar()
         plt.subplot(1, 2, 2)
         plt.imshow(trans_dm_array[:, :, 1], cmap='seismic')
-        plt.title('DM Mode 1')
+        plt.title('Transformed DM Mode 1')
         plt.colorbar()
 
         # Display projection coefficients
-        plt.figure()
+        plt.figure(figsize=(10, 6))
         for i in range(min(5, projection.shape[1])):
-            plt.plot(projection[:, i], label=f'Basis mode {i}')
+            plt.plot(projection[:, i], label=f'Basis mode {i}', marker='o', markersize=3)
         plt.legend()
-        plt.title('Projection coefficients')
+        plt.title('Projection Coefficients')
         plt.xlabel('DM mode index')
         plt.ylabel('Coefficient')
         plt.grid(True)
 
-        # Display projection array
-        plt.figure()
+        # Display projection matrix
+        plt.figure(figsize=(10, 8))
         plt.imshow(projection, cmap='seismic', origin='lower', aspect='auto')
-        plt.title('Projection matrix')
+        plt.title(f'Projection Matrix ({projection.shape[0]} × {projection.shape[1]})')
         plt.xlabel('Basis mode index')
         plt.ylabel('DM mode index')
         plt.colorbar()
-        plt.grid(True)
+        plt.grid(True, alpha=0.3)
         plt.show()
 
     return projection
@@ -1488,6 +1624,30 @@ def projection_matrices_multi_base(pup_diam_m, pup_mask, dm_array, dm_mask,
                                    verbose=False, specula_convention=True):
     """
     Computes projection matrices for multiple basis configurations efficiently.
+    
+    Parameters:
+    - pup_diam_m: float, pupil diameter in meters
+    - pup_mask: numpy 2D array, pupil mask
+    - dm_array: numpy 3D array, DM modes
+    - dm_mask: numpy 2D array, DM mask
+    - dm_height: float, DM conjugation altitude
+    - dm_rotation: float, DM rotation in degrees
+    - base_configs: list of dict, each containing:
+        {
+            'base_inv_array': 2D or 3D array,
+            'rotation': float (default 0.0),
+            'translation': tuple (default (0.0, 0.0)),
+            'magnification': tuple (default (1.0, 1.0)),
+            'name': str (optional)
+        }
+    - gs_pol_coo: tuple, (radius_arcsec, angle_deg)
+    - gs_height: float, guide star altitude
+    - verbose: bool
+    - specula_convention: bool
+    
+    Returns:
+    - pm_dict: dict, projection matrices keyed by base name
+    - transform_info: dict with metadata
     """
 
     if verbose:
@@ -1508,9 +1668,6 @@ def projection_matrices_multi_base(pup_diam_m, pup_mask, dm_array, dm_mask,
     # Detect DM transformations
     has_dm_transform = _has_transformations(dm_rotation, (0, 0), (1, 1)) or \
                        gs_pol_coo != (0, 0) or dm_height != 0
-
-    # IMPORTANT: Even if all bases have same transforms, we need to check
-    # if there are any base transforms at all
     has_base_transform = _has_transformations(base_transforms[0][0],
                                               base_transforms[0][1],
                                               base_transforms[0][2])
@@ -1535,15 +1692,58 @@ def projection_matrices_multi_base(pup_diam_m, pup_mask, dm_array, dm_mask,
     }
 
     if use_separated and all_base_same:
-        # SEPARATED: Can only be used when there are NO base transforms
-        # or NO DM transforms (not both)
+        # *** SEPARATED WORKFLOW ***
         if verbose:
             print("[Step 1/2] Transforming DM array...")
 
+        # *** SPECULA CONVENTION ***
         if specula_convention:
             dm_array = np.transpose(dm_array, (1, 0, 2))
             dm_mask = np.transpose(dm_mask)
             pup_mask = np.transpose(pup_mask)
+
+            # *** FIX: Transpose base_inv_array for all configs if 3D ***
+            for idx, config in enumerate(base_configs):
+                base_inv = config['base_inv_array']
+
+                if base_inv.ndim == 3:
+                    # Simple: just transpose
+                    config['base_inv_array'] = np.transpose(base_inv, (1, 0, 2))
+                    if verbose:
+                        print(f"  Transposed 3D base {idx}")
+
+                elif base_inv.ndim == 2:
+                    # Complex: try to reconstruct 3D
+                    n_rows, n_cols = base_inv.shape
+                    pup_pixels_total = pup_mask.shape[0] * pup_mask.shape[1]
+
+                    # Try to reconstruct 3D if possible
+                    if n_cols == pup_pixels_total:
+                        # IFunc format: (nmodes, npixels_total)
+                        n_modes_base = n_rows
+                        base_2d = base_inv
+                    elif n_rows == pup_pixels_total:
+                        # IFuncInv format: (npixels_total, nmodes)
+                        n_modes_base = n_cols
+                        base_2d = base_inv.T  # Convert to IFunc format
+                    else:
+                        # Cannot reconstruct - already valid pixels only
+                        # Don't transpose it
+                        if verbose:
+                            print(f"  Keeping 2D base {idx} as-is (already valid pixels)")
+                        base_2d = None
+
+                    if base_2d is not None:
+                        # Reconstruct 3D: (height, width, nmodes)
+                        base_3d = np.zeros((pup_mask.shape[0], pup_mask.shape[1], n_modes_base))
+                        for i in range(n_modes_base):
+                            base_3d[:, :, i] = base_2d[i, :].reshape(pup_mask.shape)
+
+                        # Transpose 3D
+                        config['base_inv_array'] = np.transpose(base_3d, (1, 0, 2))
+
+                        if verbose:
+                            print(f"  Reconstructed 2D→3D and transposed base {idx}")
 
         pup_diam_pix = pup_mask.shape[0]
         pixel_pitch = pup_diam_m / pup_diam_pix
@@ -1583,13 +1783,10 @@ def projection_matrices_multi_base(pup_diam_m, pup_mask, dm_array, dm_mask,
         base_trans = base_configs[0].get('translation', (0.0, 0.0))
         base_mag = base_configs[0].get('magnification', (1.0, 1.0))
 
-        # Only transform pupil mask if base has transformations ***
+        # Transform pupil mask if base has transformations
         if has_base_transform:
             if verbose:
-                print(f"  Applying base transformations to pupil mask:")
-                print(f"    Rotation: {base_rot}°")
-                print(f"    Translation: {base_trans}")
-                print(f"    Magnification: {base_mag}")
+                print(f"  Applying base transformations to pupil mask")
 
             trans_pup_mask = rotshiftzoom_array(
                 pup_mask,
@@ -1603,13 +1800,11 @@ def projection_matrices_multi_base(pup_diam_m, pup_mask, dm_array, dm_mask,
             )
             trans_pup_mask[trans_pup_mask < 0.5] = 0
         else:
-            # No base transformations - use original pupil mask
-            if verbose:
-                print(f"  No base transformations - using original pupil mask")
             trans_pup_mask = pup_mask
 
+        # Get valid pixels
         valid_mask = trans_dm_mask * trans_pup_mask
-        idx_valid = np.where(valid_mask > 0.5)  # Tuple of (row_indices, col_indices)
+        idx_valid = np.where(valid_mask > 0.5)
         n_valid_pixels = len(idx_valid[0])
 
         if verbose:
@@ -1617,10 +1812,10 @@ def projection_matrices_multi_base(pup_diam_m, pup_mask, dm_array, dm_mask,
             print(f"  ✓ Valid pixels: {n_valid_pixels}")
             print(f"\n[Step 2/2] Computing projections for each basis...")
 
-        # Extract DM valid values once
+        # Extract DM valid values ONCE
         n_modes = trans_dm_array.shape[2]
-        dm_valid_values = np.zeros((n_valid_pixels, n_modes))
-        dm_valid_values = trans_dm_array[idx_valid[0], idx_valid[1], :]  # Shape: (n_valid_pixels, n_modes)
+        dm_valid_values = trans_dm_array[idx_valid[0], idx_valid[1], :]
+        # Shape: (n_valid_pixels, n_modes)
 
         # Compute projection for each basis
         for i, base_config in enumerate(base_configs):
@@ -1630,49 +1825,38 @@ def projection_matrices_multi_base(pup_diam_m, pup_mask, dm_array, dm_mask,
             if verbose:
                 print(f"\n  [{i+1}/{len(base_configs)}] Processing {base_name}:")
 
-            # *** OPTIMIZED: Handle 2D and 3D base formats ***
-            # *** DETECT BASE FORMAT ***
+            # *** HANDLE BASE FORMAT ***
             if base_inv_array.ndim == 2:
-                base_name = base_config.get('name', f'base_{i}')
-                base_inv_array = base_config['base_inv_array']
+                n_rows, n_cols = base_inv_array.shape
 
-                if verbose:
-                    print(f"\n  [{i+1}/{len(base_configs)}] Processing {base_name}:")
+                if n_cols == n_valid_pixels:
+                    # IFunc: (nmodes, npixels_valid)
+                    base_valid_values = base_inv_array.T
+                    if verbose:
+                        print(f"    Inverse basis 2D (IFunc): {base_inv_array.shape}")
 
-                # *** HANDLE BASE FORMAT USING INDICES ***
-                if base_inv_array.ndim == 2:
-                    n_rows, n_cols = base_inv_array.shape
+                elif n_rows == n_valid_pixels:
+                    # IFuncInv: (npixels_valid, nmodes)
+                    base_valid_values = base_inv_array
+                    if verbose:
+                        print(f"    Inverse basis 2D (IFuncInv): {base_inv_array.shape}")
 
-                    if n_cols == n_valid_pixels:
-                        # IFunc format: (nmodes, npixels_valid)
-                        base_valid_values = base_inv_array.T
-                        if verbose:
-                            print(f"    Inverse basis 2D (IFunc): {base_inv_array.shape}")
-
-                    elif n_rows == n_valid_pixels:
-                        # IFuncInv format: (npixels_valid, nmodes)
-                        base_valid_values = base_inv_array
-                        if verbose:
-                            print(f"    Inverse basis 2D (IFuncInv): {base_inv_array.shape}")
-
-                    else:
-                        raise ValueError(
-                            f"Base shape {base_inv_array.shape} doesn't match {n_valid_pixels} valid pixels"
-                        )
+                else:
+                    raise ValueError(
+                        f"Base shape {base_inv_array.shape} doesn't match"
+                        f" {n_valid_pixels} valid pixels"
+                    )
 
             elif base_inv_array.ndim == 3:
-                # 3D: Extract using same indices as DM
-                n_modes_base = base_inv_array.shape[2]
-
-                # Use the SAME indexing approach as trans_dm_array
-                base_valid_values = base_inv_array[idx_valid[0], idx_valid[1], :]  # (n_valid_pixels, n_modes_base)
+                # 3D: Extract using same indices
+                base_valid_values = base_inv_array[idx_valid[0], idx_valid[1], :]
 
                 if verbose:
                     print(f"    Basis 3D: {base_inv_array.shape} → {base_valid_values.shape}")
             else:
-                raise ValueError(f"base_inv_array must be 2D or 3D, got {base_inv_array.ndim}D")
+                raise ValueError(f"base_inv_array must be 2D or 3D")
 
-            plot_debug = True
+            plot_debug = False
             if plot_debug:
                 # 2D plot to verify DM shape
                 plt.figure()
@@ -1683,26 +1867,29 @@ def projection_matrices_multi_base(pup_diam_m, pup_mask, dm_array, dm_mask,
                 plt.ylabel('Y Pixel')
                 plt.grid()
                 plt.tight_layout()
-                plt.show()
-                print('trans_dm_array first mode multiplyed by base_valid_values')
+
+                print('trans_dm_array first mode multiplied by base_valid_values')
                 print('to verify correctness of the transformation.')
                 print('Result:')
                 print(np.dot(base_valid_values.T, dm_valid_values[:, 0]))
                 print(np.dot(base_valid_values.T, dm_valid_values[:, 1]))
                 print(np.dot(base_valid_values.T, dm_valid_values[:, 2]))
+
+                # FIX: Use idx_valid instead of valid_indices
                 plt.figure()
                 temp_2d = np.zeros((pup_diam_pix, pup_diam_pix))
-                temp_2d[valid_indices] = dm_valid_values[:, 0]
+                temp_2d[idx_valid[0], idx_valid[1]] = dm_valid_values[:, 0]
                 plt.imshow(temp_2d, cmap='seismic')
                 plt.colorbar()
-                plt.title('Base Array (First Mode)')
+                plt.title('DM Valid Values (First Mode)')
                 plt.xlabel('X Pixel')
                 plt.ylabel('Y Pixel')
                 plt.grid()
                 plt.tight_layout()
+
                 plt.figure()
                 temp_inv_2d = np.zeros((pup_diam_pix, pup_diam_pix))
-                temp_inv_2d[valid_indices] = base_valid_values[:, 0]
+                temp_inv_2d[idx_valid[0], idx_valid[1]] = base_valid_values[:, 0]
                 plt.imshow(temp_inv_2d, cmap='seismic')
                 plt.colorbar()
                 plt.title('Base Inverse Array (First Mode)')
@@ -1710,6 +1897,7 @@ def projection_matrices_multi_base(pup_diam_m, pup_mask, dm_array, dm_mask,
                 plt.ylabel('Y Pixel')
                 plt.grid()
                 plt.tight_layout()
+
                 plt.figure()
                 plt.imshow(trans_dm_array[:, :, 0], cmap='seismic')
                 plt.colorbar()
@@ -1720,15 +1908,16 @@ def projection_matrices_multi_base(pup_diam_m, pup_mask, dm_array, dm_mask,
                 plt.tight_layout()
                 plt.show()
 
-            # Compute projection (same for both)
-            projection = np.dot(base_valid_values.T, dm_valid_values)
+
+            # Compute projection
+            projection = np.dot(dm_valid_values.T, base_valid_values)
             pm_dict[base_name] = projection
 
             if verbose:
                 print(f"    ✓ PM shape: {projection.shape}")
 
     else:
-        # COMBINED: Compute each basis independently
+        # *** COMBINED WORKFLOW ***
         if verbose:
             print("Computing each basis independently...")
 
@@ -1757,7 +1946,6 @@ def projection_matrices_multi_base(pup_diam_m, pup_mask, dm_array, dm_mask,
     if verbose:
         print(f"\n{'='*60}")
         print(f"Completed {len(pm_dict)} projection matrices")
-        print(f"Workflow: {transform_info['workflow'].upper()}")
         print(f"{'='*60}\n")
 
     return pm_dict, transform_info
