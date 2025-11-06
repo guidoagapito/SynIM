@@ -1446,9 +1446,9 @@ def projection_matrix(pup_diam_m, pup_mask, dm_array, dm_mask, base_inv_array,
 
         # *** USE HELPER FUNCTION WITH ORIGINAL MASK ***
         base_inv_array = _transpose_base_array_for_specula(
-            base_inv_array, 
+            base_inv_array,
             pup_mask_original,  # Pass original mask!
-            verbose=verbose
+            verbose=False
         )
 
     # ================================================================
@@ -1824,7 +1824,7 @@ def projection_matrices_multi_base(pup_diam_m, pup_mask, dm_array, dm_mask,
                 config['base_inv_array'] = _transpose_base_array_for_specula(
                     config['base_inv_array'],
                     pup_mask_original,  # Pass original mask!
-                    verbose=verbose
+                    verbose=False
                 )
 
         pup_diam_pix = pup_mask.shape[0]
