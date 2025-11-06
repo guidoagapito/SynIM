@@ -1772,9 +1772,6 @@ def generate_pm_filename(config_file, opt_index=None, dm_index=None, layer_index
     base_name = "PM_syn"
     parts = [base_name]
 
-    # Specific source identifier
-    parts.append(f"opt{selected_source['index']}")
-
     # Source coordinates
     if source_coords:
         dist, angle = source_coords
