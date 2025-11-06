@@ -1689,7 +1689,7 @@ def projection_matrix(pup_diam_m, pup_mask, dm_array, dm_mask, base_inv_array,
     # ================================================================
     # STEP 10: Optional display
     # ================================================================
-    plot_debug = True
+    plot_debug = False
     if plot_debug:
         # Display valid pixels mask
         plt.figure(figsize=(8, 6))

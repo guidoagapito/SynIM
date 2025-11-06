@@ -911,13 +911,14 @@ class ParamsManager:
         return base_inv_array
 
 
-    def _save_projection_matrix(self, pm, source_info, comp_name, saved_matrices, verbose, display):
+    def _save_projection_matrix(self, pm, source_info, comp_name, saved_matrices, verbose):
         """Save projection matrix helper."""
         if verbose:
             print(f"    Saving {source_info['name']}: {source_info['filename']}")
             print(f"    PM shape: {pm.shape}")
 
-        if display:
+        plot_debug = False
+        if plot_debug:
             plt.figure(figsize=(10, 8))
             plt.imshow(pm, cmap='viridis')
             plt.colorbar()
@@ -1064,7 +1065,7 @@ class ParamsManager:
                 # *** SAVE SAME PM FOR ALL SOURCES ***
                 for source_info in sources_to_compute:
                     self._save_projection_matrix(
-                        pm, source_info, comp_name, saved_matrices, verbose_flag, display
+                        pm, source_info, comp_name, saved_matrices, verbose_flag
                     )
 
             else:
@@ -1090,12 +1091,11 @@ class ParamsManager:
                         gs_pol_coo=source_info['gs_pol_coo'],
                         gs_height=source_info['gs_height'],
                         verbose=verbose_flag,
-                        display=display,
                         specula_convention=True
                     )
 
                     self._save_projection_matrix(
-                        pm, source_info, comp_name, saved_matrices, verbose_flag, display
+                        pm, source_info, comp_name, saved_matrices, verbose_flag
                     )
 
         if verbose_flag:
