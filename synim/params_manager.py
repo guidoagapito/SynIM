@@ -1518,7 +1518,7 @@ class ParamsManager:
                 dm2d_selected,
                 r0,
                 L0,
-                oversampling=2,
+                oversampling=1,
                 verbose=False
             )
 
