@@ -2,7 +2,6 @@ import os
 import numpy as np
 import matplotlib.pyplot as plt
 from synim.params_manager import ParamsManager
-from synim.utils import generate_pm_filename, extract_dm_list, extract_layer_list, extract_opt_list
 import specula
 specula.init(device_idx=-1, precision=1)
 
