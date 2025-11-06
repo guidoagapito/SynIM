@@ -1596,7 +1596,7 @@ def projection_matrices_multi_base(pup_diam_m, pup_mask, dm_array, dm_mask,
                 print(f"    Rotation: {base_rot}°")
                 print(f"    Translation: {base_trans}")
                 print(f"    Magnification: {base_mag}")
-            
+
             trans_pup_mask = rotshiftzoom_array(
                 pup_mask,
                 dm_translation=(0, 0),
@@ -1617,6 +1617,11 @@ def projection_matrices_multi_base(pup_diam_m, pup_mask, dm_array, dm_mask,
         valid_mask = trans_dm_mask * trans_pup_mask
         valid_pixels = valid_mask > 0.5
         n_valid_pixels = np.sum(valid_pixels)
+
+        if verbose:
+            print(f"  ✓ Valid pixels in trans_dm_mask: {np.sum(trans_dm_mask > 0.5)}")
+            print(f"  ✓ Valid pixels in trans_pup_mask: {np.sum(trans_pup_mask > 0.5)}")
+            print(f"  ✓ Valid pixels: {n_valid_pixels}")
 
         # Extract DM valid values once
         n_modes = trans_dm_array.shape[2]
@@ -1639,15 +1644,25 @@ def projection_matrices_multi_base(pup_diam_m, pup_mask, dm_array, dm_mask,
 
             # *** OPTIMIZED: Handle 2D and 3D base formats ***
             if base_inv_array.ndim == 2:
-                # 2D inverse basis: shape (n_modes, n_pixels_total)
+                # 2D inverse basis: shape (n_modes, n_pixels_valid)
                 n_modes_base = base_inv_array.shape[0]
+                n_pixels_base = base_inv_array.shape[1]
 
                 if verbose:
                     print(f"    Inverse basis 2D: {base_inv_array.shape}")
+                    print(f"    Valid mask has {n_valid_pixels} valid pixels")
 
-                # Extract valid pixels directly
-                flat_mask = valid_mask.flatten()
-                valid_indices = np.where(flat_mask > 0.5)[0]
+                # inverse base has only valid pixels
+                # so check consistency
+                if n_pixels_base != n_valid_pixels:
+                    raise ValueError(
+                        f"Mismatch between base inverse pixels ({n_pixels_base}) "
+                        f"and valid mask pixels ({n_valid_pixels}). "
+                        f"The inverse basis should have exactly the same valid pixels as the mask."
+                    )
+
+                # transpose to have (n_valid_pixels, n_modes)
+                base_valid_values = base_inv_array.T
 
                 # Select valid pixels (transpose to get n_valid_pixels x n_modes)
                 base_valid_values = base_inv_array[:, valid_indices].T

@@ -84,8 +84,14 @@ class ParamsManager:
         pup_mask = None
         if 'pupilstop' in self.params:
             pupilstop_params = self.params['pupilstop']
-            pup_mask = load_pupilstop(self.cm, pupilstop_params, self.pixel_pupil, self.pixel_pitch,
-                                    verbose=self.verbose)
+            if self.verbose:
+                print("Found 'pupilstop' in params")
+        elif 'pupil_stop' in self.params:
+            pupilstop_params = self.params['pupil_stop']
+            if self.verbose:
+                print("Found 'pupil_stop' in params")
+        pup_mask = load_pupilstop(self.cm, pupilstop_params, self.pixel_pupil, self.pixel_pitch,
+                                verbose=self.verbose)
 
         # If no pupilstop defined, create a default circular pupil
         if pup_mask is None:
@@ -98,6 +104,8 @@ class ParamsManager:
                 precision=0
             )
             pup_mask = pupilstop.A
+
+        print('---> valid pixels: ', np.sum(pup_mask > 0.5))
 
         return pup_mask
 
