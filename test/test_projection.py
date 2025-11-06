@@ -5,7 +5,7 @@ import specula
 specula.init(device_idx=-1, precision=1)
 from specula.data_objects.ifunc import IFunc
 
-from synim.synproj import projection_matrix
+from synim.synpm import projection_matrix
 from synim.utils import (
     rotshiftzoom_array,
     shiftzoom_from_source_dm_params,

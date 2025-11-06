@@ -3,7 +3,7 @@ import re
 import numpy as np
 import matplotlib.pyplot as plt
 import synim.synim as synim
-import synim.synproj as synproj
+import synim.synpm as synpm
 
 # Import all utility functions from params_common_utils
 from synim.utils import *
@@ -1046,7 +1046,7 @@ class ParamsManager:
                 gs_height_ref = sources_to_compute[0]['gs_height']
 
                 # *** SINGLE CALL ***
-                pm = synproj.projection_matrix(
+                pm = synpm.projection_matrix(
                     pup_diam_m=self.pup_diam_m,
                     pup_mask=self.pup_mask,
                     dm_array=component_params['dm_array'],
@@ -1078,7 +1078,7 @@ class ParamsManager:
                     if verbose_flag:
                         print(f"\n  Processing {source_info['name']}:")
 
-                    pm = synproj.projection_matrix(
+                    pm = synpm.projection_matrix(
                         pup_diam_m=self.pup_diam_m,
                         pup_mask=self.pup_mask,
                         dm_array=component_params['dm_array'],
