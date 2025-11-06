@@ -1713,7 +1713,7 @@ def projection_matrix(pup_diam_m, pup_mask, dm_array, dm_mask, base_inv_array,
         x = np.arange(projection.shape[0])+1
         for i in range(min(5, projection.shape[1])):
             plt.plot(x, projection[:, i], label=f'Basis mode {i}', marker='o', markersize=3)
-        plt.x_scale('log')
+        plt.xscale('log')
         plt.legend()
         plt.title('Projection Coefficients')
         plt.xlabel('DM mode index')
