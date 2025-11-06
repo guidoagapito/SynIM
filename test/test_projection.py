@@ -5,12 +5,13 @@ import specula
 specula.init(device_idx=-1, precision=1)
 from specula.data_objects.ifunc import IFunc
 
-from synim.synim import (
-    projection_matrix,
+from synim.synproj import projection_matrix
+from synim.utils import (
     rotshiftzoom_array,
-    shiftzoom_from_source_dm_params
+    shiftzoom_from_source_dm_params,
+    make_mask,
+    apply_mask
 )
-from synim.utils import make_mask, apply_mask
 
 
 # ============================================================================
@@ -99,7 +100,7 @@ def projection_matrix_former(pup_diam_m, pup_mask,
                              dm_rotation, base_rotation,
                              base_translation, base_magnification,
                              gs_pol_coo, gs_height,
-                             verbose=False, display=False,
+                             verbose=False,
                              specula_convention=True):
     """
     Legacy function - used only for testing the new implementation.
@@ -234,7 +235,7 @@ class TestProjection(unittest.TestCase):
             self.dm_height, self.dm_rotation,
             base_rotation, base_translation, base_magnification,
             gs_pol_coo, gs_height,
-            verbose=False, display=False, specula_convention=True
+            verbose=False, specula_convention=True
         )
 
         # Compute with new method
@@ -245,7 +246,7 @@ class TestProjection(unittest.TestCase):
             self.dm_height, self.dm_rotation,
             base_rotation, base_translation, base_magnification,
             gs_pol_coo, gs_height,
-            verbose=False, display=False, specula_convention=True
+            verbose=False, specula_convention=True
         )
 
         plot_debug = False
@@ -288,7 +289,7 @@ class TestProjection(unittest.TestCase):
             self.dm_height, self.dm_rotation,
             base_rotation, base_translation, base_magnification,
             gs_pol_coo, gs_height,
-            verbose=False, display=False, specula_convention=True
+            verbose=False, specula_convention=True
         )
 
         pm_new = projection_matrix(
@@ -298,7 +299,7 @@ class TestProjection(unittest.TestCase):
             self.dm_height, self.dm_rotation,
             base_rotation, base_translation, base_magnification,
             gs_pol_coo, gs_height,
-            verbose=False, display=False, specula_convention=True
+            verbose=False, specula_convention=True
         )
 
         np.testing.assert_allclose(pm_former, pm_new, rtol=1e-6, atol=1e-8,
@@ -320,7 +321,7 @@ class TestProjection(unittest.TestCase):
             self.dm_height, self.dm_rotation,
             base_rotation, base_translation, base_magnification,
             gs_pol_coo, gs_height,
-            verbose=False, display=False, specula_convention=True
+            verbose=False, specula_convention=True
         )
 
         pm_new = projection_matrix(
@@ -330,7 +331,7 @@ class TestProjection(unittest.TestCase):
             self.dm_height, self.dm_rotation,
             base_rotation, base_translation, base_magnification,
             gs_pol_coo, gs_height,
-            verbose=False, display=False, specula_convention=True
+            verbose=False, specula_convention=True
         )
 
         np.testing.assert_allclose(pm_former, pm_new, rtol=1e-6, atol=1e-8,
@@ -352,7 +353,7 @@ class TestProjection(unittest.TestCase):
             self.dm_height, self.dm_rotation,
             base_rotation, base_translation, base_magnification,
             gs_pol_coo, gs_height,
-            verbose=False, display=False, specula_convention=True
+            verbose=False, specula_convention=True
         )
 
         pm_new = projection_matrix(
@@ -362,7 +363,7 @@ class TestProjection(unittest.TestCase):
             self.dm_height, self.dm_rotation,
             base_rotation, base_translation, base_magnification,
             gs_pol_coo, gs_height,
-            verbose=False, display=False, specula_convention=True
+            verbose=False, specula_convention=True
         )
 
         np.testing.assert_allclose(pm_former, pm_new, rtol=1e-6, atol=1e-8,
@@ -386,7 +387,7 @@ class TestProjection(unittest.TestCase):
             dm_height, self.dm_rotation,
             base_rotation, base_translation, base_magnification,
             gs_pol_coo, gs_height,
-            verbose=False, display=False, specula_convention=True
+            verbose=False, specula_convention=True
         )
 
         pm_new = projection_matrix(
@@ -396,7 +397,7 @@ class TestProjection(unittest.TestCase):
             dm_height, self.dm_rotation,
             base_rotation, base_translation, base_magnification,
             gs_pol_coo, gs_height,
-            verbose=False, display=False, specula_convention=True
+            verbose=False, specula_convention=True
         )
 
         np.testing.assert_allclose(pm_former, pm_new, rtol=1e-6, atol=1e-8,
