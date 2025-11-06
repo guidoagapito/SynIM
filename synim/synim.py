@@ -1517,8 +1517,8 @@ def projection_matrices_multi_base(pup_diam_m, pup_mask, dm_array, dm_mask,
 
     # IMPORTANT: Even if all bases have same transforms, we need to check
     # if there are any base transforms at all
-    has_base_transform = _has_transformations(base_transforms[0][0], 
-                                              base_transforms[0][1], 
+    has_base_transform = _has_transformations(base_transforms[0][0],
+                                              base_transforms[0][1],
                                               base_transforms[0][2])
 
     # Use separated workflow ONLY if all bases have same transforms AND
@@ -1663,9 +1663,6 @@ def projection_matrices_multi_base(pup_diam_m, pup_mask, dm_array, dm_mask,
 
                 # transpose to have (n_valid_pixels, n_modes)
                 base_valid_values = base_inv_array.T
-
-                # Select valid pixels (transpose to get n_valid_pixels x n_modes)
-                base_valid_values = base_inv_array[:, valid_indices].T
 
             elif base_inv_array.ndim == 3:
                 # 3D basis: shape (height, width, n_modes)
