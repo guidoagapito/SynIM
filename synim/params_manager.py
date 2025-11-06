@@ -157,22 +157,28 @@ class ParamsManager:
         """
         component_type = "layer" if is_layer else "dm"
         cache_key = f"{component_type}_{component_idx}"
-        
+
         if cache_key in self.dm_cache:
             return self.dm_cache[cache_key]
-        
+
+        # Try with index first (dm1, dm2, layer1, layer2...)
         component_key = f"{component_type}{component_idx}"
+
+        # If not found and it's a DM with index 1, try without index (simple SCAO case)
         if component_key not in self.params:
-            raise ValueError(f"{component_type.capitalize()} {component_idx} not found")
-        
+            if component_type == "dm" and component_idx == 1 and "dm" in self.params:
+                component_key = "dm"
+            else:
+                raise ValueError(f"{component_type.capitalize()} {component_idx} not found")
+
         component_params = self.params[component_key]
         dm_array, dm_mask = load_influence_functions(
             self.cm, component_params, self.pixel_pupil, verbose=self.verbose
         )
-        
+
         if cut_start_mode and 'start_mode' in component_params:
             dm_array = dm_array[:, :, component_params['start_mode']:]
-        
+
         self.dm_cache[cache_key] = {
             'dm_array': dm_array,
             'dm_mask': dm_mask,
@@ -180,7 +186,7 @@ class ParamsManager:
             'dm_rotation': component_params.get('rotation', 0.0),
             'component_key': component_key
         }
-        
+
         return self.dm_cache[cache_key]
 
     def get_wfs_params(self, wfs_type=None, wfs_index=None):
@@ -478,9 +484,6 @@ class ParamsManager:
             verbose=verbose_flag,
             display=display
         )
-
-        # Transpose to be coherent with the specula convention
-        im = im.transpose()
 
         return im
 
