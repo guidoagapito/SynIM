@@ -9,9 +9,9 @@ from synim.synpm import projection_matrix
 from synim.utils import (
     rotshiftzoom_array,
     shiftzoom_from_source_dm_params,
-    make_mask,
     apply_mask
 )
+from synim.params_utils import make_mask
 
 
 # ============================================================================

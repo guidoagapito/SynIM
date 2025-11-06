@@ -5,8 +5,8 @@ import matplotlib.pyplot as plt
 import synim.synim as synim
 import synim.synpm as synpm
 
-# Import all utility functions from params_common_utils
-from synim.utils import *
+# Import all utility functions from params_utils
+from synim.params_utils import *
 
 import specula
 specula.init(device_idx=-1, precision=1)
