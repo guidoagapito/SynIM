@@ -1,3 +1,4 @@
+""""Utility functions for SynIM simulations, including mask extrapolation"""
 
 import numpy as np
 import matplotlib.pyplot as plt
@@ -630,7 +631,10 @@ def apply_mask(array, mask, norm=False, fill_value=None):
         result = array * norm_mask
         if norm and fill_value is None:
             # Set to 0 where mask was zero (to avoid inf)
-            result = np.where(mask if mask.ndim == array.ndim else mask[:, :, np.newaxis], result, 0)
+            result = np.where(
+                mask if mask.ndim == array.ndim else mask[:, :, np.newaxis], 
+                result, 0
+                )
         return result
 
 
@@ -638,6 +642,136 @@ def polar_to_xy(r,theta):
     # conversion polar to rectangular coordinates
     # theta is in rad
     return np.array(( r * np.cos(theta),r * np.sin(theta) ))
+
+
+def make_xy(sampling, ratio, is_polar=False, is_double=False, is_vector=False,
+            use_zero=False, quarter=False, fft=False):
+    """
+    This function generates zero-centered domains in cartesian plane or axis, tipically for pupil sampling
+    and FFT usage. Converted from Armando Riccardi IDL make_xy procedure of IdlTools/oaa_lib/utilities library.
+
+    Parameters:
+    - sampling: number of points on the side ot he output arrays
+    - ratio: maximum value on the output arrays
+    - ...
+
+    Returns:
+    - x: numpy 2D array
+    - y: numpy 2D array
+    """
+
+    if sampling <= 1:
+        raise ValueError("make_xy -- sampling must be larger than 1")
+
+    if quarter:
+        if sampling % 2 == 0:
+            size = sampling // 2
+            x0 = 0.0 if use_zero else -0.5
+        else:
+            size = (sampling + 1) // 2
+            x0 = 0.0
+    else:
+        size = sampling
+        x0 = (sampling - 1) / 2.0 if is_double else (sampling - 1) / 2
+
+        if sampling % 2 == 0 and use_zero:
+            x0 += 0.5
+
+    ss = float(sampling)
+
+    x = (np.arange(size) - x0) / (ss / 2) * ratio
+
+    if not quarter:
+        if sampling % 2 == 0 and fft:
+            x = np.roll(x, -sampling // 2)
+        elif sampling % 2 != 0 and fft:
+            x = np.roll(x, -(sampling - 1) // 2)
+
+    if not is_vector or is_polar:
+        y = rebin(x, (size, size), method='average')
+        x = np.transpose(y)
+        if is_polar:
+            r, theta = xy_to_polar(x, y)
+            return r, theta
+
+    if is_vector:
+        y = x
+
+    return x, y
+
+
+def xy_to_polar(x, y):
+    # conversion rectangular to polar coordinates
+    # theta is in rad
+    r = np.sqrt(x**2 + y**2)
+    theta = np.arctan2(y, x)
+    return r, theta
+
+
+def make_mask(npoints, obsratio=None, diaratio=1.0, xc=0.0, yc=0.0, square=False, inverse=False, centeronpixel=False):
+    """
+    This function generates nn array representing a mask.
+    Converted from Lorenzo Busoni IDL make_mask function of IdlTools/oaa_lib/ao_lib library.
+
+    Parameters:
+    - npoints: number of points on the side ot he output arrays
+    - obsratio: relative size of obscuration
+    - diaratio: relative size of diameter
+    - ...
+
+    Returns:
+    - mask: numpy 2D array
+    """
+
+    x, y = np.meshgrid(np.linspace(-1, 1, npoints), np.linspace(-1, 1, npoints))
+
+    if xc is None:
+        xc = 0.0
+    if yc is None:
+        yc = 0.0
+    if obsratio is None:
+        obsratio = 0.0
+    ir = obsratio
+
+    if centeronpixel:
+        idx = np.argmin(np.abs(xc - x[0, :]))
+        idxneigh = np.argmin(np.abs(xc - x[0, idx - 1:idx + 2]))
+        k = -0.5 if idxneigh == 0 else 0.5
+        xc = x[0, idx] + k * (x[0, 1] - x[0, 0])
+
+        idx = np.argmin(np.abs(yc - y[:, 0]))
+        idxneigh = np.argmin(np.abs(yc - y[idx - 1:idx + 2, 0]))
+        k = -0.5 if idxneigh == 0 else 0.5
+        yc = y[idx, 0] + k * (y[1, 0] - y[0, 0])
+
+    if square:
+        mask = ((np.abs(x - xc) <= diaratio) & (np.abs(y - yc) <= diaratio) & 
+                ((np.abs(x - xc) >= diaratio * ir) | (np.abs(y - yc) >= diaratio * ir))).astype(np.uint8)
+    else:
+        mask = (((x - xc)**2 + (y - yc)**2 < diaratio**2) & 
+                ((x - xc)**2 + (y - yc)**2 >= (diaratio * ir)**2)).astype(np.uint8)
+
+    if inverse:
+        mask = 1 - mask
+
+    return mask
+
+
+def make_orto_modes(array):
+    # return an othogonal 2D array
+
+    size_array = np.shape(array)
+
+    if len(size_array) != 2:
+        raise ValueError('Error in input data, the input array must have two dimensions.')
+
+    if size_array[1] > size_array[0]:
+        Q, R = np.linalg.qr(array.T)
+        Q = Q.T
+    else:
+        Q, R = np.linalg.qr(array)
+
+    return Q
 
 
 def dm3d_to_2d(dm_array, mask):
@@ -693,6 +827,7 @@ def dm2d_to_3d(dm_array, mask, normalize=True):
         # normalize by the RMS
         if normalize:
             dm_i /= np.sqrt(np.mean(dm_i**2))
+            dm_i -= np.mean(dm_i)
         dm_i_3d = np.zeros(mask.shape, dtype=float)
         dm_i_3d[idx] = dm_i
         dm_array_3d[:, :, i] = dm_i_3d

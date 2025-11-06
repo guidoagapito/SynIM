@@ -6,6 +6,7 @@ import synim.synim as synim
 import synim.synpm as synpm
 
 # Import all utility functions from params_utils
+from synim.utils import *
 from synim.params_utils import *
 
 import specula
