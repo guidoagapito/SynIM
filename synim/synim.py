@@ -1388,7 +1388,7 @@ def projection_matrix(pup_diam_m, pup_mask, dm_array, dm_mask, base_inv_array,
         raise ValueError('Transformed DM mask is empty.')
     if np.max(trans_pup_mask) <= 0:
         raise ValueError('Transformed pupil mask is empty.')
-
+    
     # Apply DM mask
     trans_dm_array = apply_mask(trans_dm_array, trans_dm_mask)
 
@@ -1398,28 +1398,54 @@ def projection_matrix(pup_diam_m, pup_mask, dm_array, dm_mask, base_inv_array,
     # Create mask for valid pixels (both in DM and pupil)
     valid_mask = trans_dm_mask * trans_pup_mask
     valid_pixels = valid_mask > 0.5
-
-    # Extract valid pixels from dm_array
     n_valid_pixels = np.sum(valid_pixels)
+
+    # Extract valid pixels from DM array (always 3D)
     height, width, n_modes = trans_dm_array.shape
     dm_valid_values = np.zeros((n_valid_pixels, n_modes))
-
     for i in range(n_modes):
         dm_valid_values[:, i] = trans_dm_array[:, :, i][valid_pixels]
 
-    # Extract valid pixels from base_inv_array
-    height_base, width_base, n_modes_base = base_inv_array.shape
-    base_valid_values = np.zeros((n_valid_pixels, n_modes_base))
+    # *** OPTIMIZED: Handle base_inv_array format ***
+    if base_inv_array.ndim == 2:
+        # 2D inverse basis: shape is (n_modes, n_pixels_total)
+        n_modes_base = base_inv_array.shape[0]
 
-    for i in range(n_modes_base):
-        base_valid_values[:, i] = base_inv_array[:, :, i][valid_pixels]
+        if verbose:
+            print(f'  Inverse basis 2D shape: {base_inv_array.shape}')
 
-    # Perform matrix multiplication with base_inv_array to get projection coefficients
+        # Extract only valid pixels
+        # valid_mask is 2D, need to flatten and select indices
+        flat_mask = valid_mask.flatten()
+        valid_indices = np.where(flat_mask > 0.5)[0]
+
+        # Select columns corresponding to valid pixels
+        # Transpose to get (n_valid_pixels, n_modes)
+        base_valid_values = base_inv_array[:, valid_indices].T
+
+    elif base_inv_array.ndim == 3:
+        # 3D basis: shape is (height, width, n_modes)
+        # Convert to 2D format internally
+        height_base, width_base, n_modes_base = base_inv_array.shape
+
+        if verbose:
+            print(f'  Basis 3D shape: {base_inv_array.shape}')
+            print(f'  Converting to 2D format...')
+
+        # Extract valid pixels (same as before)
+        base_valid_values = np.zeros((n_valid_pixels, n_modes_base))
+        for i in range(n_modes_base):
+            base_valid_values[:, i] = base_inv_array[:, :, i][valid_pixels]
+    else:
+        raise ValueError(f"base_inv_array must be 2D or 3D, got {base_inv_array.ndim}D")
+
+    # Compute projection (same for both cases)
     projection = np.dot(dm_valid_values.T, base_valid_values)
 
     if verbose:
         print(f'  ✓ Projection computed, shape: {projection.shape}')
-        print(f'  ✓ Valid pixels: {n_valid_pixels}')
+        print(f'  ✓ Valid pixels used: {n_valid_pixels}')
+        print(f'  ✓ Base format: {"2D (optimized)" if base_inv_array.ndim == 2 else "3D (converted)"}')
 
     if display:
         # Display valid pixels mask
@@ -1563,18 +1589,30 @@ def projection_matrices_multi_base(pup_diam_m, pup_mask, dm_array, dm_mask,
         base_trans = base_configs[0].get('translation', (0.0, 0.0))
         base_mag = base_configs[0].get('magnification', (1.0, 1.0))
 
-        # Transform pupil mask with base transformations
-        trans_pup_mask = rotshiftzoom_array(
-            pup_mask,
-            dm_translation=(0, 0),
-            dm_rotation=0,
-            dm_magnification=(1, 1),
-            wfs_translation=base_trans,
-            wfs_rotation=base_rot,
-            wfs_magnification=base_mag,
-            output_size=output_size
-        )
-        trans_pup_mask[trans_pup_mask < 0.5] = 0
+        # Only transform pupil mask if base has transformations ***
+        if has_base_transform:
+            if verbose:
+                print(f"  Applying base transformations to pupil mask:")
+                print(f"    Rotation: {base_rot}°")
+                print(f"    Translation: {base_trans}")
+                print(f"    Magnification: {base_mag}")
+            
+            trans_pup_mask = rotshiftzoom_array(
+                pup_mask,
+                dm_translation=(0, 0),
+                dm_rotation=0,
+                dm_magnification=(1, 1),
+                wfs_translation=base_trans,
+                wfs_rotation=base_rot,
+                wfs_magnification=base_mag,
+                output_size=output_size
+            )
+            trans_pup_mask[trans_pup_mask < 0.5] = 0
+        else:
+            # No base transformations - use original pupil mask
+            if verbose:
+                print(f"  No base transformations - using original pupil mask")
+            trans_pup_mask = pup_mask
 
         valid_mask = trans_dm_mask * trans_pup_mask
         valid_pixels = valid_mask > 0.5
@@ -1596,36 +1634,44 @@ def projection_matrices_multi_base(pup_diam_m, pup_mask, dm_array, dm_mask,
             base_name = base_config.get('name', f'base_{i}')
             base_inv_array = base_config['base_inv_array']
 
-            # IMPORTANT: The base_inv_array is in the original pupil coordinates
-            # We need to apply the SAME transformations to match the pupil mask
-            # Only if there are base transformations
-            if has_base_transform:
-                # This case should not happen with the corrected use_separated logic
-                # but let's handle it anyway by using the combined workflow
-                if verbose:
-                    print(f"  ! Warning: Switching to combined workflow for {base_name}")
+            if verbose:
+                print(f"\n  [{i+1}/{len(base_configs)}] Processing {base_name}:")
 
-                pm = projection_matrix(
-                    pup_diam_m, pup_mask, dm_array, dm_mask, base_inv_array,
-                    dm_height, dm_rotation, base_rot, base_trans, base_mag,
-                    gs_pol_coo, gs_height,
-                    verbose=False, display=False, specula_convention=specula_convention
-                )
-                pm_dict[base_name] = pm
-            else:
-                # No base transformations - can use the already-computed values
-                # Extract base valid values from the original basis
+            # *** OPTIMIZED: Handle 2D and 3D base formats ***
+            if base_inv_array.ndim == 2:
+                # 2D inverse basis: shape (n_modes, n_pixels_total)
+                n_modes_base = base_inv_array.shape[0]
+
+                if verbose:
+                    print(f"    Inverse basis 2D: {base_inv_array.shape}")
+
+                # Extract valid pixels directly
+                flat_mask = valid_mask.flatten()
+                valid_indices = np.where(flat_mask > 0.5)[0]
+
+                # Select valid pixels (transpose to get n_valid_pixels x n_modes)
+                base_valid_values = base_inv_array[:, valid_indices].T
+
+            elif base_inv_array.ndim == 3:
+                # 3D basis: shape (height, width, n_modes)
                 n_modes_base = base_inv_array.shape[2]
+
+                if verbose:
+                    print(f"    Basis 3D: {base_inv_array.shape}, converting...")
+
+                # Extract valid pixels from each mode
                 base_valid_values = np.zeros((n_valid_pixels, n_modes_base))
                 for j in range(n_modes_base):
                     base_valid_values[:, j] = base_inv_array[:, :, j][valid_pixels]
+            else:
+                raise ValueError(f"base_inv_array must be 2D or 3D, got {base_inv_array.ndim}D")
 
-                # Compute projection
-                projection = np.dot(dm_valid_values.T, base_valid_values)
-                pm_dict[base_name] = projection
+            # Compute projection (same for both)
+            projection = np.dot(dm_valid_values.T, base_valid_values)
+            pm_dict[base_name] = projection
 
-                if verbose:
-                    print(f"  ✓ {base_name}: {projection.shape}")
+            if verbose:
+                print(f"    ✓ PM shape: {projection.shape}")
 
     else:
         # COMBINED: Compute each basis independently

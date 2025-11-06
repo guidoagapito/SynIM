@@ -642,26 +642,29 @@ def load_influence_functions(cm, dm_params, pixel_pupil, verbose=False, is_inver
         else:
             raise ValueError("IFunc without mask_inf_func is not supported."
                            " Mask is required.")
-        
+
         # If n_rows >> n_cols, this is likely an inverse basis (pixels x modes)
         # If n_cols >> n_rows, this is a normal basis (modes x pixels)
         is_inverse = (n_rows > n_cols * 2)  # Heuristic: if rows >> cols
-        
+
         if verbose:
             print(f"     Influence function shape: {ifunc.influence_function.shape}")
             print(f"     Valid pixels in mask: {n_valid_pixels}")
             print(f"     Detected as: {'INVERSE basis' if is_inverse else 'NORMAL basis'}")
-        
-        # For inverse basis, return 2D array directly
+
+        # For inverse basis, ALWAYS return 2D
         if is_inverse or is_inverse_basis:
             if verbose:
-                print(f"     Returning 2D array for inverse basis")
-            # Transpose if needed to have (n_modes, n_pixels) format
-            if n_rows > n_cols:
-                return ifunc.influence_function.T, ifunc.mask_inf_func
-            else:
+                print(f"     Returning 2D inverse basis (optimized format)")
+            
+            # Make sure it's (n_modes, n_pixels) format
+            if ifunc.influence_function.shape[0] < ifunc.influence_function.shape[1]:
+                # Already correct: n_modes x n_pixels
                 return ifunc.influence_function, ifunc.mask_inf_func
-        
+            else:
+                # Need to transpose: n_pixels x n_modes -> n_modes x n_pixels
+                return ifunc.influence_function.T, ifunc.mask_inf_func
+
         # For normal basis, convert to 3D
         else:
             # Convert influence function from 2D to 3D
@@ -708,7 +711,7 @@ def load_influence_functions(cm, dm_params, pixel_pupil, verbose=False, is_inver
         return dm_array, dm_mask
     else:
         raise ValueError("No valid influence function configuration found."
-                         " Need either 'ifunc_tag', 'ifunc_object', or 'type_str'.")
+                         " Need either 'ifunc_tag', 'ifunc_object', or 'type_str'.")ype_str'.")
 
 def find_subapdata(cm, wfs_params, wfs_key, params, verbose=False):
     """
