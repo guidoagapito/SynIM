@@ -588,7 +588,7 @@ def load_pupilstop(cm, pupilstop_params, pixel_pupil, pixel_pitch, verbose=False
         )
         return pupilstop.A
 
-def load_influence_functions(cm, dm_params, pixel_pupil, verbose=False):
+def load_influence_functions(cm, dm_params, pixel_pupil, verbose=False, is_inverse_basis=False):
     """
     Load or generate DM influence functions.
     
@@ -597,11 +597,12 @@ def load_influence_functions(cm, dm_params, pixel_pupil, verbose=False):
         dm_params (dict): DM parameters
         pixel_pupil (int): Number of pixels across pupil
         verbose (bool): Whether to print details
+        is_inverse_basis (bool): If True, don't convert to 3D (for projection matrices)
         
     Returns:
-        tuple: (dm_array, dm_mask) - 3D array of DM influence functions and mask
+        tuple: (dm_array, dm_mask) - For DM: 3D array, For inverse basis: 2D array
     """
-    if 'ifunc_object' in dm_params or 'ifunc_tag' in dm_params:        
+    if 'ifunc_object' in dm_params or 'ifunc_tag' in dm_params: 
         if 'ifunc_tag' in dm_params:
             ifunc_tag = dm_params['ifunc_tag']
             if verbose:
@@ -628,30 +629,55 @@ def load_influence_functions(cm, dm_params, pixel_pupil, verbose=False):
             # multiply the influence function by the M2C
             ifunc.influence_function = m2c.m2c.T @ ifunc.influence_function
 
-        if ifunc.influence_function.shape[0] > dm_params['nmodes']:
-            ifunc.influence_function = ifunc.influence_function[:dm_params['nmodes'],:]
+        if 'nmodes' in dm_params:
+            if ifunc.influence_function.shape[0] > dm_params['nmodes']:
+                ifunc.influence_function = ifunc.influence_function[:dm_params['nmodes'],:]
 
-        # Convert influence function from 2D to 3D
+        # Check dimensions to determine if this is an inverse basis
+        n_rows = ifunc.influence_function.shape[0]
+        n_cols = ifunc.influence_function.shape[1]
+        
         if ifunc.mask_inf_func is not None:
-            # Create empty 3D array (height, width, n_modes)
+            n_valid_pixels = np.sum(ifunc.mask_inf_func > 0.5)
+        else:
+            raise ValueError("IFunc without mask_inf_func is not supported."
+                           " Mask is required.")
+        
+        # If n_rows >> n_cols, this is likely an inverse basis (pixels x modes)
+        # If n_cols >> n_rows, this is a normal basis (modes x pixels)
+        is_inverse = (n_rows > n_cols * 2)  # Heuristic: if rows >> cols
+        
+        if verbose:
+            print(f"     Influence function shape: {ifunc.influence_function.shape}")
+            print(f"     Valid pixels in mask: {n_valid_pixels}")
+            print(f"     Detected as: {'INVERSE basis' if is_inverse else 'NORMAL basis'}")
+        
+        # For inverse basis, return 2D array directly
+        if is_inverse or is_inverse_basis:
+            if verbose:
+                print(f"     Returning 2D array for inverse basis")
+            # Transpose if needed to have (n_modes, n_pixels) format
+            if n_rows > n_cols:
+                return ifunc.influence_function.T, ifunc.mask_inf_func
+            else:
+                return ifunc.influence_function, ifunc.mask_inf_func
+        
+        # For normal basis, convert to 3D
+        else:
+            # Convert influence function from 2D to 3D
             dm_array = dm2d_to_3d(ifunc.influence_function, ifunc.mask_inf_func)
             if verbose:
                 print(f"     DM array shape: {dm_array.shape}")
-            # Create the DM mask
             dm_mask = ifunc.mask_inf_func.copy()
             if verbose:
                 print(f"     DM mask shape: {dm_mask.shape}")
                 print(f"     DM mask sum: {np.sum(dm_mask)}")
             return dm_array, dm_mask
-        else:
-            # If we don't have a mask, assume the influence function is already properly organized
-            raise ValueError("IFunc without mask_inf_func is not supported."
-                             " Mask is required to reconstruct the 3D array.")
 
     elif 'type_str' in dm_params:
+        # ... existing code for Zernike generation ...
         if verbose:
             print(f"     Loading influence function from type_str: {dm_params['type_str']}")
-        # Create influence functions directly using Zernike modes
         from specula.lib.compute_zern_ifunc import compute_zern_ifunc
         nmodes = dm_params.get('nmodes', 100)
         obsratio = dm_params.get('obsratio', 0.0)
@@ -667,12 +693,11 @@ def load_influence_functions(cm, dm_params, pixel_pupil, verbose=False):
             mask = None
             print("     No mask provided. Using default mask.")
 
-        # Compute Zernike influence functions
         z_ifunc, z_mask = compute_zern_ifunc(npixels, nmodes, xp=np, dtype=float,
                                              obsratio=obsratio, diaratio=1.0,
                                              start_mode=0, mask=mask)
 
-        # Create empty 3D array (height, width, n_modes)
+        # For Zernike, always return 3D
         dm_array = dm2d_to_3d(z_ifunc, z_mask)
         if verbose:
             print(f"     DM array shape: {dm_array.shape}")

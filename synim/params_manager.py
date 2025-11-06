@@ -883,35 +883,87 @@ class ParamsManager:
         # Use verbose flag from instance if not overridden
         verbose_flag = self.verbose if verbose is None else verbose
 
-        # Load base_inv_array from dm_inv or modal_analysis
+        # Load base_inv_array from multiple possible sources
         base_inv_array = None
-        if 'dm_inv' in self.params or 'modal_analysis' in self.params:
-            if 'dm_inv' in self.params:
-                if verbose_flag:
-                    print("Loading inverse basis functions from dm_inv")
-                dm_inv_params = self.params['dm_inv']
-            else:
-                if verbose_flag:
-                    print("Loading inverse basis functions from modal_analysis")
-                dm_inv_params = self.params['modal_analysis']
 
-            # Load influence functions from dm_inv
+        # Priority 1: Check modal_analysis
+        if 'modal_analysis' in self.params:
+            if verbose_flag:
+                print("Loading inverse basis functions from modal_analysis")
+            dm_inv_params = self.params['modal_analysis']
             base_inv_array, inv_mask = load_influence_functions(
                 self.cm,
                 dm_inv_params,
                 self.pixel_pupil,
-                verbose=verbose_flag
+                verbose=verbose_flag,
+                is_inverse_basis=True
             )
 
-            n_valid_pixels = np.sum(inv_mask > 0.5)
+        # Priority 2: Check modalrec1 (MAORY-style config)
+        elif 'modalrec1' in self.params and 'tag_ifunc4proj' in self.params['modalrec1']:
+            if verbose_flag:
+                print("Loading inverse basis functions from modalrec1.tag_ifunc4proj")
 
-            if base_inv_array is not None:
-                if verbose_flag:
-                    print(f"Loaded inverse basis with shape {base_inv_array.shape}")
-                    print(f"Mask has {n_valid_pixels} valid pixels")
+            # Get the tag and add '_inv' suffix
+            ifunc_tag = self.params['modalrec1']['tag_ifunc4proj']
+            inv_tag = f"{ifunc_tag}_inv"
+
+            if verbose_flag:
+                print(f"  Using tag: {inv_tag}")
+
+            # Create params dict for load_influence_functions
+            dm_inv_params = {
+                'ifunc_tag': inv_tag
+            }
+
+            # Check if there's also an m2c for the inverse basis
+            if 'tag_m2c4proj' in self.params['modalrec1']:
+                dm_inv_params['m2c_tag'] = self.params['modalrec1']['tag_m2c4proj']
+
+            base_inv_array, inv_mask = load_influence_functions(
+                self.cm,
+                dm_inv_params,
+                self.pixel_pupil,
+                verbose=verbose_flag,
+                is_inverse_basis=True
+            )
+
+        # Priority 3: Try generic modalrec
+        elif 'modalrec' in self.params and 'tag_ifunc4proj' in self.params['modalrec']:
+            if verbose_flag:
+                print("Loading inverse basis functions from modalrec.tag_ifunc4proj")
+
+            ifunc_tag = self.params['modalrec']['tag_ifunc4proj']
+            inv_tag = f"{ifunc_tag}_inv"
+
+            if verbose_flag:
+                print(f"  Using tag: {inv_tag}")
+
+            dm_inv_params = {
+                'ifunc_tag': inv_tag
+            }
+
+            if 'tag_m2c4proj' in self.params['modalrec']:
+                dm_inv_params['m2c_tag'] = self.params['modalrec']['tag_m2c4proj']
+
+            base_inv_array, inv_mask = load_influence_functions(
+                self.cm,
+                dm_inv_params,
+                self.pixel_pupil,
+                verbose=verbose_flag,
+                is_inverse_basis=True
+            )
 
         if base_inv_array is None:
-            raise ValueError("No valid base_inv_array found in the configuration file.")
+            raise ValueError("No valid base_inv_array found in the configuration file.\n"
+                            "Checked: dm_inv, modal_analysis, modalrec1.tag_ifunc4proj, "
+                            "modalrec.tag_ifunc4proj")
+
+        n_valid_pixels = np.sum(inv_mask > 0.5)
+
+        if verbose_flag:
+            print(f"Loaded inverse basis with shape {base_inv_array.shape}")
+            print(f"Mask has {n_valid_pixels} valid pixels")
 
         # Combine DM and layer in a single components list
         components = []
