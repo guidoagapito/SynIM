@@ -1397,14 +1397,13 @@ def projection_matrix(pup_diam_m, pup_mask, dm_array, dm_mask, base_inv_array,
 
     # Create mask for valid pixels (both in DM and pupil)
     valid_mask = trans_dm_mask * trans_pup_mask
-    valid_pixels = valid_mask > 0.5
-    n_valid_pixels = np.sum(valid_pixels)
+    flat_mask = valid_mask.flatten()
+    valid_indices = np.where(flat_mask > 0.5)[0]
+    n_valid_pixels = len(valid_indices)
 
     # Extract valid pixels from DM array (always 3D)
     height, width, n_modes = trans_dm_array.shape
-    dm_valid_values = np.zeros((n_valid_pixels, n_modes))
-    for i in range(n_modes):
-        dm_valid_values[:, i] = trans_dm_array[:, :, i][valid_pixels]
+    dm_valid_values = trans_dm_array[valid_indices]  # Shape: (n_valid_pixels, n_modes)
 
     # *** OPTIMIZED: Handle base_inv_array format ***
     if base_inv_array.ndim == 2:
@@ -1413,11 +1412,6 @@ def projection_matrix(pup_diam_m, pup_mask, dm_array, dm_mask, base_inv_array,
 
         if verbose:
             print(f'  Inverse basis 2D shape: {base_inv_array.shape}')
-
-        # Extract only valid pixels
-        # valid_mask is 2D, need to flatten and select indices
-        flat_mask = valid_mask.flatten()
-        valid_indices = np.where(flat_mask > 0.5)[0]
 
         # Select columns corresponding to valid pixels
         # Transpose to get (n_valid_pixels, n_modes)
@@ -1433,9 +1427,7 @@ def projection_matrix(pup_diam_m, pup_mask, dm_array, dm_mask, base_inv_array,
             print(f'  Converting to 2D format...')
 
         # Extract valid pixels (same as before)
-        base_valid_values = np.zeros((n_valid_pixels, n_modes_base))
-        for i in range(n_modes_base):
-            base_valid_values[:, i] = base_inv_array[:, :, i][valid_pixels]
+        base_valid_values = base_inv_array[valid_pixels]  # Shape: (n_valid_pixels, n_modes_base)
     else:
         raise ValueError(f"base_inv_array must be 2D or 3D, got {base_inv_array.ndim}D")
 
@@ -1615,8 +1607,9 @@ def projection_matrices_multi_base(pup_diam_m, pup_mask, dm_array, dm_mask,
             trans_pup_mask = pup_mask
 
         valid_mask = trans_dm_mask * trans_pup_mask
-        valid_pixels = valid_mask > 0.5
-        n_valid_pixels = np.sum(valid_pixels)
+        flat_mask = valid_mask.flatten()
+        valid_indices = np.where(flat_mask > 0.5)[0]
+        n_valid_pixels = len(valid_indices)
 
         if verbose:
             print(f"  ✓ Valid pixels in trans_dm_mask: {np.sum(trans_dm_mask > 0.5)}")
@@ -1624,10 +1617,7 @@ def projection_matrices_multi_base(pup_diam_m, pup_mask, dm_array, dm_mask,
             print(f"  ✓ Valid pixels: {n_valid_pixels}")
 
         # Extract DM valid values once
-        n_modes = trans_dm_array.shape[2]
-        dm_valid_values = np.zeros((n_valid_pixels, n_modes))
-        for i in range(n_modes):
-            dm_valid_values[:, i] = trans_dm_array[:, :, i][valid_pixels]
+        dm_valid_values = trans_dm_array[valid_indices]  # Shape: (n_valid_pixels, n_modes)
 
         if verbose:
             print(f"  ✓ DM transformed: {trans_dm_array.shape}")
@@ -1672,14 +1662,60 @@ def projection_matrices_multi_base(pup_diam_m, pup_mask, dm_array, dm_mask,
                     print(f"    Basis 3D: {base_inv_array.shape}, converting...")
 
                 # Extract valid pixels from each mode
-                base_valid_values = np.zeros((n_valid_pixels, n_modes_base))
-                for j in range(n_modes_base):
-                    base_valid_values[:, j] = base_inv_array[:, :, j][valid_pixels]
+                base_valid_values = base_inv_array[valid_indices]  # Shape: (n_valid_pixels, n_modes_base)
             else:
                 raise ValueError(f"base_inv_array must be 2D or 3D, got {base_inv_array.ndim}D")
 
+            plot_debug = True
+            if plot_debug:
+                # 2D plot to verify DM shape
+                plt.figure()
+                plt.imshow(trans_dm_array[:, :, 0], cmap='seismic')
+                plt.colorbar()
+                plt.title('Transformed DM Array (First Mode)')
+                plt.xlabel('X Pixel')
+                plt.ylabel('Y Pixel')
+                plt.grid()
+                plt.tight_layout()
+                plt.show()
+                print('trans_dm_array first mode multiplyed by base_valid_values')
+                print('to verify correctness of the transformation.')
+                print('Result:')
+                print(np.dot(base_valid_values.T, dm_valid_values[:, 0]))
+                print(np.dot(base_valid_values.T, dm_valid_values[:, 1]))
+                print(np.dot(base_valid_values.T, dm_valid_values[:, 2]))
+                plt.figure()
+                temp_2d = np.zeros((pup_diam_pix, pup_diam_pix))
+                temp_2d[valid_indices] = dm_valid_values[:, 0]
+                plt.imshow(temp_2d, cmap='seismic')
+                plt.colorbar()
+                plt.title('Base Array (First Mode)')
+                plt.xlabel('X Pixel')
+                plt.ylabel('Y Pixel')
+                plt.grid()
+                plt.tight_layout()
+                plt.figure()
+                temp_inv_2d = np.zeros((pup_diam_pix, pup_diam_pix))
+                temp_inv_2d[valid_indices] = base_valid_values[:, 0]
+                plt.imshow(temp_inv_2d, cmap='seismic')
+                plt.colorbar()
+                plt.title('Base Inverse Array (First Mode)')
+                plt.xlabel('X Pixel')
+                plt.ylabel('Y Pixel')
+                plt.grid()
+                plt.tight_layout()
+                plt.figure()
+                plt.imshow(trans_dm_array[:, :, 0], cmap='seismic')
+                plt.colorbar()
+                plt.title('Transformed DM Array (First Mode)')
+                plt.xlabel('X Pixel')
+                plt.ylabel('Y Pixel')
+                plt.grid()
+                plt.tight_layout()
+                plt.show()
+
             # Compute projection (same for both)
-            projection = np.dot(dm_valid_values.T, base_valid_values)
+            projection = np.dot(base_valid_values.T, dm_valid_values)
             pm_dict[base_name] = projection
 
             if verbose:

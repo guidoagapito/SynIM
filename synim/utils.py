@@ -1762,7 +1762,9 @@ def generate_pm_filename(config_file, opt_index=None, dm_index=None, layer_index
 
     # Extract source information
     source_config = selected_source['config']
-    source_coords = source_config.get('polar_coordinates', [0.0, 0.0])
+    source_coords = source_config.get('polar_coordinates', None)
+    if source_coords is None:
+        source_coords = source_config.get('polar_coordinate', [0.0, 0.0])
     source_height = source_config.get('height', float('inf'))
 
     # Extract component height
@@ -1773,16 +1775,15 @@ def generate_pm_filename(config_file, opt_index=None, dm_index=None, layer_index
     parts = [base_name]
 
     # Source coordinates
-    if source_coords:
+    if source_coords and (source_coords[0] != 0.0 or source_coords[1] != 0.0):
         dist, angle = source_coords
         parts.append(f"pd{dist:.1f}a{angle:.0f}")
+    else:
+        parts.append("pd0.0a0")
 
     # Source height (only include if not infinite)
     if not np.isinf(source_height):
         parts.append(f"h{source_height:.0f}")
-
-    # Component info (type and index)
-    parts.append(f"{component_type}{selected_component['index']}")
 
     # Add component-specific parts including height
     comp_part = build_component_filename_part(
