@@ -865,6 +865,76 @@ class ParamsManager:
 
         return im_full, n_slopes_per_wfs, mode_indices, component_indices
 
+
+    def _load_base_inv_array(self, verbose):
+        """Extract base_inv_array loading logic."""
+        base_inv_array = None
+
+        # Priority 1: modal_analysis
+        if 'modal_analysis' in self.params:
+            if verbose:
+                print("Loading from modal_analysis")
+            base_inv_array, _ = load_influence_functions(
+                self.cm, self.params['modal_analysis'], self.pixel_pupil,
+                verbose=verbose, is_inverse_basis=True
+            )
+
+        # Priority 2: modalrec1.tag_ifunc4proj
+        elif 'modalrec1' in self.params and 'tag_ifunc4proj' in self.params['modalrec1']:
+            if verbose:
+                print("Loading from modalrec1.tag_ifunc4proj")
+            inv_tag = f"{self.params['modalrec1']['tag_ifunc4proj']}_inv"
+            dm_inv_params = {'ifunc_tag': inv_tag}
+            if 'tag_m2c4proj' in self.params['modalrec1']:
+                dm_inv_params['m2c_tag'] = self.params['modalrec1']['tag_m2c4proj']
+            base_inv_array, _ = load_influence_functions(
+                self.cm, dm_inv_params, self.pixel_pupil,
+                verbose=verbose, is_inverse_basis=True
+            )
+
+        # Priority 3: modalrec.tag_ifunc4proj
+        elif 'modalrec' in self.params and 'tag_ifunc4proj' in self.params['modalrec']:
+            if verbose:
+                print("Loading from modalrec.tag_ifunc4proj")
+            inv_tag = f"{self.params['modalrec']['tag_ifunc4proj']}_inv"
+            dm_inv_params = {'ifunc_tag': inv_tag}
+            if 'tag_m2c4proj' in self.params['modalrec']:
+                dm_inv_params['m2c_tag'] = self.params['modalrec']['tag_m2c4proj']
+            base_inv_array, _ = load_influence_functions(
+                self.cm, dm_inv_params, self.pixel_pupil,
+                verbose=verbose, is_inverse_basis=True
+            )
+
+        if base_inv_array is None:
+            raise ValueError("No valid base_inv_array found in configuration")
+
+        return base_inv_array
+
+
+    def _save_projection_matrix(self, pm, source_info, comp_name, saved_matrices, verbose, display):
+        """Save projection matrix helper."""
+        if verbose:
+            print(f"    Saving {source_info['name']}: {source_info['filename']}")
+            print(f"    PM shape: {pm.shape}")
+
+        if display:
+            plt.figure(figsize=(10, 8))
+            plt.imshow(pm, cmap='viridis')
+            plt.colorbar()
+            plt.title(f"PM: {source_info['name']} - {comp_name}")
+            plt.tight_layout()
+            plt.show()
+
+        config_name = (os.path.basename(self.params_file).split('.')[0]
+                    if isinstance(self.params_file, str) else "config")
+        pupdata_tag = f"{config_name}_opt{source_info['index']}"
+
+        pm_obj = Intmat(pm, pupdata_tag=pupdata_tag, norm_factor=1.0,
+                        target_device_idx=None, precision=None)
+        pm_obj.save(source_info['path'])
+        saved_matrices[f"{source_info['name']}_{comp_name}"] = source_info['path']
+
+
     def compute_projection_matrices(self, output_dir=None, overwrite=False,
                                     verbose=None, display=False):
         """
@@ -891,117 +961,21 @@ class ParamsManager:
         # Use verbose flag from instance if not overridden
         verbose_flag = self.verbose if verbose is None else verbose
 
-        # Load base_inv_array from multiple possible sources
-        base_inv_array = None
+        # ==================== LOAD BASE (ONCE) ====================
+        base_inv_array = self._load_base_inv_array(verbose_flag)
 
-        # Priority 1: Check modal_analysis
-        if 'modal_analysis' in self.params:
-            if verbose_flag:
-                print("Loading inverse basis functions from modal_analysis")
-            dm_inv_params = self.params['modal_analysis']
-            base_inv_array, inv_mask = load_influence_functions(
-                self.cm,
-                dm_inv_params,
-                self.pixel_pupil,
-                verbose=verbose_flag,
-                is_inverse_basis=True
-            )
-
-        # Priority 2: Check modalrec1 (MAORY-style config)
-        elif 'modalrec1' in self.params and 'tag_ifunc4proj' in self.params['modalrec1']:
-            if verbose_flag:
-                print("Loading inverse basis functions from modalrec1.tag_ifunc4proj")
-
-            # Get the tag and add '_inv' suffix
-            ifunc_tag = self.params['modalrec1']['tag_ifunc4proj']
-            inv_tag = f"{ifunc_tag}_inv"
-
-            if verbose_flag:
-                print(f"  Using tag: {inv_tag}")
-
-            # Create params dict for load_influence_functions
-            dm_inv_params = {
-                'ifunc_tag': inv_tag
-            }
-
-            # Check if there's also an m2c for the inverse basis
-            if 'tag_m2c4proj' in self.params['modalrec1']:
-                dm_inv_params['m2c_tag'] = self.params['modalrec1']['tag_m2c4proj']
-
-            base_inv_array, inv_mask = load_influence_functions(
-                self.cm,
-                dm_inv_params,
-                self.pixel_pupil,
-                verbose=verbose_flag,
-                is_inverse_basis=True
-            )
-
-        # Priority 3: Try generic modalrec
-        elif 'modalrec' in self.params and 'tag_ifunc4proj' in self.params['modalrec']:
-            if verbose_flag:
-                print("Loading inverse basis functions from modalrec.tag_ifunc4proj")
-
-            ifunc_tag = self.params['modalrec']['tag_ifunc4proj']
-            inv_tag = f"{ifunc_tag}_inv"
-
-            if verbose_flag:
-                print(f"  Using tag: {inv_tag}")
-
-            dm_inv_params = {
-                'ifunc_tag': inv_tag
-            }
-
-            if 'tag_m2c4proj' in self.params['modalrec']:
-                dm_inv_params['m2c_tag'] = self.params['modalrec']['tag_m2c4proj']
-
-            base_inv_array, inv_mask = load_influence_functions(
-                self.cm,
-                dm_inv_params,
-                self.pixel_pupil,
-                verbose=verbose_flag,
-                is_inverse_basis=True
-            )
-
-        if base_inv_array is None:
-            raise ValueError("No valid base_inv_array found in the configuration file.\n"
-                            "Checked: dm_inv, modal_analysis, modalrec1.tag_ifunc4proj, "
-                            "modalrec.tag_ifunc4proj")
-
-        n_valid_pixels = np.sum(inv_mask > 0.5)
-
-        if verbose_flag:
-            print(f"Loaded inverse basis with shape {base_inv_array.shape}")
-            print(f"Mask has {n_valid_pixels} valid pixels")
-
-        # Combine DM and layer in a single components list
+        # ==================== GET COMPONENTS ====================
         components = []
         for dm in self.dm_list:
-            components.append({
-                'type': 'dm',
-                'index': int(dm['index']),
-                'name': dm['name']
-            })
+            components.append({'type': 'dm', 'index': int(dm['index']), 'name': dm['name']})
         for layer in extract_layer_list(self.params):
-            components.append({
-                'type': 'layer',
-                'index': int(layer['index']),
-                'name': layer['name']
-            })
+            components.append({'type': 'layer', 'index': int(layer['index']), 'name': layer['name']})
 
-        if verbose_flag:
-            print(f"Found {len(components)} components (DMs and layers)")
-            for comp in components:
-                print(f"  {comp['type'].upper()}: {comp['name']} (index: {comp['index']})")
-
-        # Find all optical sources
+        # ==================== GET OPTICAL SOURCES ====================
         opt_sources = extract_opt_list(self.params)
 
         if verbose_flag:
-            print(f"Found {len(opt_sources)} optical sources")
-            for src in opt_sources:
-                print(f"  Source: {src['name']} (index: {src['index']})")
-            print(f"Computing projection matrices for {len(opt_sources)} sources "
-                f"× {len(components)} components")
+            print(f"Computing PMs for {len(opt_sources)} sources × {len(components)} components")
 
         # ==================== PROCESS EACH COMPONENT ====================
         for component in components:
@@ -1011,198 +985,123 @@ class ParamsManager:
 
             if verbose_flag:
                 print(f"\n{'='*60}")
-                print(f"Loading {comp_type.upper()} {comp_name} (index {comp_idx})")
+                print(f"Processing {comp_type.upper()} {comp_name} (index {comp_idx})")
                 print(f"{'='*60}")
 
-            # Load component parameters once
+            # Load component ONCE
             component_params = self.get_component_params(
-                comp_idx,
-                is_layer=(comp_type == 'layer'),
-                cut_start_mode=True
+                comp_idx, is_layer=(comp_type == 'layer'), cut_start_mode=True
             )
 
-            if verbose_flag:
-                print(f"  Component array shape: {component_params['dm_array'].shape}")
-                print(f"  Component height: {component_params['dm_height']}")
-                print(f"  Component rotation: {component_params['dm_rotation']}")
-
-            # ========== BUILD BASE CONFIGURATIONS FOR MULTI-BASE ==========
-            base_configs = []
-            sources_to_compute = []  # Track which sources need computation
-
+            # ==================== CHECK ALL SOURCES ====================
+            sources_to_compute = []
             for source in opt_sources:
                 source_name = source['name']
                 source_idx = source['index']
                 source_config = source['config']
 
-                # Generate filename for this combination
                 pm_filename = generate_pm_filename(
-                    self.params_file,
-                    opt_index=source_idx,
+                    self.params_file, opt_index=source_idx,
                     dm_index=comp_idx if comp_type == 'dm' else None,
                     layer_index=comp_idx if comp_type == 'layer' else None
                 )
-
                 pm_path = os.path.join(output_dir, pm_filename)
 
-                # Check if file exists
                 if os.path.exists(pm_path) and not overwrite:
                     if verbose_flag:
-                        print(f"  File already exists: {pm_filename}")
+                        print(f"  Exists: {pm_filename}")
                     saved_matrices[f"{source_name}_{comp_name}"] = pm_path
                     continue
-
-                # Get source parameters
-                gs_pol_coo = source_config.get('polar_coordinates', [0.0, 0.0])
-                gs_height = source_config.get('height', float('inf'))
-
-                # For projection matrices, we typically don't apply transformations
-                # to the basis (it stays in pupil coordinates)
-                # But we keep this flexible for future use
-                base_rotation = 0.0
-                base_translation = (0.0, 0.0)
-                base_magnification = (1.0, 1.0)
-
-                # Add to configurations for multi-base computation
-                # Each optical source becomes a different "basis configuration"
-                # (even though they use the same base_inv_array)
-                base_configs.append({
-                    'base_inv_array': base_inv_array,
-                    'rotation': base_rotation,
-                    'translation': base_translation,
-                    'magnification': base_magnification,
-                    'name': source_name,
-                    'gs_pol_coo': gs_pol_coo,
-                    'gs_height': gs_height
-                })
 
                 sources_to_compute.append({
                     'name': source_name,
                     'index': source_idx,
                     'filename': pm_filename,
                     'path': pm_path,
-                    'gs_pol_coo': gs_pol_coo,
-                    'gs_height': gs_height
+                    'gs_pol_coo': source_config.get('polar_coordinates', [0.0, 0.0]),
+                    'gs_height': source_config.get('height', float('inf'))
                 })
 
-            # ========== COMPUTE PROJECTION MATRICES ==========
-            if len(base_configs) > 0:
-                # Check if all sources see the component from different positions
-                # (which is the typical case for projection matrices)
-                all_gs_same = all(
-                    bc.get('gs_pol_coo') == base_configs[0].get('gs_pol_coo') and
-                    bc.get('gs_height') == base_configs[0].get('gs_height')
-                    for bc in base_configs
+            if not sources_to_compute:
+                continue
+
+            # ==================== CHECK IF ALL SOURCES SAME POSITION ====================
+            # This determines if we can use multi-base optimization
+            all_gs_same = all(
+                s['gs_pol_coo'] == sources_to_compute[0]['gs_pol_coo'] and
+                s['gs_height'] == sources_to_compute[0]['gs_height']
+                for s in sources_to_compute
+            )
+
+            if all_gs_same and len(sources_to_compute) > 1:
+                # ========== OPTIMIZED: All sources same position ==========
+                if verbose_flag:
+                    print(f"\n  All {len(sources_to_compute)} sources at same position")
+                    print(f"  Using SINGLE projection_matrix call")
+
+                # Use FIRST source's position (they're all the same)
+                gs_pol_coo_ref = sources_to_compute[0]['gs_pol_coo']
+                gs_height_ref = sources_to_compute[0]['gs_height']
+
+                # *** SINGLE CALL ***
+                pm = synim.projection_matrix(
+                    pup_diam_m=self.pup_diam_m,
+                    pup_mask=self.pup_mask,
+                    dm_array=component_params['dm_array'],
+                    dm_mask=component_params['dm_mask'],
+                    base_inv_array=base_inv_array,  # Same for all!
+                    dm_height=component_params['dm_height'],
+                    dm_rotation=component_params['dm_rotation'],
+                    base_rotation=0.0,
+                    base_translation=(0.0, 0.0),
+                    base_magnification=(1.0, 1.0),
+                    gs_pol_coo=gs_pol_coo_ref,
+                    gs_height=gs_height_ref,
+                    verbose=verbose_flag,
+                    display=display,
+                    specula_convention=True
                 )
 
-                if all_gs_same and len(base_configs) > 1:
-                    # All sources at same position - can use separated workflow
-                    # But this is unusual for projection matrices
+                # *** SAVE SAME PM FOR ALL SOURCES ***
+                for source_info in sources_to_compute:
+                    self._save_projection_matrix(
+                        pm, source_info, comp_name, saved_matrices, verbose_flag, display
+                    )
+
+            else:
+                # ========== DIFFERENT POSITIONS: Compute individually ==========
+                if verbose_flag:
+                    print(f"\n  Computing {len(sources_to_compute)} PMs individually")
+
+                for source_info in sources_to_compute:
                     if verbose_flag:
-                        print(f"\n  All {len(base_configs)} sources at same position")
-                        print(f"  Using optimized multi-base computation...")
+                        print(f"\n  Processing {source_info['name']}:")
 
-                    # Use the first source's position for all
-                    gs_pol_coo_ref = base_configs[0]['gs_pol_coo']
-                    gs_height_ref = base_configs[0]['gs_height']
-
-                    pm_dict, transform_info = synim.projection_matrices_multi_base(
+                    pm = synim.projection_matrix(
                         pup_diam_m=self.pup_diam_m,
                         pup_mask=self.pup_mask,
                         dm_array=component_params['dm_array'],
                         dm_mask=component_params['dm_mask'],
+                        base_inv_array=base_inv_array,
                         dm_height=component_params['dm_height'],
                         dm_rotation=component_params['dm_rotation'],
-                        base_configs=base_configs,
-                        gs_pol_coo=gs_pol_coo_ref,
-                        gs_height=gs_height_ref,
+                        base_rotation=0.0,
+                        base_translation=(0.0, 0.0),
+                        base_magnification=(1.0, 1.0),
+                        gs_pol_coo=source_info['gs_pol_coo'],
+                        gs_height=source_info['gs_height'],
                         verbose=verbose_flag,
+                        display=display,
                         specula_convention=True
                     )
 
-                    if verbose_flag:
-                        print(f"  Used {transform_info['workflow'].upper()} workflow")
-
-                else:
-                    # Different source positions - compute individually
-                    # This is the typical case for projection matrices
-                    if verbose_flag:
-                        print(f"\n  Computing {len(base_configs)} projection matrices individually...")
-                        print(f"  (Sources at different positions)")
-
-                    pm_dict = {}
-                    for source_info in sources_to_compute:
-                        source_name = source_info['name']
-                        gs_pol_coo = source_info['gs_pol_coo']
-                        gs_height = source_info['gs_height']
-
-                        if verbose_flag:
-                            print(f"\n  Processing {source_name}:")
-                            print(f"    GS position: {gs_pol_coo}")
-                            print(f"    GS height: {gs_height} m")
-
-                        pm = synim.projection_matrix(
-                            pup_diam_m=self.pup_diam_m,
-                            pup_mask=self.pup_mask,
-                            dm_array=component_params['dm_array'],
-                            dm_mask=component_params['dm_mask'],
-                            base_inv_array=base_inv_array,
-                            dm_height=component_params['dm_height'],
-                            dm_rotation=component_params['dm_rotation'],
-                            base_rotation=0.0,
-                            base_translation=(0.0, 0.0),
-                            base_magnification=(1.0, 1.0),
-                            gs_pol_coo=gs_pol_coo,
-                            gs_height=gs_height,
-                            verbose=verbose_flag,
-                            display=display,
-                            specula_convention=True
-                        )
-
-                        pm_dict[source_name] = pm
-
-                        if verbose_flag:
-                            print(f"    ✓ PM shape: {pm.shape}")
-
-                # ========== SAVE PROJECTION MATRICES ==========
-                for source_info in sources_to_compute:
-                    source_name = source_info['name']
-                    source_idx = source_info['index']
-                    pm = pm_dict[source_name]
-
-                    if verbose_flag:
-                        print(f"\n  Saving {source_name}: {source_info['filename']}")
-                        print(f"    PM shape: {pm.shape}")
-
-                    # Display if requested
-                    if display:
-                        plt.figure(figsize=(10, 8))
-                        plt.imshow(pm, cmap='viridis')
-                        plt.colorbar()
-                        plt.title(f"PM: {source_name} - {comp_name}")
-                        plt.tight_layout()
-                        plt.show()
-
-                    # Create tag for the pupdata
-                    config_name = (os.path.basename(self.params_file).split('.')[0]
-                                if isinstance(self.params_file, str) else "config")
-                    pupdata_tag = f"{config_name}_opt{source_idx}"
-
-                    # Create Intmat object and save it
-                    pm_obj = Intmat(
-                        pm,
-                        pupdata_tag=pupdata_tag,
-                        norm_factor=1.0,
-                        target_device_idx=None,
-                        precision=None
+                    self._save_projection_matrix(
+                        pm, source_info, comp_name, saved_matrices, verbose_flag, display
                     )
-
-                    pm_obj.save(source_info['path'])
-                    saved_matrices[f"{source_name}_{comp_name}"] = source_info['path']
 
         if verbose_flag:
             print(f"\n{'='*60}")
-            print(f"Completed: {len(saved_matrices)} projection matrices computed/loaded")
+            print(f"Completed: {len(saved_matrices)} projection matrices")
             print(f"{'='*60}\n")
 
         return saved_matrices
