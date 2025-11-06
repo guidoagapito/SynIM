@@ -1369,7 +1369,7 @@ def _transpose_base_array_for_specula(base_inv_array, pup_mask_original, verbose
 
 def projection_matrix(pup_diam_m, pup_mask, dm_array, dm_mask, base_inv_array,
                       dm_height, dm_rotation, base_rotation, base_translation, base_magnification,
-                      gs_pol_coo, gs_height, verbose=False, display=False, specula_convention=True):
+                      gs_pol_coo, gs_height, verbose=False, specula_convention=True):
     """
     Computes a projection matrix for DM modes onto a desired basis.
     Uses intelligent workflow selection like interaction_matrix.
@@ -1392,7 +1392,6 @@ def projection_matrix(pup_diam_m, pup_mask, dm_array, dm_mask, base_inv_array,
     - gs_pol_coo: tuple, polar coordinates of the guide star radius in arcsec and angle in deg
     - gs_height: float, altitude of the guide star
     - verbose: bool, optional, display verbose output
-    - display: bool, optional, display plots
     - specula_convention: bool, optional, use SPECULA convention (transpose arrays)
 
     Returns:
@@ -1690,7 +1689,8 @@ def projection_matrix(pup_diam_m, pup_mask, dm_array, dm_mask, base_inv_array,
     # ================================================================
     # STEP 10: Optional display
     # ================================================================
-    if display:
+    plot_debug = True
+    if plot_debug:
         # Display valid pixels mask
         plt.figure(figsize=(8, 6))
         plt.imshow(valid_mask, cmap='gray')
