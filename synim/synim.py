@@ -1397,35 +1397,28 @@ def projection_matrix(pup_diam_m, pup_mask, dm_array, dm_mask, base_inv_array,
 
     # Create mask for valid pixels (both in DM and pupil)
     valid_mask = trans_dm_mask * trans_pup_mask
-    flat_mask = valid_mask.flatten()
-    valid_indices = np.where(flat_mask > 0.5)[0]
-    n_valid_pixels = len(valid_indices)
+    idx_valid = np.where(valid_mask > 0.5)  # Tuple of (row_indices, col_indices)
+    n_valid_pixels = len(idx_valid[0])
 
     # Extract valid pixels from DM array (always 3D)
     height, width, n_modes = trans_dm_array.shape
-    dm_valid_values = trans_dm_array[valid_indices]  # Shape: (n_valid_pixels, n_modes)
+    dm_valid_values = trans_dm_array[idx_valid[0], idx_valid[1], :]  # (n_valid_pixels, n_modes)
 
     # *** OPTIMIZED: Handle base_inv_array format ***
     if base_inv_array.ndim == 2:
         n_rows, n_cols = base_inv_array.shape
 
-        # Determine format based on which dimension matches valid pixels
         if n_cols == n_valid_pixels:
-            # Format: (nmodes, npixels_valid) - IFunc style
-            n_modes_base = n_rows
-            base_valid_values = base_inv_array.T  # (npixels_valid, nmodes)
-            base_format = "IFunc (nmodes, npixels)"
-
+            # IFunc: (nmodes, npixels_valid)
+            base_valid_values = base_inv_array.T
+            base_format = "IFunc"
         elif n_rows == n_valid_pixels:
-            # Format: (npixels_valid, nmodes) - IFuncInv style
-            n_modes_base = n_cols
-            base_valid_values = base_inv_array  # No transpose!
-            base_format = "IFuncInv (npixels, nmodes)"
-
+            # IFuncInv: (npixels_valid, nmodes)
+            base_valid_values = base_inv_array
+            base_format = "IFuncInv"
         else:
             raise ValueError(
-                f"Cannot determine base format: shape {base_inv_array.shape} "
-                f"does not match valid pixels ({n_valid_pixels})"
+                f"Base shape {base_inv_array.shape} doesn't match {n_valid_pixels} valid pixels"
             )
 
         if verbose:
@@ -1433,16 +1426,11 @@ def projection_matrix(pup_diam_m, pup_mask, dm_array, dm_mask, base_inv_array,
             print(f'  Shape: {base_inv_array.shape} → {base_valid_values.shape}')
 
     elif base_inv_array.ndim == 3:
-        # 3D basis: shape is (height, width, n_modes)
-        # Convert to 2D format internally
-        height_base, width_base, n_modes_base = base_inv_array.shape
+        # 3D: Extract using same indices
+        base_valid_values = base_inv_array[idx_valid[0], idx_valid[1], :]
 
         if verbose:
-            print(f'  Basis 3D shape: {base_inv_array.shape}')
-            print(f'  Converting to 2D format...')
-
-        # Extract valid pixels (same as before)
-        base_valid_values = base_inv_array[valid_pixels]  # Shape: (n_valid_pixels, n_modes_base)
+            print(f'  Basis 3D: {base_inv_array.shape} → {base_valid_values.shape}')
     else:
         raise ValueError(f"base_inv_array must be 2D or 3D, got {base_inv_array.ndim}D")
 
@@ -1450,9 +1438,8 @@ def projection_matrix(pup_diam_m, pup_mask, dm_array, dm_mask, base_inv_array,
     projection = np.dot(dm_valid_values.T, base_valid_values)
 
     if verbose:
-        print(f'  ✓ Projection computed, shape: {projection.shape}')
-        print(f'  ✓ Valid pixels used: {n_valid_pixels}')
-        print(f'  ✓ Base format: {"2D (optimized)" if base_inv_array.ndim == 2 else "3D (converted)"}')
+        print(f'  ✓ Projection computed: {projection.shape}')
+        print(f'  ✓ Valid pixels: {n_valid_pixels}'))
 
     if display:
         # Display valid pixels mask
@@ -1622,22 +1609,18 @@ def projection_matrices_multi_base(pup_diam_m, pup_mask, dm_array, dm_mask,
             trans_pup_mask = pup_mask
 
         valid_mask = trans_dm_mask * trans_pup_mask
-        flat_mask = valid_mask.flatten()
-        valid_indices = np.where(flat_mask > 0.5)[0]
-        n_valid_pixels = len(valid_indices)
-
-        if verbose:
-            print(f"  ✓ Valid pixels in trans_dm_mask: {np.sum(trans_dm_mask > 0.5)}")
-            print(f"  ✓ Valid pixels in trans_pup_mask: {np.sum(trans_pup_mask > 0.5)}")
-            print(f"  ✓ Valid pixels: {n_valid_pixels}")
-
-        # Extract DM valid values once
-        dm_valid_values = trans_dm_array[valid_indices]  # Shape: (n_valid_pixels, n_modes)
+        idx_valid = np.where(valid_mask > 0.5)  # Tuple of (row_indices, col_indices)
+        n_valid_pixels = len(idx_valid[0])
 
         if verbose:
             print(f"  ✓ DM transformed: {trans_dm_array.shape}")
             print(f"  ✓ Valid pixels: {n_valid_pixels}")
             print(f"\n[Step 2/2] Computing projections for each basis...")
+
+        # Extract DM valid values once
+        n_modes = trans_dm_array.shape[2]
+        dm_valid_values = np.zeros((n_valid_pixels, n_modes))
+        dm_valid_values = trans_dm_array[idx_valid[0], idx_valid[1], :]  # Shape: (n_valid_pixels, n_modes)
 
         # Compute projection for each basis
         for i, base_config in enumerate(base_configs):
@@ -1650,40 +1633,42 @@ def projection_matrices_multi_base(pup_diam_m, pup_mask, dm_array, dm_mask,
             # *** OPTIMIZED: Handle 2D and 3D base formats ***
             # *** DETECT BASE FORMAT ***
             if base_inv_array.ndim == 2:
-                n_rows, n_cols = base_inv_array.shape
-
-                # Determine format based on which dimension matches valid pixels
-                if n_cols == n_valid_pixels:
-                    # Format: (nmodes, npixels_valid) - IFunc style
-                    n_modes_base = n_rows
-                    base_valid_values = base_inv_array.T  # (npixels_valid, nmodes)
-                    if verbose:
-                        print(f"    Inverse basis 2D (IFunc format): {base_inv_array.shape}")
-                        print(f"    → Transposed to: {base_valid_values.shape}")
-                        
-                elif n_rows == n_valid_pixels:
-                    # Format: (npixels_valid, nmodes) - IFuncInv style
-                    n_modes_base = n_cols
-                    base_valid_values = base_inv_array  # No transpose needed!
-                    if verbose:
-                        print(f"    Inverse basis 2D (IFuncInv format): {base_inv_array.shape}")
-                        print(f"    → Direct use (no transpose)")
-                        
-                else:
-                    raise ValueError(
-                        f"Cannot determine base format: shape {base_inv_array.shape} "
-                        f"does not match valid pixels ({n_valid_pixels})"
-                    )
-
-            elif base_inv_array.ndim == 3:
-                # 3D basis: shape (height, width, n_modes)
-                n_modes_base = base_inv_array.shape[2]
+                base_name = base_config.get('name', f'base_{i}')
+                base_inv_array = base_config['base_inv_array']
 
                 if verbose:
-                    print(f"    Basis 3D: {base_inv_array.shape}, converting...")
+                    print(f"\n  [{i+1}/{len(base_configs)}] Processing {base_name}:")
 
-                # Extract valid pixels from each mode
-                base_valid_values = base_inv_array[valid_indices]  # Shape: (n_valid_pixels, n_modes_base)
+                # *** HANDLE BASE FORMAT USING INDICES ***
+                if base_inv_array.ndim == 2:
+                    n_rows, n_cols = base_inv_array.shape
+
+                    if n_cols == n_valid_pixels:
+                        # IFunc format: (nmodes, npixels_valid)
+                        base_valid_values = base_inv_array.T
+                        if verbose:
+                            print(f"    Inverse basis 2D (IFunc): {base_inv_array.shape}")
+
+                    elif n_rows == n_valid_pixels:
+                        # IFuncInv format: (npixels_valid, nmodes)
+                        base_valid_values = base_inv_array
+                        if verbose:
+                            print(f"    Inverse basis 2D (IFuncInv): {base_inv_array.shape}")
+
+                    else:
+                        raise ValueError(
+                            f"Base shape {base_inv_array.shape} doesn't match {n_valid_pixels} valid pixels"
+                        )
+
+            elif base_inv_array.ndim == 3:
+                # 3D: Extract using same indices as DM
+                n_modes_base = base_inv_array.shape[2]
+
+                # Use the SAME indexing approach as trans_dm_array
+                base_valid_values = base_inv_array[idx_valid[0], idx_valid[1], :]  # (n_valid_pixels, n_modes_base)
+
+                if verbose:
+                    print(f"    Basis 3D: {base_inv_array.shape} → {base_valid_values.shape}")
             else:
                 raise ValueError(f"base_inv_array must be 2D or 3D, got {base_inv_array.ndim}D")
 
