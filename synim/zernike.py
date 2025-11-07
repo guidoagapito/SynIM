@@ -2,7 +2,7 @@
 
 import numpy as np
 from scipy.special import eval_legendre
-from scipy.ndimage import rotate
+from synim import rotate
 
 from synim.utils import (
     make_xy,

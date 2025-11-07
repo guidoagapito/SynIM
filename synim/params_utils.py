@@ -5,6 +5,10 @@ import re
 import yaml
 import datetime
 import numpy as np
+import matplotlib.pyplot as plt
+
+# *** MODIFIED: Import xp, cpuArray, to_xp, float_dtype ***
+from synim import xp, cpuArray, to_xp, float_dtype
 
 # Import all utility functions from utils
 from synim.utils import *
@@ -150,16 +154,9 @@ def load_pupilstop(cm, pupilstop_params, pixel_pupil, pixel_pitch, verbose=False
     """
     Load or create a pupilstop.
     
-    Args:
-        cm (CalibManager): SPECULA calibration manager
-        pupilstop_params (dict): Parameters for the pupilstop
-        pixel_pupil (int): Number of pixels across pupil
-        pixel_pitch (float): Pixel pitch in meters
-        verbose (bool): Whether to print details
-        
-    Returns:
-        numpy.ndarray: Pupil mask array
+    NOTE: Returns numpy array from disk - caller should convert with to_xp if needed
     """
+    
     if 'tag' in pupilstop_params or 'pupil_mask_tag' in pupilstop_params:
         if 'pupil_mask_tag' in pupilstop_params:
             pupilstop_tag = pupilstop_params['pupil_mask_tag']
@@ -171,6 +168,7 @@ def load_pupilstop(cm, pupilstop_params, pixel_pupil, pixel_pitch, verbose=False
                 print(f"     Loading pupilstop from file, tag: {pupilstop_tag}")
         pupilstop_path = cm.filename('pupilstop', pupilstop_tag)
         pupilstop = Pupilstop.restore(pupilstop_path)
+        # *** Returns numpy from FITS file ***
         return pupilstop.A
     else:
         # Create pupilstop from parameters
@@ -186,11 +184,14 @@ def load_pupilstop(cm, pupilstop_params, pixel_pupil, pixel_pitch, verbose=False
             target_device_idx=-1,
             precision=0
         )
+        # *** Returns numpy ***
         return pupilstop.A
 
 def load_influence_functions(cm, dm_params, pixel_pupil, verbose=False, is_inverse_basis=False):
     """
     Load or generate DM influence functions.
+    
+    NOTE: Returns numpy arrays from disk - caller should convert with to_xp if needed
     
     Args:
         cm (CalibManager): SPECULA calibration manager
@@ -200,8 +201,9 @@ def load_influence_functions(cm, dm_params, pixel_pupil, verbose=False, is_inver
         is_inverse_basis (bool): If True, don't convert to 3D (for projection matrices)
         
     Returns:
-        tuple: (dm_array, dm_mask) - For DM: 3D array, For inverse basis: 2D array
+        tuple: (dm_array, dm_mask) - NUMPY arrays from disk
     """
+    
     if 'ifunc_object' in dm_params or 'ifunc_tag' in dm_params: 
         if 'ifunc_tag' in dm_params:
             ifunc_tag = dm_params['ifunc_tag']
@@ -240,22 +242,19 @@ def load_influence_functions(cm, dm_params, pixel_pupil, verbose=False, is_inver
         if ifunc.mask_inf_func is not None:
             n_valid_pixels = np.sum(ifunc.mask_inf_func > 0.5)
         else:
-            raise ValueError("IFunc without mask_inf_func is not supported."
-                           " Mask is required.")
+            raise ValueError("IFunc without mask_inf_func is not supported.")
 
-        # If n_rows >> n_cols, this is likely an inverse basis (pixels x modes)
-        # If n_cols >> n_rows, this is a normal basis (modes x pixels)
-        is_inverse = (n_rows > n_cols * 2)  # Heuristic: if rows >> cols
+        is_inverse = (n_rows > n_cols * 2)
 
         if verbose:
             print(f"     Influence function shape: {ifunc.influence_function.shape}")
             print(f"     Valid pixels in mask: {n_valid_pixels}")
             print(f"     Detected as: {'INVERSE basis' if is_inverse else 'NORMAL basis'}")
 
-        # For inverse basis, ALWAYS return 2D
+        # For inverse basis, ALWAYS return 2D (numpy)
         if is_inverse or is_inverse_basis:
             if verbose:
-                print(f"     Returning 2D inverse basis (optimized format)")
+                print(f"     Returning 2D inverse basis (numpy from disk)")
             
             # Make sure it's (n_modes, n_pixels) format
             if ifunc.influence_function.shape[0] < ifunc.influence_function.shape[1]:
@@ -265,68 +264,54 @@ def load_influence_functions(cm, dm_params, pixel_pupil, verbose=False, is_inver
                 # Need to transpose: n_pixels x n_modes -> n_modes x n_pixels
                 return ifunc.influence_function.T, ifunc.mask_inf_func
 
-        # For normal basis, convert to 3D
+        # For normal basis, convert to 3D (still numpy)
         else:
-            # Convert influence function from 2D to 3D
-            dm_array = dm2d_to_3d(ifunc.influence_function, ifunc.mask_inf_func)
+            # *** dm2d_to_3d will handle conversion to xp internally ***
+            dm_array_np = cpuArray(ifunc.influence_function)
+            dm_mask_np = cpuArray(ifunc.mask_inf_func)
+            
+            # Convert to 3D using dm2d_to_3d (which converts to xp)
+            dm_array = dm2d_to_3d(dm_array_np, dm_mask_np)
+            
+            # *** Convert back to numpy for return ***
+            dm_array = cpuArray(dm_array)
+            
             if verbose:
-                print(f"     DM array shape: {dm_array.shape}")
-            dm_mask = ifunc.mask_inf_func.copy()
-            if verbose:
-                print(f"     DM mask shape: {dm_mask.shape}")
-                print(f"     DM mask sum: {np.sum(dm_mask)}")
-            return dm_array, dm_mask
+                print(f"     DM array shape: {dm_array.shape} (numpy)")
+                print(f"     DM mask shape: {dm_mask_np.shape} (numpy)")
+            
+            return dm_array, dm_mask_np
 
     elif 'type_str' in dm_params:
-        # ... existing code for Zernike generation ...
-        if verbose:
-            print(f"     Loading influence function from type_str: {dm_params['type_str']}")
-        from specula.lib.compute_zern_ifunc import compute_zern_ifunc
-        nmodes = dm_params.get('nmodes', 100)
-        obsratio = dm_params.get('obsratio', 0.0)
-        npixels = dm_params.get('npixels', pixel_pupil)
-
-        if 'mask_object' in dm_params:
-            mask_tag = dm_params['mask_object']
-            mask_path = cm.filename('pupilstop', mask_tag)
-            print(f"     Loading mask from file, tag: {mask_tag}")
-            pupilstop = Pupilstop.restore(mask_path)
-            mask = pupilstop.A
-        else:
-            mask = None
-            print("     No mask provided. Using default mask.")
-
+        # ...existing Zernike generation code...
+        
         z_ifunc, z_mask = compute_zern_ifunc(npixels, nmodes, xp=np, dtype=float,
                                              obsratio=obsratio, diaratio=1.0,
                                              start_mode=0, mask=mask)
 
-        # For Zernike, always return 3D
+        # *** dm2d_to_3d will convert to xp, then we convert back ***
         dm_array = dm2d_to_3d(z_ifunc, z_mask)
+        dm_array = cpuArray(dm_array)
+        
         if verbose:
-            print(f"     DM array shape: {dm_array.shape}")
-        dm_mask = z_mask
-        if verbose:
-            print(f"     DM mask shape: {dm_mask.shape}")
-            print(f"     DM mask sum: {np.sum(dm_mask)}")
-        return dm_array, dm_mask
+            print(f"     DM array shape: {dm_array.shape} (numpy)")
+            print(f"     DM mask shape: {z_mask.shape} (numpy)")
+        
+        return dm_array, z_mask
     else:
-        raise ValueError("No valid influence function configuration found."
-                         " Need either 'ifunc_tag', 'ifunc_object', or 'type_str'.")
+        raise ValueError("No valid influence function configuration found.")
+
 
 def find_subapdata(cm, wfs_params, wfs_key, params, verbose=False):
     """
     Find and load SubapData for valid subapertures.
     
-    Args:
-        cm (CalibManager): SPECULA calibration manager
-        wfs_params (dict): WFS parameters
-        wfs_key (str): WFS key in configuration
-        params (dict): Full configuration parameters
-        verbose (bool): Whether to print details
-        
+    NOTE: Returns numpy array from disk - caller should convert with to_xp if needed
+    
     Returns:
-        numpy.ndarray: Array of valid subaperture indices or None
+        numpy.ndarray: Array of valid subaperture indices (numpy) or None
     """
+    
     subap_path = None
     subap_tag = None
 
@@ -387,7 +372,7 @@ def find_subapdata(cm, wfs_params, wfs_key, params, verbose=False):
             if verbose:
                 print("     Loading subapdata from slopec, tag:", slopec_params['subapdata_tag'])
             subap_tag = slopec_params['subapdata_tag']
-            subap_path = cm.filename('subap_data', subap_tag)
+            subap_path = cm.filename('sub_aperture_data', subap_tag)
         elif 'subapdata_object' in slopec_params:
             if verbose:
                 print("     Loading subapdata from slopec, tag:", slopec_params['subapdata_object'])
@@ -407,6 +392,7 @@ def find_subapdata(cm, wfs_params, wfs_key, params, verbose=False):
         if verbose:
             print("     Loading subapdata from file:", subap_path)
         subap_data = SubapData.restore(subap_path)
+        # *** Returns numpy from FITS file ***
         return np.transpose(np.asarray(np.where(subap_data.single_mask())))
 
     return None

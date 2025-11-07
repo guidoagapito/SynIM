@@ -3,6 +3,10 @@ import re
 import numpy as np
 import matplotlib.pyplot as plt
 from astropy.io import fits
+
+# *** MODIFIED: Import xp, cpuArray, to_xp, float_dtype ***
+from synim import xp, cpuArray, to_xp, float_dtype
+
 import synim.synim as synim
 import synim.synpm as synpm
 
@@ -115,7 +119,10 @@ class ParamsManager:
             )
             pup_mask = pupilstop.A
 
-        print('---> valid pixels: ', np.sum(pup_mask > 0.5))
+        # *** MODIFIED: Convert to xp with float_dtype ***
+        pup_mask = to_xp(xp, pup_mask, dtype=float_dtype)
+
+        print('---> valid pixels: ', int(xp.sum(pup_mask > 0.5)))
 
         return pup_mask
 
@@ -196,6 +203,10 @@ class ParamsManager:
 
         if cut_start_mode and 'start_mode' in component_params:
             dm_array = dm_array[:, :, component_params['start_mode']:]
+
+        # *** MODIFIED: Convert to xp with float_dtype ***
+        dm_array = to_xp(xp, dm_array, dtype=float_dtype)
+        dm_mask = to_xp(xp, dm_mask, dtype=float_dtype)
 
         self.dm_cache[cache_key] = {
             'dm_array': dm_array,
@@ -344,6 +355,10 @@ class ParamsManager:
         idx_valid_sa = find_subapdata(
             self.cm, wfs_params, wfs_key, self.params, verbose=self.verbose
         )
+
+        # *** MODIFIED: Convert to xp if not None ***
+        if idx_valid_sa is not None:
+            idx_valid_sa = to_xp(xp, idx_valid_sa)
 
         # Guide star parameters
         if source_type == 'lgs':
@@ -503,6 +518,9 @@ class ParamsManager:
             display=display
         )
 
+        # *** MODIFIED: Convert to CPU for saving ***
+        im = cpuArray(im)
+
         return im
 
     def compute_interaction_matrices(self, output_im_dir, output_rec_dir,
@@ -658,6 +676,9 @@ class ParamsManager:
                     wfs_name = wfs_info['name']
                     im = im_dict[wfs_name]
 
+                    # *** MODIFIED: Convert to CPU for transpose and saving ***
+                    im = cpuArray(im)
+                    
                     # Transpose to be coherent with SPECULA convention
                     im = im.transpose()
 
@@ -918,6 +939,9 @@ class ParamsManager:
         if base_inv_array is None:
             raise ValueError("No valid base_inv_array found in configuration")
 
+        # *** MODIFIED: Convert to xp with float_dtype ***
+        base_inv_array = to_xp(xp, base_inv_array, dtype=float_dtype)
+
         return base_inv_array
 
 
@@ -1118,6 +1142,9 @@ class ParamsManager:
                     verbose=verbose_flag,
                     specula_convention=True
                 )
+
+                # *** MODIFIED: Convert to CPU for saving ***
+                pm = cpuArray(pm)
 
                 self._save_projection_matrix(
                     pm, source_info, comp_name, saved_matrices, verbose_flag
