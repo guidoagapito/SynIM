@@ -14,6 +14,7 @@ specula.init(device_idx=-1, precision=1)
 
 from specula.calib_manager import CalibManager
 from specula.data_objects.intmat import Intmat
+from specula.lib.modal_base_generator import compute_ifs_covmat
 
 class ParamsManager:
     """
@@ -84,6 +85,7 @@ class ParamsManager:
             numpy.ndarray: Pupil mask array
         """
         pup_mask = None
+        pupilstop_params = None
         if 'pupilstop' in self.params:
             pupilstop_params = self.params['pupilstop']
             if self.verbose:
@@ -92,6 +94,8 @@ class ParamsManager:
             pupilstop_params = self.params['pupil_stop']
             if self.verbose:
                 print("Found 'pupil_stop' in params")
+        if pupilstop_params is None:
+            raise ValueError("Pupilstop parameters not found in configuration")
         pup_mask = load_pupilstop(self.cm, pupilstop_params, self.pixel_pupil, self.pixel_pitch,
                                 verbose=self.verbose)
 
@@ -1107,6 +1111,7 @@ class ParamsManager:
 
         return saved_matrices
 
+
     def compute_projection_matrix(self, regFactor=1e-8, output_dir=None, save=False):
         """
         Assemble 4D projection matrices from individual PM files and
@@ -1332,17 +1337,196 @@ class ParamsManager:
 
         return p_opt, pm_full_dm, pm_full_layer
 
+
+    def compute_tomographic_projection_matrix(self, regFactor=1e-8,
+                                            output_dir=None, save=False,
+                                            verbose=None):
+        """
+        Compute tomographic projection matrix following IDL compute_mcao_popt logic.
+        
+        Implements the standard MCAO projection:
+            p_opt = (P_DM^T @ P_DM + regFactor*I)^(-1) @ P_DM^T @ P_Layer
+        
+        where P_DM and P_Layer are weighted combinations of projection matrices
+        from multiple optical sources.
+        
+        Args:
+            regFactor (float): Tikhonov regularization factor (default: 1e-8)
+            output_dir (str, optional): Directory where PM files are stored
+            save (bool): Whether to save the projection matrix to disk
+            verbose (bool, optional): Override the class's verbose setting
+        
+        Returns:
+            tuple: (p_opt, pm_full_dm, pm_full_layer, info)
+                - p_opt: Tomographic projection matrix (n_layer_modes, n_dm_modes)
+                - pm_full_dm: Full DM projection matrix (n_opt, n_dm_modes, n_pupil_modes)
+                - pm_full_layer: Full Layer projection matrix (n_opt, n_layer_modes, n_pupil_modes)
+                - info: dict with computation metadata
+        """
+
+        verbose_flag = self.verbose if verbose is None else verbose
+
+        if verbose_flag:
+            print(f"\n{'='*60}")
+            print(f"Computing Tomographic Projection Matrix")
+            print(f"{'='*60}")
+            print(f"  Regularization factor: {regFactor}")
+            print(f"{'='*60}\n")
+
+        # ==================== LOAD FULL PM MATRICES ====================
+        # Reuse existing function to load/compute all projection matrices
+        _, pm_full_dm, pm_full_layer = self.compute_projection_matrix(
+            regFactor=regFactor,
+            output_dir=output_dir,
+            save=False  # Don't save intermediate matrices
+        )
+
+        if verbose_flag:
+            print(f"\n  Loaded PM matrices:")
+            print(f"    pm_full_dm shape: {pm_full_dm.shape}")
+            print(f"      (n_opt_sources, n_dm_modes, n_pupil_modes)")
+            print(f"    pm_full_layer shape: {pm_full_layer.shape}")
+            print(f"      (n_opt_sources, n_layer_modes, n_pupil_modes)")
+
+        # ==================== GET OPTICAL SOURCE WEIGHTS ====================
+        opt_sources = extract_opt_list(self.params)
+        n_opt = len(opt_sources)
+
+        weights_array = np.array([src['config'].get('weight', 1.0) for src in opt_sources])
+        total_weight = np.sum(weights_array)
+
+        if verbose_flag:
+            print(f"\n  Optical sources: {n_opt}")
+            print(f"  Weights: {weights_array}")
+            print(f"  Total weight: {total_weight}")
+
+        # ==================== COMPUTE WEIGHTED MATRICES ====================
+        if verbose_flag:
+            print(f"\n{'='*60}")
+            print(f"Computing Weighted Combination")
+            print(f"{'='*60}")
+
+        # Get dimensions
+        n_dm_modes = pm_full_dm.shape[1]
+        n_layer_modes = pm_full_layer.shape[1]
+        n_pupil_modes = pm_full_dm.shape[2]
+
+        # Initialize accumulation matrices
+        # tpdm_pdm = P_DM^T @ P_DM (weighted sum over optical sources)
+        # tpdm_pl = P_DM^T @ P_Layer (weighted sum over optical sources)
+        tpdm_pdm = np.zeros((n_dm_modes, n_dm_modes))
+        tpdm_pl = np.zeros((n_dm_modes, n_layer_modes))
+
+        # Accumulate weighted contributions from each optical source
+        for i in range(n_opt):
+            pdm_i = pm_full_dm[i, :, :]      # (n_dm_modes, n_pupil_modes)
+            pl_i = pm_full_layer[i, :, :]    # (n_layer_modes, n_pupil_modes)
+            w = weights_array[i] / total_weight
+
+            # Accumulate: P_DM^T @ P_DM and P_DM^T @ P_Layer
+            tpdm_pdm += pdm_i @ pdm_i.T * w
+            tpdm_pl += pdm_i @ pl_i.T * w
+
+            if verbose_flag:
+                print(f"  Processed opt{opt_sources[i]['index']} (weight={w:.3f})")
+
+        if verbose_flag:
+            print(f"\n  tpdm_pdm shape: {tpdm_pdm.shape} (P_DM^T @ P_DM)")
+            print(f"  tpdm_pl shape: {tpdm_pl.shape} (P_DM^T @ P_Layer)")
+
+        # ==================== TIKHONOV REGULARIZATION ====================
+        if verbose_flag:
+            print(f"\n{'='*60}")
+            print(f"Applying Tikhonov Regularization")
+            print(f"{'='*60}")
+            print(f"  Adding regFactor * I to P_DM^T @ P_DM")
+
+        tpdm_pdm_reg = tpdm_pdm + regFactor * np.eye(n_dm_modes)
+
+        # ==================== PSEUDOINVERSE ====================
+        if verbose_flag:
+            print(f"  Computing pseudoinverse...")
+
+        # Condition number check
+        cond_number = np.linalg.cond(tpdm_pdm_reg)
+        if verbose_flag:
+            print(f"  Condition number: {cond_number:.2e}")
+
+        # Compute pseudoinverse
+        rcond = 1e-14  # Same as IDL default
+        tpdm_pdm_inv = np.linalg.pinv(tpdm_pdm_reg, rcond=rcond)
+
+        if verbose_flag:
+            print(f"  ✓ Pseudoinverse computed (rcond={rcond})")
+
+        # ==================== FINAL PROJECTION MATRIX ====================
+        if verbose_flag:
+            print(f"\n{'='*60}")
+            print(f"Computing Final Projection Matrix")
+            print(f"{'='*60}")
+            print(f"  p_opt = (P_DM^T @ P_DM + λI)^(-1) @ P_DM^T @ P_Layer")
+
+        # p_opt = (tpdm_pdm + regFactor*I)^(-1) @ tpdm_pl
+        p_opt = tpdm_pdm_inv @ tpdm_pl
+
+        if verbose_flag:
+            print(f"\n  ✓ Tomographic projection matrix computed: {p_opt.shape}")
+            print(f"    (n_dm_modes, n_layer_modes) = ({n_dm_modes}, {n_layer_modes})")
+
+        # ==================== SAVE MATRICES ====================
+        if save and output_dir is not None:
+            os.makedirs(output_dir, exist_ok=True)
+
+            # Save main projection matrix
+            p_opt_path = os.path.join(output_dir, "p_opt_tomographic.npy")
+            np.save(p_opt_path, p_opt)
+
+            # Also save the intermediate matrices for debugging
+            np.save(os.path.join(output_dir, "tpdm_pdm.npy"), tpdm_pdm)
+            np.save(os.path.join(output_dir, "tpdm_pl.npy"), tpdm_pl)
+            np.save(os.path.join(output_dir, "tpdm_pdm_reg.npy"), tpdm_pdm_reg)
+
+            if verbose_flag:
+                print(f"\n  ✓ Saved matrices to {output_dir}:")
+                print(f"    - p_opt_tomographic.npy")
+                print(f"    - tpdm_pdm.npy (P_DM^T @ P_DM)")
+                print(f"    - tpdm_pl.npy (P_DM^T @ P_Layer)")
+                print(f"    - tpdm_pdm_reg.npy (with regularization)")
+
+        # ==================== METADATA ====================
+        info = {
+            'n_opt_sources': n_opt,
+            'n_dm_modes': n_dm_modes,
+            'n_layer_modes': n_layer_modes,
+            'n_pupil_modes': n_pupil_modes,
+            'weights': weights_array,
+            'regFactor': regFactor,
+            'condition_number': cond_number,
+            'rcond': rcond
+        }
+
+        if verbose_flag:
+            print(f"\n{'='*60}")
+            print(f"Tomographic Projection Computation Complete")
+            print(f"{'='*60}\n")
+
+        return p_opt, pm_full_dm, pm_full_layer, info
+
+
     def list_wfs(self):
         """Return a list of all WFS names and types."""
         return [(wfs['name'], wfs['type'], wfs['index']) for wfs in self.wfs_list]
+
 
     def list_dm(self):
         """Return a list of all DM names and indices."""
         return [(dm['name'], dm['index']) for dm in self.dm_list]
 
+
     def get_source_info(self, wfs_name):
         """Return source info for a given WFS."""
         return extract_source_info(self.params, wfs_name)
+
 
     def generate_im_filename(self, wfs_type=None, wfs_index=None,
                             dm_index=None, layer_index=None, timestamp=False, verbose=False):
@@ -1363,6 +1547,12 @@ class ParamsManager:
         """
         Compute atmospheric covariance matrices for all components (DMs or layers).
         
+        Implements smart caching similar to IDL's ifs_covmat:
+        - Generates unique filename based on component parameters, r0, L0
+        - Loads from disk if file exists (unless overwrite=True)
+        - Computes and saves if file doesn't exist
+        - Saves in FITS format (like IDL) for compatibility
+        
         Args:
             r0 (float): Fried parameter in meters
             L0 (float): Outer scale in meters
@@ -1379,8 +1569,12 @@ class ParamsManager:
                 - 'component_indices': List of component indices
                 - 'n_modes_per_component': List of number of modes for each component
                 - 'start_modes': List of start mode indices for each component
+                - 'r0': Fried parameter used
+                - 'L0': Outer scale used
+                - 'files': List of file paths (saved or loaded)
         """
         from specula.lib.modal_base_generator import compute_ifs_covmat
+        from astropy.io import fits
 
         verbose_flag = self.verbose if verbose is None else verbose
 
@@ -1388,41 +1582,63 @@ class ParamsManager:
         if component_type not in ['dm', 'layer']:
             raise ValueError("component_type must be either 'dm' or 'layer'")
 
+        # Get wavelength for conversion nm -> rad^2
+        wavelengthInNm = 500.0  # Default
+        if 'pyramid' in self.params:
+            wavelengthInNm = self.params['pyramid'].get('wavelengthInNm', 500.0)
+        elif 'sh' in self.params:
+            wavelengthInNm = self.params['sh'].get('wavelengthInNm', 500.0)
+        elif 'sh1' in self.params:
+            wavelengthInNm = self.params['sh1'].get('wavelengthInNm', 500.0)
+
+        # Conversion factor (nm to rad^2 at wavelengthInNm)
+        conversion_factor = (wavelengthInNm / 2.0 / np.pi) ** 2
+
+        if verbose_flag:
+            print(f"\n{'='*60}")
+            print(f"Computing Covariance Matrices")
+            print(f"{'='*60}")
+            print(f"  r0 = {r0} m")
+            print(f"  L0 = {L0} m")
+            print(f"  Component type: {component_type}")
+            print(f"  Full modes: {full_modes}")
+            print(f"  Wavelength: {wavelengthInNm} nm")
+            print(f"  Conversion factor: {conversion_factor:.6e}")
+            print(f"{'='*60}\n")
+
         # Get component list
         if component_type == 'dm':
             component_list = self.dm_list
         else:
             component_list = extract_layer_list(self.params)
 
-        if verbose_flag:
-            print(f"\nComputing covariance matrices:")
-            print(f"  r0 = {r0} m")
-            print(f"  L0 = {L0} m")
-            print(f"  Component type: {component_type}")
-            print(f"  Full modes: {full_modes}")
+        # Set up output directory (use 'ifunc' subdirectory like IDL)
+        if output_dir is None:
+            output_dir = os.path.join(self.cm.root_dir, 'ifunc')
+        os.makedirs(output_dir, exist_ok=True)
 
         component_indices = []
         C_atm_blocks = []
         n_modes_per_component = []
         start_modes = []
+        cov_files = []
 
-        # Compute covariance for each component
-        for comp in component_list:
+        # ==================== COMPUTE/LOAD EACH COMPONENT ====================
+        for idx, comp in enumerate(component_list):
             comp_idx = int(comp['index'])
             component_indices.append(comp_idx)
 
             if verbose_flag:
-                print(f"\n[{len(component_indices)}/{len(component_list)}] "
-                    f"Processing {component_type}{comp_idx}...")
+                print(f"\n[{idx+1}/{len(component_list)}] Processing {component_type}{comp_idx}...")
 
             # Get component parameters
             comp_params = self.get_component_params(
                 comp_idx,
                 is_layer=(component_type == 'layer'),
-                cut_start_mode=False  # Load ALL modes, we'll cut later if needed
+                cut_start_mode=False  # Load ALL modes
             )
 
-            # Check for start_mode
+            # Get start_mode
             comp_key = f'{component_type}{comp_idx}'
             if comp_key in self.params and 'start_mode' in self.params[comp_key]:
                 start_mode = self.params[comp_key]['start_mode']
@@ -1432,37 +1648,79 @@ class ParamsManager:
 
             # Total modes available
             total_modes = comp_params['dm_array'].shape[2]
+            n_modes_per_component.append(total_modes)
 
+            # Determine modes to use
             if full_modes:
-                # Use ALL modes
                 modes_to_use = list(range(total_modes))
-                mode_label = "all"
             else:
-                # Use only modes after start_mode (already handled by get_component_params)
-                modes_to_use = list(range(total_modes))
-                mode_label = f"start{start_mode}"
+                modes_to_use = list(range(start_mode, total_modes))
 
             n_modes = len(modes_to_use)
-            n_modes_per_component.append(total_modes)  # Store total available modes
 
             if verbose_flag:
                 print(f"  Total modes available: {total_modes}")
                 print(f"  Start mode: {start_mode}")
-                print(f"  Computing covariance for: {n_modes} modes ({mode_label})")
+                print(f"  Computing for: {n_modes} modes")
 
-            # Check if file already exists
-            if output_dir is not None:
-                os.makedirs(output_dir, exist_ok=True)
-                cov_filename = (f"C_atm_{component_type}{comp_idx}_"
-                            f"r0{r0:.3f}_L0{L0:.1f}_modes{mode_label}.npy")
-                cov_path = os.path.join(output_dir, cov_filename)
+            # ========== GENERATE FILENAME (EXACTLY LIKE IDL) ==========
+            # IDL pattern from scao_calib__define.pro line ~620:
+            # fileNameCov = root_dir+'/ifunc/'+ifunc_tag (or m2c_tag)
+            #             + diam + 'diam_' + r0 + 'r0_' + L0 + 'L0.fits'
 
-                if os.path.exists(cov_path) and not overwrite:
-                    if verbose_flag:
-                        print(f"  Loading existing: {cov_filename}")
-                    C_atm = np.load(cov_path)
-                    C_atm_blocks.append(C_atm)
-                    continue
+            # Get ifunc_tag or m2c_tag from component params
+            if comp_key in self.params:
+                comp_cfg = self.params[comp_key]
+                if 'm2c_tag' in comp_cfg:
+                    base_tag = comp_cfg['m2c_tag']
+                elif 'ifunc_tag' in comp_cfg:
+                    base_tag = comp_cfg['ifunc_tag']
+                else:
+                    # Fallback: use component type and index
+                    base_tag = f"{component_type}{comp_idx}"
+            else:
+                base_tag = f"{component_type}{comp_idx}"
+
+            # Format numbers exactly like IDL (strtrim + format)
+            # IDL: strtrim(string(diam,format='(f12.1)'),2)
+            diam_str = f"{self.pup_diam_m:.1f}".strip()
+            # IDL: strtrim(string(r0,format='(f12.3)'),2)
+            r0_str = f"{r0:.3f}".strip()
+            # IDL: strtrim(string(L0,format='(f12.1)'),2)
+            L0_str = f"{L0:.1f}".strip()
+
+            # Assemble filename exactly like IDL
+            cov_filename = (f"{base_tag}{diam_str}diam_"
+                        f"{r0_str}r0_"
+                        f"{L0_str}L0.fits")
+
+            cov_path = os.path.join(output_dir, cov_filename)
+            cov_files.append(cov_path)
+
+            if verbose_flag:
+                print(f"  Filename: {cov_filename}")
+
+            # ========== CHECK IF FILE EXISTS ==========
+            if os.path.exists(cov_path) and not overwrite:
+                if verbose_flag:
+                    print(f"  ✓ Loading existing: {cov_filename}")
+
+                # Load from FITS
+                with fits.open(cov_path) as hdul:
+                    C_atm = hdul[0].data.copy()
+
+                if verbose_flag:
+                    print(f"    Shape: {C_atm.shape}")
+
+                C_atm_blocks.append(C_atm)
+                continue
+
+            # ========== COMPUTE COVARIANCE MATRIX ==========
+            if verbose_flag:
+                if os.path.exists(cov_path):
+                    print(f"  ⚠ File exists but overwrite=True, recomputing...")
+                else:
+                    print(f"  File not found, computing...")
 
             # Convert 3D DM array to 2D
             dm2d = dm3d_to_2d(comp_params['dm_array'], comp_params['dm_mask'])
@@ -1475,7 +1733,7 @@ class ParamsManager:
                 print(f"  Computing covariance matrix...")
 
             # Compute covariance matrix
-            C_atm = compute_ifs_covmat(
+            C_atm_nm = compute_ifs_covmat(
                 comp_params['dm_mask'],
                 self.pup_diam_m,
                 dm2d_selected,
@@ -1485,20 +1743,40 @@ class ParamsManager:
                 verbose=False
             )
 
+            # Convert from nm^2 to rad^2 (like IDL line ~660)
+            C_atm = C_atm_nm * conversion_factor
+
             if verbose_flag:
                 print(f"  ✓ Covariance computed: {C_atm.shape}")
+                print(f"    RMS (nm): {np.sqrt(np.diag(C_atm_nm)).mean():.2f}")
+                print(f"    RMS (rad): {np.sqrt(np.diag(C_atm)).mean():.4f}")
 
-            # Save if output_dir is specified
-            if output_dir is not None:
-                np.save(cov_path, C_atm)
-                if verbose_flag:
-                    print(f"  ✓ Saved to: {cov_filename}")
+            # ========== SAVE TO FITS (LIKE IDL) ==========
+            # IDL: writefits, fileNameCov, turb_covmat
+            hdu = fits.PrimaryHDU(C_atm.astype(np.float32))
+            hdu.header['R0'] = (r0, 'Fried parameter [m]')
+            hdu.header['L0'] = (L0, 'Outer scale [m]')
+            hdu.header['DIAMM'] = (self.pup_diam_m, 'Pupil diameter [m]')
+            hdu.header['WAVELNM'] = (wavelengthInNm, 'Wavelength [nm]')
+            hdu.header['NMODES'] = (n_modes, 'Number of modes')
+            hdu.header['STARTMOD'] = (start_mode, 'Start mode index')
+            hdu.header['COMPTAG'] = (base_tag, 'Component tag')
+            hdu.header['COMPTYPE'] = (component_type, 'Component type (dm/layer)')
+            hdu.header['COMPIDX'] = (comp_idx, 'Component index')
+
+            hdu.writeto(cov_path, overwrite=True)
+
+            if verbose_flag:
+                print(f"  ✓ Saved to FITS: {cov_filename}")
 
             C_atm_blocks.append(C_atm)
 
         if verbose_flag:
             print(f"\n{'='*60}")
-            print(f"Completed covariance computation for {len(C_atm_blocks)} components")
+            print(f"Covariance Computation Complete")
+            print(f"{'='*60}")
+            print(f"  Components processed: {len(C_atm_blocks)}")
+            print(f"  Files in: {output_dir}")
             print(f"{'='*60}\n")
 
         return {
@@ -1507,11 +1785,14 @@ class ParamsManager:
             'n_modes_per_component': n_modes_per_component,
             'start_modes': start_modes,
             'r0': r0,
-            'L0': L0
+            'L0': L0,
+            'wavelength_nm': wavelengthInNm,
+            'conversion_factor': conversion_factor,
+            'files': cov_files
         }
 
 
-    def assemble_covariance_matrix(self, C_atm_blocks, component_indices, 
+    def assemble_covariance_matrix(self, C_atm_blocks, component_indices,
                                     mode_indices=None, weights=None,
                                     wfs_type=None, component_type='layer',
                                     verbose=None):
