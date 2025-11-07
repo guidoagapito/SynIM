@@ -5,7 +5,9 @@ import matplotlib.pyplot as plt
 from astropy.io import fits
 
 # *** MODIFIED: Import xp, cpuArray, to_xp, float_dtype ***
-from synim import xp, cpuArray, to_xp, float_dtype
+from synim import (
+    xp, cpuArray, to_xp, float_dtype, default_target_device_idx, global_precision
+)
 
 import synim.synim as synim
 import synim.synpm as synpm
@@ -45,6 +47,9 @@ class ParamsManager:
             self.params = params_file
 
         self.verbose = verbose
+
+        self.target_device_idx = default_target_device_idx
+        self.precision = global_precision
 
         # Set root_dir if provided
         if root_dir:

@@ -39,7 +39,7 @@ def is_simple_config(config):
     dm_count = sum(1 for key in config if key.startswith('dm') and key != 'dm')
 
     # Check for multiple WFSs
-    wfs_count = sum(1 for key in config if 
+    wfs_count = sum(1 for key in config if
                    (key.startswith('sh_') or key.startswith('pyramid')) and key != 'pyramid')
 
     return dm_count == 0 and wfs_count == 0

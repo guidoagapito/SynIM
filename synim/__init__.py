@@ -79,11 +79,14 @@ def init(device_idx=-1, precision=1):
         try:
             from cupyx.scipy.ndimage import affine_transform as cupy_affine
             from cupyx.scipy.ndimage import binary_dilation as cupy_dilation
+            from cupyx.scipy.ndimage import rotate as cupy_rotate
+            from cupyx.scipy.ndimage import shift as cupy_shift
+            from cupyx.scipy.ndimage import zoom as cupy_zoom
             affine_transform = cupy_affine
             binary_dilation = cupy_dilation
-            rotate = cupyx.scipy.ndimage.rotate
-            shift = cupyx.scipy.ndimage.shift
-            zoom = cupyx.scipy.ndimage.zoom
+            rotate = cupy_rotate
+            shift = cupy_shift
+            zoom = cupy_zoom
             print('✓ Using cupyx.scipy.ndimage (GPU-accelerated transforms)')
         except ImportError:
             print('⚠️  cupyx.scipy.ndimage not available, falling back to scipy (CPU)')
