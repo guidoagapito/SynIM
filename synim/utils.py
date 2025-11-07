@@ -647,6 +647,31 @@ def apply_mask(array, mask, norm=False, fill_value=None):
         return result
 
 
+def has_transformations(rotation, translation, magnification):
+    """
+    Helper function to check if there are any non-trivial transformations.
+    
+    Returns:
+    - bool: True if there are transformations, False otherwise
+    """
+    # Check rotation
+    has_rotation = rotation != 0.0
+
+    # Check translation
+    if hasattr(translation, '__len__'):
+        has_translation = not all(t == 0.0 for t in translation)
+    else:
+        has_translation = translation != 0.0
+
+    # Check magnification
+    if hasattr(magnification, '__len__'):
+        has_magnification = not all(m == 1.0 for m in magnification)
+    else:
+        has_magnification = magnification != 1.0
+
+    return has_rotation or has_translation or has_magnification
+
+
 def rebin(array, new_shape, method='average'):
     """Resize array to new dimensions."""
     

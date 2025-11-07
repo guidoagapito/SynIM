@@ -106,25 +106,36 @@ def projection_matrix_former(pup_diam_m, pup_mask,
     Legacy function - used only for testing the new implementation.
     Computes a projection matrix using the old method.
     """
+    
+    # *** IMPORT NEEDED FUNCTION ***
+    from synim.synpm import transpose_base_array_for_specula
 
-    # *** SPECULA CONVENTION: Transpose input arrays ***
+    # *** SPECULA CONVENTION: Save original mask FIRST ***
     if specula_convention:
+        # Save ORIGINAL mask BEFORE transposing
+        pup_mask_original = pup_mask.copy()
+        
+        # Transpose arrays
         dm_array = np.transpose(dm_array, (1, 0, 2))
         dm_mask = np.transpose(dm_mask)
         pup_mask = np.transpose(pup_mask)
 
-        # *** FIX: Transpose base_inv_array if 3D ***
-        if base_inv_array.ndim == 3:
-            base_inv_array = np.transpose(base_inv_array, (1, 0, 2))
+        # *** USE HELPER FUNCTION WITH ORIGINAL MASK ***
+        base_inv_array = transpose_base_array_for_specula(
+            base_inv_array,
+            pup_mask_original,  # Pass ORIGINAL (non-transposed) mask
+            verbose=False
+        )
 
     trans_dm_array, trans_dm_mask, trans_pup_mask = update_dm_pup(
         pup_diam_m, pup_mask, dm_array, dm_mask, dm_height, dm_rotation,
         base_rotation, base_translation, base_magnification,
-        gs_pol_coo, gs_height, verbose=verbose, specula_convention=False  # Already transposed above
+        gs_pol_coo, gs_height, verbose=verbose, 
+        specula_convention=False  # Already transposed above
     )
 
     # Create mask for valid pixels (both in DM and pupil)
-    valid_mask = trans_dm_mask * trans_pup_mask
+    valid_mask = trans_pup_mask.copy() #trans_dm_mask * trans_pup_mask
 
     # *** USE INDICES INSTEAD OF BOOLEAN MASK ***
     idx_valid = np.where(valid_mask > 0.5)
@@ -161,7 +172,6 @@ def projection_matrix_former(pup_diam_m, pup_mask,
     projection = np.dot(dm_valid_values.T, base_valid_values)
 
     return projection
-
 
 # ============================================================================
 # TESTS
@@ -246,7 +256,8 @@ class TestProjection(unittest.TestCase):
             self.dm_height, self.dm_rotation,
             base_rotation, base_translation, base_magnification,
             gs_pol_coo, gs_height,
-            verbose=False, specula_convention=True
+            verbose=False, specula_convention=True,
+            specula_convention_inv=True
         )
 
         plot_debug = False
@@ -299,7 +310,8 @@ class TestProjection(unittest.TestCase):
             self.dm_height, self.dm_rotation,
             base_rotation, base_translation, base_magnification,
             gs_pol_coo, gs_height,
-            verbose=False, specula_convention=True
+            verbose=False, specula_convention=True,
+            specula_convention_inv=True
         )
 
         np.testing.assert_allclose(pm_former, pm_new, rtol=1e-6, atol=1e-8,
@@ -331,7 +343,8 @@ class TestProjection(unittest.TestCase):
             self.dm_height, self.dm_rotation,
             base_rotation, base_translation, base_magnification,
             gs_pol_coo, gs_height,
-            verbose=False, specula_convention=True
+            verbose=False, specula_convention=True,
+            specula_convention_inv=True
         )
 
         np.testing.assert_allclose(pm_former, pm_new, rtol=1e-6, atol=1e-8,
@@ -363,7 +376,8 @@ class TestProjection(unittest.TestCase):
             self.dm_height, self.dm_rotation,
             base_rotation, base_translation, base_magnification,
             gs_pol_coo, gs_height,
-            verbose=False, specula_convention=True
+            verbose=False, specula_convention=True,
+            specula_convention_inv=True
         )
 
         np.testing.assert_allclose(pm_former, pm_new, rtol=1e-6, atol=1e-8,
@@ -397,7 +411,8 @@ class TestProjection(unittest.TestCase):
             dm_height, self.dm_rotation,
             base_rotation, base_translation, base_magnification,
             gs_pol_coo, gs_height,
-            verbose=False, specula_convention=True
+            verbose=False, specula_convention=True,
+            specula_convention_inv=True
         )
 
         np.testing.assert_allclose(pm_former, pm_new, rtol=1e-6, atol=1e-8,
