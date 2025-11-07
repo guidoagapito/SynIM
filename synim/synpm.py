@@ -10,7 +10,7 @@ from synim.utils import (
     dm3d_to_2d
 )
 
-def _transpose_base_array_for_specula(base_inv_array, pup_mask_original, verbose=False):
+def transpose_base_array_for_specula(base_inv_array, pup_mask_original, verbose=False):
     """
     Transpose base_inv_array for SPECULA convention.
     
@@ -74,7 +74,7 @@ def _transpose_base_array_for_specula(base_inv_array, pup_mask_original, verbose
             # IFuncInv format with only valid pixels: (npixels_valid, nmodes)
             format_name = "IFuncInv (valid pixels only)"
             base_2d = base_inv_array.T
-            
+
         else:
             # Cannot determine format
             if verbose:
@@ -110,6 +110,9 @@ def _transpose_base_array_for_specula(base_inv_array, pup_mask_original, verbose
             # *** USE dm3d_to_2d TO EXTRACT ***
             base_2d_transposed = dm3d_to_2d(base_3d_transposed, pup_mask_transposed)
 
+            # normalize by number of valid pixels
+            base_2d_transposed /= n_valid_pixels
+
             if verbose:
                 print(f"  Re-extracted to 2D with dm3d_to_2d: {base_2d_transposed.shape}")
 
@@ -136,7 +139,8 @@ def projection_matrix(pup_diam_m, pup_mask,
                       dm_rotation, base_rotation,
                       base_translation, base_magnification,
                       gs_pol_coo, gs_height,
-                      verbose=False, specula_convention=True):
+                      verbose=False, specula_convention=True,
+                      specula_convention_inv=False):
     """
     Computes a projection matrix for DM modes onto a desired basis.
     Uses intelligent workflow selection like interaction_matrix.
@@ -160,6 +164,7 @@ def projection_matrix(pup_diam_m, pup_mask,
     - gs_height: float, altitude of the guide star
     - verbose: bool, optional, display verbose output
     - specula_convention: bool, optional, use SPECULA convention (transpose arrays)
+    - specula_convention_inv: bool, optional, use SPECULA convention for base_inv_array
 
     Returns:
     - projection: numpy 2D array, projection matrix (n_dm_modes, n_base_modes)
@@ -210,12 +215,13 @@ def projection_matrix(pup_diam_m, pup_mask,
         dm_mask = np.transpose(dm_mask)
         pup_mask = np.transpose(pup_mask)
 
-        # *** USE HELPER FUNCTION WITH ORIGINAL MASK ***
-        base_inv_array = _transpose_base_array_for_specula(
-            base_inv_array,
-            pup_mask_original,  # Pass original mask!
-            verbose=False
-        )
+        if specula_convention_inv:
+            # *** USE HELPER FUNCTION WITH ORIGINAL MASK ***
+            base_inv_array = transpose_base_array_for_specula(
+                base_inv_array,
+                pup_mask_original,  # Pass original mask!
+                verbose=False
+            )
 
     # ================================================================
     # STEP 3: Setup basic parameters
@@ -364,7 +370,7 @@ def projection_matrix(pup_diam_m, pup_mask,
     # ================================================================
     # STEP 6: Find valid pixels (intersection of DM and pupil)
     # ================================================================
-    valid_mask = trans_dm_mask * trans_pup_mask
+    valid_mask = trans_pup_mask.copy() #trans_dm_mask * trans_pup_mask
     idx_valid = np.where(valid_mask > 0.5)  # Returns tuple: (row_indices, col_indices)
     n_valid_pixels = len(idx_valid[0])
 
@@ -376,9 +382,6 @@ def projection_matrix(pup_diam_m, pup_mask,
     # ================================================================
     # trans_dm_array shape: (height, width, n_modes)
     # We want: (n_valid_pixels, n_modes)
-
-    height, width, n_modes = trans_dm_array.shape
-
     # Use advanced indexing: extract all modes at valid pixel locations
     dm_valid_values = trans_dm_array[idx_valid[0], idx_valid[1], :]
     # Result shape: (n_valid_pixels, n_modes)

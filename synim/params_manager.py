@@ -4,7 +4,7 @@ import numpy as np
 import matplotlib.pyplot as plt
 from astropy.io import fits
 import synim.synim as synim
-import synim.synpm as synpm
+import synim.synpm as synpm, transpose_base_array_for_specula
 
 # Import all utility functions from params_utils
 from synim.utils import *
@@ -1026,7 +1026,8 @@ class ParamsManager:
 
         # ==================== LOAD BASE (ONLY IF NEEDED) ====================
         if verbose_flag:
-            print(f"\n  Loading base inverse array (needed for {len(sources_needing_computation)} computations)...")
+            print(f"\n  Loading base inverse array (needed for"
+                  f" {len(sources_needing_computation)} computations)...")
 
         base_inv_array = self._load_base_inv_array(verbose_flag)
 
@@ -1063,88 +1064,64 @@ class ParamsManager:
                 if os.path.exists(pm_path) and not overwrite:
                     if verbose_flag:
                         print(f"  Exists: {pm_filename}")
-                    # Already added to saved_matrices in first pass
                     continue
+
+                if 'polar_coordinate' in source_config:
+                    gs_pol_coo = source_config.get('polar_coordinate')
+                elif 'polar_coordinates' in source_config:
+                    gs_pol_coo = source_config.get('polar_coordinates')
+                else:
+                    raise ValueError(f"No polar coordinates found for source {source_name}")
 
                 sources_to_compute.append({
                     'name': source_name,
                     'index': source_idx,
                     'filename': pm_filename,
                     'path': pm_path,
-                    'gs_pol_coo': source_config.get('polar_coordinates', [0.0, 0.0]),
+                    'gs_pol_coo': gs_pol_coo,
                     'gs_height': source_config.get('height', float('inf'))
                 })
 
             if not sources_to_compute:
                 continue
 
-            # ==================== CHECK IF ALL SOURCES SAME POSITION ====================
-            all_gs_same = all(
-                s['gs_pol_coo'] == sources_to_compute[0]['gs_pol_coo'] and
-                s['gs_height'] == sources_to_compute[0]['gs_height']
-                for s in sources_to_compute
-            )
+            # ==================== COMPUTE PROJECTION MATRICES ====================
+            # *** REMOVE the all_gs_same optimization - not applicable here ***
 
-            if all_gs_same and len(sources_to_compute) > 1:
-                # ========== OPTIMIZED: All sources same position ==========
+            if verbose_flag:
+                print(f"\n  Computing {len(sources_to_compute)} PMs individually")
+
+            for source_info in sources_to_compute:
                 if verbose_flag:
-                    print(f"\n  All {len(sources_to_compute)} sources at same position")
-                    print(f"  Using SINGLE projection_matrix call")
+                    print(f"\n  Processing {source_info['name']}:")
 
-                gs_pol_coo_ref = sources_to_compute[0]['gs_pol_coo']
-                gs_height_ref = sources_to_compute[0]['gs_height']
+                # Transpose ONCE using ORIGINAL pupil mask
+                base_inv_array_transposed = transpose_base_array_for_specula(
+                    base_inv_array,
+                    self.pup_mask,
+                    verbose=verbose_flag
+                )
 
                 pm = synpm.projection_matrix(
                     pup_diam_m=self.pup_diam_m,
                     pup_mask=self.pup_mask,
                     dm_array=component_params['dm_array'],
                     dm_mask=component_params['dm_mask'],
-                    base_inv_array=base_inv_array,
+                    base_inv_array=base_inv_array_transposed,
                     dm_height=component_params['dm_height'],
                     dm_rotation=component_params['dm_rotation'],
                     base_rotation=0.0,
                     base_translation=(0.0, 0.0),
                     base_magnification=(1.0, 1.0),
-                    gs_pol_coo=gs_pol_coo_ref,
-                    gs_height=gs_height_ref,
+                    gs_pol_coo=source_info['gs_pol_coo'],
+                    gs_height=source_info['gs_height'],
                     verbose=verbose_flag,
                     specula_convention=True
                 )
 
-                for source_info in sources_to_compute:
-                    self._save_projection_matrix(
-                        pm, source_info, comp_name, saved_matrices, verbose_flag
-                    )
-
-            else:
-                # ========== DIFFERENT POSITIONS: Compute individually ==========
-                if verbose_flag:
-                    print(f"\n  Computing {len(sources_to_compute)} PMs individually")
-
-                for source_info in sources_to_compute:
-                    if verbose_flag:
-                        print(f"\n  Processing {source_info['name']}:")
-
-                    pm = synpm.projection_matrix(
-                        pup_diam_m=self.pup_diam_m,
-                        pup_mask=self.pup_mask,
-                        dm_array=component_params['dm_array'],
-                        dm_mask=component_params['dm_mask'],
-                        base_inv_array=base_inv_array,
-                        dm_height=component_params['dm_height'],
-                        dm_rotation=component_params['dm_rotation'],
-                        base_rotation=0.0,
-                        base_translation=(0.0, 0.0),
-                        base_magnification=(1.0, 1.0),
-                        gs_pol_coo=source_info['gs_pol_coo'],
-                        gs_height=source_info['gs_height'],
-                        verbose=verbose_flag,
-                        specula_convention=True
-                    )
-
-                    self._save_projection_matrix(
-                        pm, source_info, comp_name, saved_matrices, verbose_flag
-                    )
+                self._save_projection_matrix(
+                    pm, source_info, comp_name, saved_matrices, verbose_flag
+                )
 
         if verbose_flag:
             print(f"\n{'='*60}")
