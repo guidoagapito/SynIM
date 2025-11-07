@@ -984,26 +984,6 @@ def prepare_interaction_matrix_params(params, wfs_type=None,
         'source_type': source_type
     }
 
-def extract_opt_list(config):
-    """ Find all optical sources in the config """
-    opt_sources = []
-    for key, value in config.items():
-        if key.startswith('source_opt'):
-            try:
-                index = int(key.replace('source_opt', ''))
-                opt_sources.append({
-                    'name': key,
-                    'index': index,
-                    'config': value
-                })
-            except ValueError:
-                # Skip if we can't extract a valid index
-                pass
-
-    # Sort by index
-    opt_sources.sort(key=lambda x: x['index'])
-
-    return opt_sources
 
 def extract_wfs_list(config):
     """Extract all WFS configurations from config"""
@@ -1054,6 +1034,7 @@ def extract_dm_list(config):
         })
 
     return dm_list
+
 
 def extract_layer_list(config):
     """Extract all layer configurations from config"""
@@ -1107,6 +1088,105 @@ def extract_source_info(config, wfs_name):
         source_info['wavelength'] = config['on_axis_source'].get('wavelengthInNm', 750)
 
     return source_info
+
+
+def extract_opt_list(params):
+    """
+    Extract list of optical sources (source_optX) from parameters.
+    
+    Args:
+        params (dict): Configuration dictionary
+        
+    Returns:
+        list: List of dictionaries with optical source information:
+            - 'name': Source name (e.g., 'source_opt1')
+            - 'index': Source index (1-based, as integer)
+            - 'config': Configuration dictionary for this source
+    """
+    opt_list = []
+
+    # Pattern to match source_optX keys
+    pattern = re.compile(r'^source_opt(\d+)$')
+
+    for key in params.keys():
+        match = pattern.match(key)
+        if match:
+            opt_index = int(match.group(1))
+            opt_list.append({
+                'name': key,
+                'index': opt_index,
+                'config': params[key]
+            })
+
+    # Sort by index
+    opt_list.sort(key=lambda x: x['index'])
+
+    return opt_list
+
+
+def validate_opt_sources(params, verbose=False):
+    """
+    Validate optical source configurations.
+    
+    Args:
+        params (dict): Configuration dictionary
+        verbose (bool): Whether to print validation messages
+        
+    Returns:
+        bool: True if all sources are valid
+        
+    Raises:
+        ValueError: If validation fails
+    """
+    opt_list = extract_opt_list(params)
+
+    if len(opt_list) == 0:
+        if verbose:
+            print("Warning: No optical sources (source_optX) found in configuration")
+        return True
+
+    required_fields = ['polar_coordinate']
+    optional_fields = ['height', 'weight']
+
+    for opt in opt_list:
+        opt_name = opt['name']
+        opt_config = opt['config']
+
+        # Check required fields
+        for field in required_fields:
+            if field not in opt_config:
+                raise ValueError(f"{opt_name} missing required field: {field}")
+
+        # Validate polar_coordinate format
+        pol_coo = opt_config['polar_coordinate']
+        if not isinstance(pol_coo, (list, tuple)) or len(pol_coo) != 2:
+            raise ValueError(
+                f"{opt_name}.polar_coordinate must be [distance, angle], "
+                f"got {pol_coo}"
+            )
+
+        # Set defaults for optional fields
+        if 'height' not in opt_config:
+            opt_config['height'] = float('inf')
+            if verbose:
+                print(f"{opt_name}: height not specified, using infinity (NGS)")
+
+        if 'weight' not in opt_config:
+            opt_config['weight'] = 1.0
+            if verbose:
+                print(f"{opt_name}: weight not specified, using 1.0")
+
+    if verbose:
+        print(f"✓ Validated {len(opt_list)} optical sources")
+        for opt in opt_list:
+            pol_coo = opt['config']['polar_coordinate']
+            height = opt['config']['height']
+            weight = opt['config']['weight']
+            h_str = f"{height:.0f}m" if not np.isinf(height) else "∞ (NGS)"
+            print(f"  {opt['name']}: [{pol_coo[0]:.1f}\", {pol_coo[1]:.0f}°] "
+                  f"h={h_str}, w={weight:.2f}")
+
+    return True
 
 
 def generate_im_filename(params_file, wfs_type=None,
@@ -1352,6 +1432,7 @@ def generate_pm_filename(config_file, opt_index=None,
     filename = "_".join(parts) + ".fits"
     return filename
 
+
 def generate_pm_filenames(config_file, timestamp=False):
     """
     Generate projection matrix filenames for all optical source and DM combinations.
@@ -1422,7 +1503,9 @@ def generate_pm_filenames(config_file, timestamp=False):
 
     return filenames
 
-def compute_mmse_reconstructor(interaction_matrix, C_atm, noise_variance=None, C_noise=None,
+
+def compute_mmse_reconstructor(interaction_matrix, C_atm,
+                              noise_variance=None, C_noise=None,
                               cinverse=False, verbose=False):
     """
     Compute the Minimum Mean Square Error (MMSE) reconstructor.
@@ -1522,7 +1605,8 @@ def compute_mmse_reconstructor(interaction_matrix, C_atm, noise_variance=None, C
         print("Computing H = A' Cz^(-1) A + Cx^(-1)")
 
     # Check if C_noise_inv is scalar
-    if isinstance(C_noise_inv, (int, float)) or (hasattr(C_noise_inv, 'size') and C_noise_inv.size == 1):
+    if isinstance(C_noise_inv, (int, float)) \
+        or (hasattr(C_noise_inv, 'size') and C_noise_inv.size == 1):
         H = C_noise_inv * np.dot(A.T, A) + C_atm_inv
     else:
         H = np.dot(A.T, np.dot(C_noise_inv, A)) + C_atm_inv
@@ -1542,7 +1626,8 @@ def compute_mmse_reconstructor(interaction_matrix, C_atm, noise_variance=None, C
         print("Computing W = H^(-1) A' Cz^(-1)")
 
     # Check if C_noise_inv is scalar
-    if isinstance(C_noise_inv, (int, float)) or (hasattr(C_noise_inv, 'size') and C_noise_inv.size == 1):
+    if isinstance(C_noise_inv, (int, float)) \
+        or (hasattr(C_noise_inv, 'size') and C_noise_inv.size == 1):
         W_mmse = C_noise_inv * np.dot(H_inv, A.T)
     else:
         W_mmse = np.dot(H_inv, np.dot(A.T, C_noise_inv))
@@ -1552,3 +1637,29 @@ def compute_mmse_reconstructor(interaction_matrix, C_atm, noise_variance=None, C
         print(f"Matrix shape: {W_mmse.shape}")
 
     return W_mmse
+
+
+__all__ = [
+    'parse_params_file',
+    'is_simple_config',
+    'extract_wfs_list',
+    'extract_dm_list',
+    'extract_layer_list',
+    'extract_opt_list',
+    'validate_opt_sources',
+    'load_pupilstop',  # *** ADD THIS ***
+    'load_influence_functions',  # *** ADD THIS TOO ***
+    'find_subapdata',  # *** AND THIS ***
+    'extract_source_coordinates',
+    'extract_source_info',
+    'determine_source_type',
+    'wfs_fov_from_config',
+    'build_source_filename_part',
+    'build_pupil_filename_part',
+    'build_wfs_filename_part',
+    'build_component_filename_part',
+    'generate_im_filename',
+    'generate_pm_filename',
+    'generate_pm_filenames',
+    'compute_mmse_reconstructor',
+]

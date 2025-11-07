@@ -2,6 +2,7 @@ import os
 import re
 import numpy as np
 import matplotlib.pyplot as plt
+from astropy.io import fits
 import synim.synim as synim
 import synim.synpm as synpm
 
@@ -14,6 +15,7 @@ specula.init(device_idx=-1, precision=1)
 
 from specula.calib_manager import CalibManager
 from specula.data_objects.intmat import Intmat
+from specula.data_objects.recmat import Recmat
 from specula.lib.modal_base_generator import compute_ifs_covmat
 
 class ParamsManager:
@@ -69,6 +71,8 @@ class ParamsManager:
                 print(f"  WFS: {wfs['name']} (type: {wfs['type']}, index: {wfs['index']})")
             for dm in self.dm_list:
                 print(f"  DM: {dm['name']} (index: {dm['index']})")
+           # Validate optical sources if present
+            validate_opt_sources(self.params, verbose=True)
 
         # Pre-load pupil mask
         self.pup_mask = self._load_pupil_mask()
@@ -695,7 +699,7 @@ class ParamsManager:
         return saved_matrices
 
 
-    def assemble_interaction_matrices(self, wfs_type='ngs', output_im_dir=None, 
+    def assemble_interaction_matrices(self, wfs_type='ngs', output_im_dir=None,
                                     component_type='dm', save=False):
         """
         Assemble interaction matrices for a specific type of WFS into
@@ -952,7 +956,6 @@ class ParamsManager:
             output_dir (str, optional): Output directory for saved matrices
             overwrite (bool, optional): Whether to overwrite existing files
             verbose (bool, optional): Override the class's verbose setting
-            display (bool, optional): Whether to display plots
 
         Returns:
             dict: Dictionary mapping Source-Component pairs to saved projection matrix paths
@@ -968,9 +971,6 @@ class ParamsManager:
         # Use verbose flag from instance if not overridden
         verbose_flag = self.verbose if verbose is None else verbose
 
-        # ==================== LOAD BASE (ONCE) ====================
-        base_inv_array = self._load_base_inv_array(verbose_flag)
-
         # ==================== GET COMPONENTS ====================
         components = []
         for dm in self.dm_list:
@@ -983,6 +983,52 @@ class ParamsManager:
 
         if verbose_flag:
             print(f"Computing PMs for {len(opt_sources)} sources × {len(components)} components")
+
+        # ==================== CHECK WHICH FILES NEED COMPUTATION ====================
+        # First pass: check which files exist to avoid loading base unnecessarily
+        all_files_exist = True
+        sources_needing_computation = []
+
+        for component in components:
+            comp_idx = component['index']
+            comp_type = component['type']
+
+            for source in opt_sources:
+                source_idx = source['index']
+
+                pm_filename = generate_pm_filename(
+                    self.params_file, opt_index=source_idx,
+                    dm_index=comp_idx if comp_type == 'dm' else None,
+                    layer_index=comp_idx if comp_type == 'layer' else None
+                )
+                pm_path = os.path.join(output_dir, pm_filename)
+
+                if not os.path.exists(pm_path) or overwrite:
+                    all_files_exist = False
+                    sources_needing_computation.append({
+                        'component': component,
+                        'source': source
+                    })
+
+                    if verbose_flag:
+                        status = "will overwrite" if os.path.exists(pm_path) else "missing"
+                        print(f"  {pm_filename}: {status}")
+                else:
+                    # File exists and not overwriting - add to saved_matrices
+                    saved_matrices[f"{source['name']}_{component['name']}"] = pm_path
+
+        # ==================== EARLY EXIT IF ALL FILES EXIST ====================
+        if all_files_exist and not overwrite:
+            if verbose_flag:
+                print(f"\n✓ All {len(saved_matrices)} projection matrices already exist")
+                print(f"  Set overwrite=True to recompute")
+            return saved_matrices
+
+        # ==================== LOAD BASE (ONLY IF NEEDED) ====================
+        if verbose_flag:
+            print(f"\n  Loading base inverse array (needed for {len(sources_needing_computation)} computations)...")
+
+        base_inv_array = self._load_base_inv_array(verbose_flag)
 
         # ==================== PROCESS EACH COMPONENT ====================
         for component in components:
@@ -1017,7 +1063,7 @@ class ParamsManager:
                 if os.path.exists(pm_path) and not overwrite:
                     if verbose_flag:
                         print(f"  Exists: {pm_filename}")
-                    saved_matrices[f"{source_name}_{comp_name}"] = pm_path
+                    # Already added to saved_matrices in first pass
                     continue
 
                 sources_to_compute.append({
@@ -1033,7 +1079,6 @@ class ParamsManager:
                 continue
 
             # ==================== CHECK IF ALL SOURCES SAME POSITION ====================
-            # This determines if we can use multi-base optimization
             all_gs_same = all(
                 s['gs_pol_coo'] == sources_to_compute[0]['gs_pol_coo'] and
                 s['gs_height'] == sources_to_compute[0]['gs_height']
@@ -1046,17 +1091,15 @@ class ParamsManager:
                     print(f"\n  All {len(sources_to_compute)} sources at same position")
                     print(f"  Using SINGLE projection_matrix call")
 
-                # Use FIRST source's position (they're all the same)
                 gs_pol_coo_ref = sources_to_compute[0]['gs_pol_coo']
                 gs_height_ref = sources_to_compute[0]['gs_height']
 
-                # *** SINGLE CALL ***
                 pm = synpm.projection_matrix(
                     pup_diam_m=self.pup_diam_m,
                     pup_mask=self.pup_mask,
                     dm_array=component_params['dm_array'],
                     dm_mask=component_params['dm_mask'],
-                    base_inv_array=base_inv_array,  # Same for all!
+                    base_inv_array=base_inv_array,
                     dm_height=component_params['dm_height'],
                     dm_rotation=component_params['dm_rotation'],
                     base_rotation=0.0,
@@ -1068,7 +1111,6 @@ class ParamsManager:
                     specula_convention=True
                 )
 
-                # *** SAVE SAME PM FOR ALL SOURCES ***
                 for source_info in sources_to_compute:
                     self._save_projection_matrix(
                         pm, source_info, comp_name, saved_matrices, verbose_flag
@@ -1112,7 +1154,7 @@ class ParamsManager:
         return saved_matrices
 
 
-    def compute_projection_matrix(self, regFactor=1e-8, output_dir=None, save=False):
+    def compute_projection_matrix(self, reg_factor=1e-8, output_dir=None, save=False):
         """
         Assemble 4D projection matrices from individual PM files and
         calculate the final projection matrix using the full DM and layer matrices.
@@ -1120,7 +1162,7 @@ class ParamsManager:
         Optimized version: loads each DM/layer only once and iterates over optical sources.
         
         Args:
-            regFactor (float, optional): Regularization factor for the pseudoinverse calculation.
+            reg_factor (float, optional): Regularization factor for the pseudoinverse calculation.
                 Default is 1e-8.
             output_dir (str, optional): Directory where PM files are stored and where
                 assembled matrices will be saved.
@@ -1321,11 +1363,11 @@ class ParamsManager:
 
         # Pseudoinverse with regularization
         if self.verbose:
-            print(f"\nApplying regularization (regFactor={regFactor})")
+            print(f"\nApplying regularization (reg_factor={reg_factor})")
 
         eps = 1e-14
         tpdm_pdm_inv = np.linalg.pinv(
-            tpdm_pdm + regFactor * np.eye(tpdm_pdm.shape[0]),
+            tpdm_pdm + reg_factor * np.eye(tpdm_pdm.shape[0]),
             rcond=eps
         )
         p_opt = tpdm_pdm_inv @ tpdm_pl
@@ -1338,20 +1380,20 @@ class ParamsManager:
         return p_opt, pm_full_dm, pm_full_layer
 
 
-    def compute_tomographic_projection_matrix(self, regFactor=1e-8,
+    def compute_tomographic_projection_matrix(self, reg_factor=1e-8,
                                             output_dir=None, save=False,
                                             verbose=None):
         """
         Compute tomographic projection matrix following IDL compute_mcao_popt logic.
         
         Implements the standard MCAO projection:
-            p_opt = (P_DM^T @ P_DM + regFactor*I)^(-1) @ P_DM^T @ P_Layer
+            p_opt = (P_DM^T @ P_DM + reg_factor*I)^(-1) @ P_DM^T @ P_Layer
         
         where P_DM and P_Layer are weighted combinations of projection matrices
         from multiple optical sources.
         
         Args:
-            regFactor (float): Tikhonov regularization factor (default: 1e-8)
+            reg_factor (float): Tikhonov regularization factor (default: 1e-8)
             output_dir (str, optional): Directory where PM files are stored
             save (bool): Whether to save the projection matrix to disk
             verbose (bool, optional): Override the class's verbose setting
@@ -1370,13 +1412,13 @@ class ParamsManager:
             print(f"\n{'='*60}")
             print(f"Computing Tomographic Projection Matrix")
             print(f"{'='*60}")
-            print(f"  Regularization factor: {regFactor}")
+            print(f"  Regularization factor: {reg_factor}")
             print(f"{'='*60}\n")
 
         # ==================== LOAD FULL PM MATRICES ====================
         # Reuse existing function to load/compute all projection matrices
         _, pm_full_dm, pm_full_layer = self.compute_projection_matrix(
-            regFactor=regFactor,
+            reg_factor=reg_factor,
             output_dir=output_dir,
             save=False  # Don't save intermediate matrices
         )
@@ -1391,6 +1433,12 @@ class ParamsManager:
         # ==================== GET OPTICAL SOURCE WEIGHTS ====================
         opt_sources = extract_opt_list(self.params)
         n_opt = len(opt_sources)
+
+        if n_opt == 0:
+            raise ValueError(
+                "No optical sources (source_optX) found in configuration. "
+                "Cannot compute tomographic projection matrix."
+            )
 
         weights_array = np.array([src['config'].get('weight', 1.0) for src in opt_sources])
         total_weight = np.sum(weights_array)
@@ -1439,9 +1487,9 @@ class ParamsManager:
             print(f"\n{'='*60}")
             print(f"Applying Tikhonov Regularization")
             print(f"{'='*60}")
-            print(f"  Adding regFactor * I to P_DM^T @ P_DM")
+            print(f"  Adding reg_factor * I to P_DM^T @ P_DM")
 
-        tpdm_pdm_reg = tpdm_pdm + regFactor * np.eye(n_dm_modes)
+        tpdm_pdm_reg = tpdm_pdm + reg_factor * np.eye(n_dm_modes)
 
         # ==================== PSEUDOINVERSE ====================
         if verbose_flag:
@@ -1466,7 +1514,7 @@ class ParamsManager:
             print(f"{'='*60}")
             print(f"  p_opt = (P_DM^T @ P_DM + λI)^(-1) @ P_DM^T @ P_Layer")
 
-        # p_opt = (tpdm_pdm + regFactor*I)^(-1) @ tpdm_pl
+        # p_opt = (tpdm_pdm + reg_factor*I)^(-1) @ tpdm_pl
         p_opt = tpdm_pdm_inv @ tpdm_pl
 
         if verbose_flag:
@@ -1477,18 +1525,47 @@ class ParamsManager:
         if save and output_dir is not None:
             os.makedirs(output_dir, exist_ok=True)
 
-            # Save main projection matrix
-            p_opt_path = os.path.join(output_dir, "p_opt_tomographic.npy")
-            np.save(p_opt_path, p_opt)
+            # *** SAVE AS RECMAT (SPECULA FORMAT) ***
+            if verbose_flag:
+                print(f"\n{'='*60}")
+                print(f"Saving Results")
+                print(f"{'='*60}")
 
-            # Also save the intermediate matrices for debugging
+            # Create Recmat object for p_opt
+            # Note: Recmat expects shape (n_modes, n_slopes)
+            # p_opt has shape (n_dm_modes, n_layer_modes)
+            # In this context: DM modes are the "output modes" and Layer modes are the "input slopes"
+            recmat_obj = Recmat(
+                recmat=p_opt,
+                norm_factor=1.0,  # No normalization applied
+                target_device_idx=self.target_device_idx if hasattr(self, 'target_device_idx') else None,
+                precision=self.precision if hasattr(self, 'precision') else None
+            )
+
+            # Generate filename following SPECULA convention
+            config_name = (os.path.basename(self.params_file).split('.')[0]
+                        if isinstance(self.params_file, str) else "config")
+
+            # Filename pattern: rec_<config>_tomographic_r<reg_factor>.fits
+            rec_filename = f"rec_{config_name}_tomographic_r{reg_factor:.0e}.fits"
+            rec_path = os.path.join(output_dir, rec_filename)
+
+            # Save as FITS (SPECULA format)
+            recmat_obj.save(rec_path, overwrite=True)
+
+            if verbose_flag:
+                print(f"  ✓ Saved tomographic reconstruction matrix (SPECULA format):")
+                print(f"    {rec_filename}")
+                print(f"    Shape: {p_opt.shape} (n_dm_modes, n_layer_modes)")
+                print(f"    Norm factor: {recmat_obj.norm_factor}")
+
+            # Also save intermediate matrices as numpy arrays for debugging
             np.save(os.path.join(output_dir, "tpdm_pdm.npy"), tpdm_pdm)
             np.save(os.path.join(output_dir, "tpdm_pl.npy"), tpdm_pl)
             np.save(os.path.join(output_dir, "tpdm_pdm_reg.npy"), tpdm_pdm_reg)
 
             if verbose_flag:
-                print(f"\n  ✓ Saved matrices to {output_dir}:")
-                print(f"    - p_opt_tomographic.npy")
+                print(f"\n  ✓ Also saved debug matrices (NumPy format):")
                 print(f"    - tpdm_pdm.npy (P_DM^T @ P_DM)")
                 print(f"    - tpdm_pl.npy (P_DM^T @ P_Layer)")
                 print(f"    - tpdm_pdm_reg.npy (with regularization)")
@@ -1500,9 +1577,11 @@ class ParamsManager:
             'n_layer_modes': n_layer_modes,
             'n_pupil_modes': n_pupil_modes,
             'weights': weights_array,
-            'regFactor': regFactor,
+            'reg_factor': reg_factor,
             'condition_number': cond_number,
-            'rcond': rcond
+            'rcond': rcond,
+            'rec_filename': rec_filename if save else None,  # *** ADD FILENAME ***
+            'rec_path': rec_path if save else None  # *** ADD PATH ***
         }
 
         if verbose_flag:
@@ -1573,8 +1652,6 @@ class ParamsManager:
                 - 'L0': Outer scale used
                 - 'files': List of file paths (saved or loaded)
         """
-        from specula.lib.modal_base_generator import compute_ifs_covmat
-        from astropy.io import fits
 
         verbose_flag = self.verbose if verbose is None else verbose
 
@@ -1648,14 +1725,7 @@ class ParamsManager:
 
             # Total modes available
             total_modes = comp_params['dm_array'].shape[2]
-            n_modes_per_component.append(total_modes)
-
-            # Determine modes to use
-            if full_modes:
-                modes_to_use = list(range(total_modes))
-            else:
-                modes_to_use = list(range(start_mode, total_modes))
-
+            modes_to_use = list(range(total_modes))
             n_modes = len(modes_to_use)
 
             if verbose_flag:
@@ -1759,7 +1829,9 @@ class ParamsManager:
             hdu.header['DIAMM'] = (self.pup_diam_m, 'Pupil diameter [m]')
             hdu.header['WAVELNM'] = (wavelengthInNm, 'Wavelength [nm]')
             hdu.header['NMODES'] = (n_modes, 'Number of modes')
-            hdu.header['STARTMOD'] = (start_mode, 'Start mode index')
+            hdu.header['STARTMOD'] = (0, 'Covariance includes ALL modes from 0')
+            hdu.header['TOTMODES'] = (total_modes, 'Total modes in covariance')
+            hdu.header['REFSTART'] = (start_mode, 'Reference start_mode (not applied)')
             hdu.header['COMPTAG'] = (base_tag, 'Component tag')
             hdu.header['COMPTYPE'] = (component_type, 'Component type (dm/layer)')
             hdu.header['COMPIDX'] = (comp_idx, 'Component index')
@@ -1837,7 +1909,8 @@ class ParamsManager:
                     else:
                         start_mode = 0
 
-                    mode_indices.append(list(range(start_mode, start_mode + n_modes_cfg)))
+                    n_total = C_atm_blocks[i].shape[0]
+                    mode_indices.append(list(range(start_mode, n_total)))
                 else:
                     mode_indices.append([])
 

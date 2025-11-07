@@ -833,3 +833,25 @@ def dm2d_to_3d(dm_array, mask, normalize=True):
         dm_array_3d[:, :, i] = dm_i_3d
 
     return dm_array_3d
+
+
+__all__ = [
+    # Mask creation and manipulation
+    'make_mask',
+    'make_orto_modes',
+    'apply_mask',
+
+    # DM array conversions
+    'dm3d_to_2d',
+    'dm2d_to_3d',
+
+    # Array transformations
+    'rebin',
+    'rotshiftzoom_array',
+    'shiftzoom_from_source_dm_params',
+    'has_transformations',
+
+    # Extrapolation functions
+    'apply_extrapolation',
+    'calculate_extrapolation_indices_coeffs'
+]
