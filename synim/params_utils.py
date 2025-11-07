@@ -1395,8 +1395,13 @@ def generate_pm_filename(config_file, opt_index=None,
         source_coords = source_config.get('polar_coordinate', [0.0, 0.0])
     source_height = source_config.get('height', float('inf'))
 
-    # Extract component height
-    component_height = selected_component['config'].get('height', 0)
+    # Extract component configuration
+    component_config = selected_component['config']
+    component_height = component_config.get('height', 0)
+    
+    # *** NEW: Extract nmodes and start_mode ***
+    component_nmodes = component_config.get('nmodes', None)
+    component_start_mode = component_config.get('start_mode', 0)
 
     # Generate filename parts
     base_name = "PM_syn"
@@ -1413,14 +1418,27 @@ def generate_pm_filename(config_file, opt_index=None,
     if not np.isinf(source_height):
         parts.append(f"h{source_height:.0f}")
 
-    # Add component-specific parts including height
-    comp_part = build_component_filename_part(
-        selected_component['config'],
-        component_type,
-        include_height=True
-    )
-    if comp_part:
-        parts.append(comp_part)
+    # *** MODIFIED: Component part - always use "dm" prefix, include modes info ***
+    # Component height
+    parts.append(f"dmH{component_height:.1f}")
+    
+    # *** NEW: Add modes information ***
+    if component_nmodes is not None:
+        if component_start_mode > 0:
+            # Format: mn{nmodes}s{start_mode}
+            # Actual modes used = nmodes - start_mode
+            actual_modes = component_nmodes - component_start_mode
+            parts.append(f"mn{actual_modes}s{component_start_mode}")
+        else:
+            # Format: mn{nmodes}
+            parts.append(f"mn{component_nmodes}")
+    
+    # Add ifunc/m2c tags
+    if 'ifunc_tag' in component_config:
+        parts.append(f"ifunc_{component_config['ifunc_tag']}")
+
+    if 'm2c_tag' in component_config:
+        parts.append(f"m2c_{component_config['m2c_tag']}")
 
     # Add timestamp if requested
     if timestamp:
