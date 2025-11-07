@@ -788,7 +788,7 @@ class ParamsManager:
             for comp in component_list:
                 comp_idx = int(comp['index'])
                 comp_params = self.get_component_params(
-                    comp_idx, 
+                    comp_idx,
                     is_layer=(component_type == 'layer')
                 )
                 n_modes = comp_params['dm_array'].shape[2]
