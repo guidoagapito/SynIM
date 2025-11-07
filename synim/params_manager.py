@@ -2,16 +2,21 @@ import os
 import re
 import numpy as np
 import matplotlib.pyplot as plt
+from astropy.io import fits
 import synim.synim as synim
+import synim.synpm as synpm
 
-# Import all utility functions from params_common_utils
+# Import all utility functions from params_utils
 from synim.utils import *
+from synim.params_utils import *
 
 import specula
 specula.init(device_idx=-1, precision=1)
 
 from specula.calib_manager import CalibManager
 from specula.data_objects.intmat import Intmat
+from specula.data_objects.recmat import Recmat
+from specula.lib.modal_base_generator import compute_ifs_covmat
 
 class ParamsManager:
     """
@@ -66,6 +71,8 @@ class ParamsManager:
                 print(f"  WFS: {wfs['name']} (type: {wfs['type']}, index: {wfs['index']})")
             for dm in self.dm_list:
                 print(f"  DM: {dm['name']} (index: {dm['index']})")
+           # Validate optical sources if present
+            validate_opt_sources(self.params, verbose=True)
 
         # Pre-load pupil mask
         self.pup_mask = self._load_pupil_mask()
@@ -82,10 +89,19 @@ class ParamsManager:
             numpy.ndarray: Pupil mask array
         """
         pup_mask = None
+        pupilstop_params = None
         if 'pupilstop' in self.params:
             pupilstop_params = self.params['pupilstop']
-            pup_mask = load_pupilstop(self.cm, pupilstop_params, self.pixel_pupil, self.pixel_pitch,
-                                    verbose=self.verbose)
+            if self.verbose:
+                print("Found 'pupilstop' in params")
+        elif 'pupil_stop' in self.params:
+            pupilstop_params = self.params['pupil_stop']
+            if self.verbose:
+                print("Found 'pupil_stop' in params")
+        if pupilstop_params is None:
+            raise ValueError("Pupilstop parameters not found in configuration")
+        pup_mask = load_pupilstop(self.cm, pupilstop_params, self.pixel_pupil, self.pixel_pitch,
+                                verbose=self.verbose)
 
         # If no pupilstop defined, create a default circular pupil
         if pup_mask is None:
@@ -98,6 +114,8 @@ class ParamsManager:
                 precision=0
             )
             pup_mask = pupilstop.A
+
+        print('---> valid pixels: ', np.sum(pup_mask > 0.5))
 
         return pup_mask
 
@@ -144,7 +162,7 @@ class ParamsManager:
 
         return out
 
-    def get_dm_params(self, component_idx, is_layer=False, cut_start_mode=False):
+    def get_component_params(self, component_idx, is_layer=False, cut_start_mode=False):
         """
         Get DM or layer parameters, loading from cache if available.
 
@@ -155,43 +173,36 @@ class ParamsManager:
         Returns:
             dict: DM or layer parameters
         """
-        # Convert to string for dictionary lookup
-        component_idx_str = str(component_idx)
-
-        # Determine component type
         component_type = "layer" if is_layer else "dm"
-        cache_key = f"{component_type}_{component_idx_str}"
+        cache_key = f"{component_type}_{component_idx}"
 
-        # Check if already in cache
         if cache_key in self.dm_cache:
             return self.dm_cache[cache_key]
 
-        # Find the component in the config
-        component_key = f"{component_type}{component_idx_str}"
+        # Try with index first (dm1, dm2, layer1, layer2...)
+        component_key = f"{component_type}{component_idx}"
 
+        # If not found and it's a DM with index 1, try without index (simple SCAO case)
         if component_key not in self.params:
-            raise ValueError(f"{component_type.capitalize()} with index {component_idx} not found in configuration")
+            if component_type == "dm" and component_idx == 1 and "dm" in self.params:
+                component_key = "dm"
+            else:
+                raise ValueError(f"{component_type.capitalize()} {component_idx} not found")
 
         component_params = self.params[component_key]
+        dm_array, dm_mask = load_influence_functions(
+            self.cm, component_params, self.pixel_pupil, verbose=self.verbose
+        )
 
-        # Load influence functions
-        dm_array, dm_mask = load_influence_functions(self.cm, component_params, self.pixel_pupil, verbose=self.verbose)
+        if cut_start_mode and 'start_mode' in component_params:
+            dm_array = dm_array[:, :, component_params['start_mode']:]
 
-        if cut_start_mode:
-            if 'start_mode' in component_params:
-                dm_array = dm_array[:,:,component_params['start_mode']:]
-
-        # Extract other parameters
-        dm_height = component_params.get('height', 0.0)
-        dm_rotation = component_params.get('rotation', 0.0)
-
-        # Store in cache
         self.dm_cache[cache_key] = {
             'dm_array': dm_array,
             'dm_mask': dm_mask,
-            'dm_height': dm_height,
-            'dm_rotation': dm_rotation,
-            'dm_key': component_key,  # Add the component key here
+            'dm_height': component_params.get('height', 0.0),
+            'dm_rotation': component_params.get('rotation', 0.0),
+            'component_key': component_key
         }
 
         return self.dm_cache[cache_key]
@@ -330,7 +341,9 @@ class ParamsManager:
             wfs_nsubaps = wfs_params.get('pup_diam', 0)
 
         # Load SubapData for valid subapertures
-        idx_valid_sa = find_subapdata(self.cm, wfs_params, wfs_key, self.params, verbose=self.verbose)
+        idx_valid_sa = find_subapdata(
+            self.cm, wfs_params, wfs_key, self.params, verbose=self.verbose
+        )
 
         # Guide star parameters
         if source_type == 'lgs':
@@ -375,7 +388,8 @@ class ParamsManager:
 
         return wfs_data
 
-    def prepare_interaction_matrix_params(self, wfs_type=None, wfs_index=None, dm_index=None):
+    def prepare_interaction_matrix_params(self, wfs_type=None, wfs_index=None,
+                                        dm_index=None, layer_index=None):
         """
         Prepare parameters for computing an interaction matrix.
         
@@ -383,12 +397,25 @@ class ParamsManager:
             wfs_type (str, optional): Type of WFS ('sh', 'pyr') or source type ('lgs', 'ngs', 'ref')
             wfs_index (int, optional): Index of the WFS (1-based)
             dm_index (int, optional): Index of the DM (1-based)
+            layer_index (int, optional): Index of the Layer (1-based)
             
         Returns:
             dict: Parameters ready to be passed to synim.interaction_matrix
         """
-        # Get DM parameters
-        dm_params = self.get_dm_params(dm_index)
+        # Check that only one of dm_index or layer_index is specified
+        if dm_index is not None and layer_index is not None:
+            raise ValueError("Cannot specify both dm_index and layer_index")
+
+        if dm_index is None and layer_index is None:
+            raise ValueError("Must specify either dm_index or layer_index")
+
+        # Get DM or Layer parameters
+        if dm_index is not None:
+            component_params = self.get_component_params(dm_index)
+            component_key = component_params['component_key']
+        else:
+            component_params = self.get_component_params(layer_index, is_layer=True)
+            component_key = component_params['component_key']
 
         # Get WFS parameters
         wfs_params = self.get_wfs_params(wfs_type, wfs_index)
@@ -397,10 +424,10 @@ class ParamsManager:
         params = {
             'pup_diam_m': self.pup_diam_m,
             'pup_mask': self.pup_mask,
-            'dm_array': dm_params['dm_array'],
-            'dm_mask': dm_params['dm_mask'],
-            'dm_height': dm_params['dm_height'],
-            'dm_rotation': dm_params['dm_rotation'],
+            'dm_array': component_params['dm_array'],
+            'dm_mask': component_params['dm_mask'],
+            'dm_height': component_params['dm_height'],
+            'dm_rotation': component_params['dm_rotation'],
             'wfs_key': wfs_params['wfs_key'],
             'wfs_type': wfs_params['wfs_type'],
             'wfs_nsubaps': wfs_params['wfs_nsubaps'],
@@ -411,35 +438,48 @@ class ParamsManager:
             'gs_pol_coo': wfs_params['gs_pol_coo'],
             'gs_height': wfs_params['gs_height'],
             'idx_valid_sa': wfs_params['idx_valid_sa'],
-            'dm_key': dm_params['dm_key'],
+            'dm_key': component_key if dm_index is not None else None,
+            'layer_key': component_key if layer_index is not None else None,
+            'component_key': component_key,
             'source_type': wfs_params['source_type']
         }
 
         return params
 
-    def compute_interaction_matrix(self, wfs_type=None, wfs_index=None, dm_index=None, verbose=None, display=False):
+    def compute_interaction_matrix(self, wfs_type=None, wfs_index=None, dm_index=None,
+                                layer_index=None, verbose=None, display=False):
         """
-        Compute an interaction matrix for a specific WFS-DM combination.
+        Compute an interaction matrix for a specific WFS-DM/Layer combination.
 
         Args:
             wfs_type (str, optional): Type of WFS ('sh', 'pyr') or source type ('lgs', 'ngs', 'ref')
             wfs_index (int, optional): Index of the WFS (1-based)
             dm_index (int, optional): Index of the DM (1-based)
+            layer_index (int, optional): Index of the Layer (1-based)
             verbose (bool, optional): Override the class's verbose setting
             display (bool): Whether to display plots
 
         Returns:
             numpy.ndarray: Computed interaction matrix
         """
+        # Check that only one of dm_index or layer_index is specified
+        if dm_index is not None and layer_index is not None:
+            raise ValueError("Cannot specify both dm_index and layer_index")
+
+        if dm_index is None and layer_index is None:
+            raise ValueError("Must specify either dm_index or layer_index")
+
         # Use class verbose setting if not overridden
         verbose_flag = self.verbose if verbose is None else verbose
 
         # Prepare parameters
-        params = self.prepare_interaction_matrix_params(wfs_type, wfs_index, dm_index)
+        params = self.prepare_interaction_matrix_params(wfs_type, wfs_index, dm_index, layer_index)
+
+        component_name = params['dm_key'] if dm_index is not None else params['layer_key']
 
         if verbose_flag:
             print("Computing interaction matrix with parameters:")
-            print(f"      WFS: {params['wfs_key']}, DM: {params['dm_key']}")
+            print(f"      WFS: {params['wfs_key']}, Component: {component_name}")
             print(f"      WFS type: {params['wfs_type']}, nsubaps: {params['wfs_nsubaps']}")
             print(f"      Guide star: {params['gs_pol_coo']} at height {params['gs_height']} m")
 
@@ -463,161 +503,225 @@ class ParamsManager:
             display=display
         )
 
-        # Transpose to be coherent with the specula convention
-        im = im.transpose()
-
         return im
 
-    def compute_interaction_matrices(self, output_im_dir=None, output_rec_dir=None,
+    def compute_interaction_matrices(self, output_im_dir, output_rec_dir,
                                 wfs_type=None, overwrite=False, verbose=None, display=False):
         """
-        Compute and save interaction matrices for all combinations of WFSs and DMs.
-        Reuses cached parameters to avoid redundant loading.
+        Compute and save interaction matrices for all combinations of WFSs and DMs/Layers.
+        Uses multi-WFS optimization when possible.
         
         Args:
-            output_im_dir (str, optional): Output directory for saved matrices
-            output_rec_dir (str, optional): Output directory for reconstruction matrices
+            output_im_dir (str): Output directory for saved matrices
+            output_rec_dir (str): Output directory for reconstruction matrices
             wfs_type (str, optional): Type of WFS ('ngs', 'lgs', 'ref') to use
             overwrite (bool, optional): Whether to overwrite existing files
             verbose (bool, optional): Override the class's verbose setting
             display (bool, optional): Whether to display plots
             
         Returns:
-            dict: Dictionary mapping WFS-DM pairs to saved interaction matrix paths
+            dict: Dictionary mapping WFS-Component pairs to saved interaction matrix paths
         """
         saved_matrices = {}
-
-        # Find the SPECULA repository path for default paths
-        specula_init_path = specula.__file__
-        specula_package_dir = os.path.dirname(specula_init_path)
-        specula_repo_path = os.path.dirname(specula_package_dir)
-
-        # Set up directories
-        if output_im_dir is None:
-            output_im_dir = os.path.join(specula_repo_path, "main", "scao", "calib", "MCAO", "im")
-
-        if output_rec_dir is None:
-            output_rec_dir = os.path.join(specula_repo_path, "main", "scao", "calib", "MCAO", "rec")
-
-        # Create directories if they don't exist
         os.makedirs(output_im_dir, exist_ok=True)
         os.makedirs(output_rec_dir, exist_ok=True)
 
-        # Use verbose flag from instance if not overridden
         verbose_flag = self.verbose if verbose is None else verbose
 
-        # Filter WFSs by type if specified
-        filtered_wfs_list = self.wfs_list
+        # Filter WFS list by type if specified
         if wfs_type is not None:
-            filtered_wfs_list = []
-            for wfs in self.wfs_list:
-                if wfs_type in wfs['name']:
-                    filtered_wfs_list.append(wfs)
+            filtered_wfs_list = [wfs for wfs in self.wfs_list if wfs_type in wfs['name']]
+        else:
+            filtered_wfs_list = self.wfs_list
+
+        # Combine DM and layer in a single components list
+        components = []
+        for dm in self.dm_list:
+            components.append({
+                'type': 'dm',
+                'index': int(dm['index']),
+                'name': dm['name']
+            })
+        for layer in extract_layer_list(self.params):
+            components.append({
+                'type': 'layer',
+                'index': int(layer['index']),
+                'name': layer['name']
+            })
 
         if verbose_flag:
-            print(f"Computing interaction matrices for {len(filtered_wfs_list)} WFS(s) and {len(self.dm_list)} DM(s)")
+            print(f"Computing interaction matrices for {len(filtered_wfs_list)} WFS(s) "
+                f"and {len(components)} component(s)")
+            for wfs in filtered_wfs_list:
+                print(f"  WFS: {wfs['name']} (type: {wfs['type']}, index: {wfs['index']})")
+            for comp in components:
+                print(f"  {comp['type'].upper()}: {comp['name']} (index: {comp['index']})")
 
-        # Process each WFS-DM combination using cached parameters
-        for wfs in filtered_wfs_list:
-            wfs_idx = int(wfs['index'])
-            wfs_name = wfs['name']
+        # ==================== PROCESS EACH COMPONENT ====================
+        for component in components:
+            comp_idx = component['index']
+            comp_name = component['name']
+            comp_type = component['type']
 
-            # Determine source type from WFS name
-            source_type = determine_source_type(wfs_name)
+            if verbose_flag:
+                print(f"\n{'='*60}")
+                print(f"Loading {comp_type.upper()} {comp_name} (index {comp_idx})")
+                print(f"{'='*60}")
 
-            for dm in self.dm_list:
-                dm_idx = int(dm['index'])
-                dm_name = dm['name']
+            # Load component parameters once
+            component_params = self.get_component_params(
+                comp_idx,
+                is_layer=(comp_type == 'layer')
+            )
 
-                if verbose_flag:
-                    print(f"\nProcessing WFS {wfs_name} (index {wfs_idx}) and DM {dm_name} (index {dm_idx})")
+            if verbose_flag:
+                print(f"  Component array shape: {component_params['dm_array'].shape}")
+                print(f"  Component height: {component_params['dm_height']}")
+                print(f"  Component rotation: {component_params['dm_rotation']}")
 
-                # Generate filename for this combination
-                im_filename = generate_im_filename(self.params_file, wfs_type=source_type,
-                                                wfs_index=wfs_idx, dm_index=dm_idx)
+            # ========== BUILD WFS CONFIGURATIONS FOR MULTI-WFS ==========
+            wfs_configs = []
+            wfs_to_compute = []  # Track which WFS need computation
 
-                # Full path for the file
-                im_path = os.path.join(output_im_dir, im_filename)
+            for wfs in filtered_wfs_list:
+                wfs_idx = int(wfs['index'])
+                wfs_name = wfs['name']
+                source_type = determine_source_type(wfs_name)
 
-                # Check if the file already exists
-                if os.path.exists(im_path) and not overwrite:
-                    if verbose_flag:
-                        print(f"  File {im_filename} already exists. Skipping computation.")
-                    saved_matrices[f"{wfs_name}_{dm_name}"] = im_path
-                    continue
-
-                # Calculate the interaction matrix using our cached parameters
-                im = self.compute_interaction_matrix(
+                # Generate filename
+                im_filename = generate_im_filename(
+                    self.params_file,
                     wfs_type=source_type,
                     wfs_index=wfs_idx,
-                    dm_index=dm_idx,
-                    verbose=verbose_flag,
-                    display=display
+                    dm_index=comp_idx if comp_type == 'dm' else None,
+                    layer_index=comp_idx if comp_type == 'layer' else None
                 )
 
-                if verbose_flag:
-                    print(f"  Interaction matrix shape: {im.shape}")
-                    print(f"  First few values of IM: {im[:5, :5]}")
+                im_path = os.path.join(output_im_dir, im_filename)
 
-                # Display the matrix if requested
-                if display:
-                    plt.figure(figsize=(10, 8))
-                    plt.imshow(im, cmap='viridis')
-                    plt.colorbar()
-                    plt.title(f"Interaction Matrix: {wfs_name} - {dm_name}")
-                    plt.tight_layout()
-                    plt.show()
+                # Check if file exists
+                if os.path.exists(im_path) and not overwrite:
+                    if verbose_flag:
+                        print(f"  File already exists: {im_filename}")
+                    saved_matrices[f"{wfs_name}_{comp_name}"] = im_path
+                    continue
 
-                # Create the Intmat object
-                # Get parameters to include in the tag
+                # Get WFS parameters
                 wfs_params = self.get_wfs_params(source_type, wfs_idx)
-                wfs_info = f"{wfs_params['wfs_type']}_{wfs_params['wfs_nsubaps']}"
 
-                # Create tag for the pupdata
-                if isinstance(self.params_file, str):
-                    config_name = os.path.basename(self.params_file).split('.')[0]
-                else:
-                    config_name = "config"
+                # Add to configurations for multi-WFS computation
+                wfs_configs.append({
+                    'nsubaps': wfs_params['wfs_nsubaps'],
+                    'rotation': wfs_params['wfs_rotation'],
+                    'translation': wfs_params['wfs_translation'],
+                    'magnification': wfs_params['wfs_magnification'],
+                    'fov_arcsec': wfs_params['wfs_fov_arcsec'],
+                    'idx_valid_sa': wfs_params['idx_valid_sa'],
+                    'gs_pol_coo': wfs_params['gs_pol_coo'],
+                    'gs_height': wfs_params['gs_height'],
+                    'name': wfs_name
+                })
 
-                # TODO: this must be the subapdata name
-                pupdata_tag = f"{config_name}_{wfs_info}"
+                wfs_to_compute.append({
+                    'name': wfs_name,
+                    'index': wfs_idx,
+                    'source_type': source_type,
+                    'filename': im_filename,
+                    'path': im_path,
+                    'params': wfs_params
+                })
 
-                # Create Intmat object and save it
-                intmat_obj = Intmat(
-                    im, 
-                    pupdata_tag=pupdata_tag,
-                    norm_factor=1.0,
-                    target_device_idx=None,  # Use default device
-                    precision=None    # Use default precision
+            # ========== COMPUTE INTERACTION MATRICES ==========
+            if len(wfs_configs) > 0:
+                if verbose_flag:
+                    print(f"\n  Computing {len(wfs_configs)} interaction"
+                          f" matrices using multi-WFS...")
+
+                # Use multi-WFS computation
+                im_dict, derivatives_info = synim.interaction_matrices_multi_wfs(
+                    pup_diam_m=self.pup_diam_m,
+                    pup_mask=self.pup_mask,
+                    dm_array=component_params['dm_array'],
+                    dm_mask=component_params['dm_mask'],
+                    dm_height=component_params['dm_height'],
+                    dm_rotation=component_params['dm_rotation'],
+                    wfs_configs=wfs_configs,
+                    verbose=verbose_flag,
+                    specula_convention=True
                 )
 
-                # Save the interaction matrix
-                intmat_obj.save(im_path)
                 if verbose_flag:
-                    print(f"  Interaction matrix saved as: {im_path}")
+                    print(f"  Used {derivatives_info['workflow'].upper()} workflow")
 
-                saved_matrices[f"{wfs_name}_{dm_name}"] = im_path
+                # Save each computed interaction matrix
+                for wfs_info in wfs_to_compute:
+                    wfs_name = wfs_info['name']
+                    im = im_dict[wfs_name]
+
+                    # Transpose to be coherent with SPECULA convention
+                    im = im.transpose()
+
+                    if verbose_flag:
+                        print(f"  Saving {wfs_name}: {wfs_info['filename']}")
+                        print(f"    IM shape: {im.shape}")
+
+                    # Display if requested
+                    if display:
+                        plt.figure(figsize=(10, 8))
+                        plt.imshow(im, cmap='viridis')
+                        plt.colorbar()
+                        plt.title(f"IM: {wfs_name} - {comp_name}")
+                        plt.tight_layout()
+                        plt.show()
+
+                    # Save interaction matrix
+                    config_name = (os.path.basename(self.params_file).split('.')[0]
+                                if isinstance(self.params_file, str) else "config")
+                    pupdata_tag = f"{config_name}_{wfs_info['params']['wfs_type']}"
+                    pupdata_tag += f"_{wfs_info['params']['wfs_nsubaps']}"
+
+                    intmat_obj = Intmat(
+                        im,
+                        pupdata_tag=pupdata_tag,
+                        norm_factor=1.0,
+                        target_device_idx=None,
+                        precision=None
+                    )
+                    intmat_obj.save(wfs_info['path'])
+
+                    saved_matrices[f"{wfs_name}_{comp_name}"] = wfs_info['path']
+
+        if verbose_flag:
+            print(f"\n{'='*60}")
+            print(f"Completed: {len(saved_matrices)} interaction matrices computed/loaded")
+            print(f"{'='*60}\n")
 
         return saved_matrices
 
-    def assemble_interaction_matrices(self, wfs_type='ngs', output_im_dir=None, save=False):
+
+    def assemble_interaction_matrices(self, wfs_type='ngs', output_im_dir=None,
+                                    component_type='dm', save=False):
         """
-        Assemble interaction matrices for a specific type of WFS into a single full interaction matrix.
+        Assemble interaction matrices for a specific type of WFS into
+        a single full interaction matrix.
 
         Args:
             wfs_type (str): The type of WFS to assemble matrices for ('ngs', 'lgs', 'ref')
             output_im_dir (str, optional): Directory where IM files are stored
+            component_type (str): Type of component to assemble ('dm' or 'layer')
             save (bool): Whether to save the assembled matrix to disk
             
         Returns:
-            tuple: (im_full, n_slopes_per_wfs, mode_indices, dm_indices) - Assembled matrix and associated parameters
+            tuple: (im_full, n_slopes_per_wfs, mode_indices, component_indices) -
+                Assembled matrix and associated parameters
         """
         # Set up output directory
         if output_im_dir is None:
-            specula_init_path = specula.__file__
-            specula_package_dir = os.path.dirname(specula_init_path)
-            specula_repo_path = os.path.dirname(specula_package_dir)
-            output_im_dir = os.path.join(specula_repo_path, "main", "scao", "calib", "MCAO", "im")
+            raise ValueError("output_im_dir must be specified.")
+
+        # Validate component_type
+        if component_type not in ['dm', 'layer']:
+            raise ValueError("component_type must be either 'dm' or 'layer'")
 
         # Count WFSs of the specified type in the configuration
         wfs_list = [wfs for wfs in self.wfs_list if wfs_type in wfs['name']]
@@ -627,63 +731,104 @@ class ParamsManager:
             print(f"Found {n_wfs} {wfs_type.upper()} WFSs")
 
         # Get the number of slopes per WFS (from idx_valid_sa)
-        n_slopes_per_wfs = 0
+        n_tot_slopes = 0
+        n_slopes_list = []
         for wfs in wfs_list:
             wfs_params = self.get_wfs_params(wfs_type, int(wfs['index']))
             if wfs_params['idx_valid_sa'] is not None:
                 # Each valid subaperture produces X and Y slopes
                 n_slopes_this_wfs = len(wfs_params['idx_valid_sa']) * 2
-                if n_slopes_per_wfs == 0:
-                    n_slopes_per_wfs = n_slopes_this_wfs
-                elif n_slopes_per_wfs != n_slopes_this_wfs:
-                    print("Warning: Inconsistent number of slopes across WFSs")
+                n_slopes_list.append(n_slopes_this_wfs)
+                n_tot_slopes += n_slopes_this_wfs
+        n_slopes_per_wfs = n_tot_slopes // n_wfs
 
         if self.verbose:
             print(f"Each WFS has {n_slopes_per_wfs} slopes")
 
-        # DM indices and start modes based on config
-        dm_indices = []
-        dm_start_modes = []
+        # Get component list based on type
+        if component_type == 'dm':
+            component_list = self.dm_list
+        else:
+            component_list = extract_layer_list(self.params)
+
+        # Component indices and start modes based on config
+        component_indices = []
+        component_start_modes = []
         mode_indices = []
         total_modes = 0
 
-        if 'modal_combination' in self.params:
-            if f'modes_{wfs_type}' in self.params['modal_combination']:
-                modes_config = self.params['modal_combination'][f'modes_{wfs_type}']
-                for i, n_modes in enumerate(modes_config):
-                    if n_modes > 0:
-                        # Check for start_mode in DM config
-                        if f'dm{i+1}' in self.params and 'start_mode' in self.params[f'dm{i+1}']:
-                            dm_start_mode = self.params[f'dm{i+1}']['start_mode']
-                        else:
-                            dm_start_mode = 0
+        # Check if modal_combination exists for this WFS type and component type
+        modal_key = f'modes_{wfs_type}_{component_type}'
+        has_modal_combination = ('modal_combination' in self.params and 
+                                modal_key in self.params['modal_combination'])
 
-                        dm_start_modes.append(dm_start_mode)
-                        dm_indices.append(i + 1)
-                        mode_indices.append(list(range(dm_start_mode, dm_start_mode + n_modes)))
-                        total_modes += n_modes
+        if has_modal_combination:
+            if self.verbose:
+                print(f"Using modal_combination for {component_type}s")
 
-        # Calculate total dimensions
+            modes_config = self.params['modal_combination'][modal_key]
+            for i, n_modes in enumerate(modes_config):
+                if n_modes > 0:
+                    # Check for start_mode in component config
+                    comp_key = f'{component_type}{i+1}'
+                    if comp_key in self.params and 'start_mode' in self.params[comp_key]:
+                        comp_start_mode = self.params[comp_key]['start_mode']
+                    else:
+                        comp_start_mode = 0
+
+                    component_start_modes.append(comp_start_mode)
+                    component_indices.append(i + 1)
+                    mode_indices.append(list(range(comp_start_mode, comp_start_mode + n_modes)))
+                    total_modes += n_modes
+        else:
+            # Default: use all components with all modes
+            if self.verbose:
+                print(f"No modal_combination found, using all {component_type}s with all modes")
+
+            for comp in component_list:
+                comp_idx = int(comp['index'])
+                comp_params = self.get_component_params(
+                    comp_idx,
+                    is_layer=(component_type == 'layer')
+                )
+                n_modes = comp_params['dm_array'].shape[2]
+
+                # Check for start_mode
+                comp_key = f'{component_type}{comp_idx}'
+                if comp_key in self.params and 'start_mode' in self.params[comp_key]:
+                    comp_start_mode = self.params[comp_key]['start_mode']
+                else:
+                    comp_start_mode = 0
+
+                component_start_modes.append(comp_start_mode)
+                component_indices.append(comp_idx)
+                mode_indices.append(list(range(comp_start_mode, comp_start_mode + n_modes)))
+                total_modes += n_modes
+
         n_tot_modes = total_modes  # Total number of modes
-        n_tot_slopes = n_wfs * n_slopes_per_wfs  # Total number of slopes
 
         if self.verbose:
             print(f"Total modes: {n_tot_modes}, Total slopes: {n_tot_slopes}")
-            print(f"DM indices for {wfs_type}: {dm_indices}")
-            print(f"DM start modes: {dm_start_modes}")
-            print(f"Mode indices: {mode_indices}")
+            print(f"{component_type.upper()} indices for {wfs_type}: {component_indices}")
+            print(f"{component_type.upper()} start modes: {component_start_modes}")
 
         # Create the full interaction matrix
         im_full = np.zeros((n_tot_modes, n_tot_slopes))
 
         # Load and assemble the interaction matrices
         for ii in range(n_wfs):
-            for jj, dm_ind in enumerate(dm_indices):
-                # Get the appropriate mode indices for this DM
+            for jj, comp_ind in enumerate(component_indices):
+                # Get the appropriate mode indices for this component
                 mode_idx = mode_indices[jj]
 
                 # Generate and load the interaction matrix file
-                im_filename = self.generate_im_filename(wfs_type=wfs_type, wfs_index=ii+1, dm_index=dm_ind)
+                im_filename = generate_im_filename(
+                    self.params_file,
+                    wfs_type=wfs_type,
+                    wfs_index=ii+1,
+                    dm_index=comp_ind if component_type == 'dm' else None,
+                    layer_index=comp_ind if component_type == 'layer' else None
+                )
                 im_path = os.path.join(output_im_dir, im_filename)
 
                 if self.verbose:
@@ -696,7 +841,26 @@ class ParamsManager:
                     print(f"    IM shape: {intmat_obj.intmat.shape}")
 
                 # Fill the appropriate section of the full interaction matrix
-                im_full[mode_idx, n_slopes_per_wfs*ii:n_slopes_per_wfs*(ii+1)] = intmat_obj.intmat[mode_idx, :]
+                if ii == 0:
+                    idx_start = 0
+                else:
+                    idx_start = sum(n_slopes_list[:ii])
+
+                # Check if we have enough modes in the loaded IM
+                n_modes_available = intmat_obj.intmat.shape[0]
+                n_modes_requested = len(mode_idx)
+
+                if n_modes_available < n_modes_requested:
+                    if self.verbose:
+                        print(f"    Warning: IM has only {n_modes_available} modes, "
+                            f"requested {n_modes_requested}. Using available modes.")
+                    # Use only available modes
+                    actual_mode_idx = mode_idx[:n_modes_available]
+                else:
+                    actual_mode_idx = mode_idx
+
+                im_full[actual_mode_idx, idx_start:idx_start+n_slopes_list[ii]] = \
+                    intmat_obj.intmat[actual_mode_idx, :]
 
         # Display summary
         if self.verbose:
@@ -704,423 +868,440 @@ class ParamsManager:
 
         # Save the full interaction matrix if requested
         if save:
-            output_filename = f"im_full_{wfs_type}.npy"
+            output_filename = f"im_full_{wfs_type}_{component_type}.npy"
             np.save(os.path.join(output_im_dir, output_filename), im_full)
             if self.verbose:
                 print(f"Saved full interaction matrix to {output_filename}")
 
-        return im_full, n_slopes_per_wfs, mode_indices, dm_indices
+        return im_full, n_slopes_per_wfs, mode_indices, component_indices
+
+
+    def _load_base_inv_array(self, verbose):
+        """Extract base_inv_array loading logic."""
+        base_inv_array = None
+
+        # Priority 1: modal_analysis
+        if 'modal_analysis' in self.params:
+            if verbose:
+                print("Loading from modal_analysis")
+            base_inv_array, _ = load_influence_functions(
+                self.cm, self.params['modal_analysis'], self.pixel_pupil,
+                verbose=verbose, is_inverse_basis=True
+            )
+
+        # Priority 2: modalrec1.tag_ifunc4proj
+        elif 'modalrec1' in self.params and 'tag_ifunc4proj' in self.params['modalrec1']:
+            if verbose:
+                print("Loading from modalrec1.tag_ifunc4proj")
+            inv_tag = f"{self.params['modalrec1']['tag_ifunc4proj']}_inv"
+            dm_inv_params = {'ifunc_tag': inv_tag}
+            if 'tag_m2c4proj' in self.params['modalrec1']:
+                dm_inv_params['m2c_tag'] = self.params['modalrec1']['tag_m2c4proj']
+            base_inv_array, _ = load_influence_functions(
+                self.cm, dm_inv_params, self.pixel_pupil,
+                verbose=verbose, is_inverse_basis=True
+            )
+
+        # Priority 3: modalrec.tag_ifunc4proj
+        elif 'modalrec' in self.params and 'tag_ifunc4proj' in self.params['modalrec']:
+            if verbose:
+                print("Loading from modalrec.tag_ifunc4proj")
+            inv_tag = f"{self.params['modalrec']['tag_ifunc4proj']}_inv"
+            dm_inv_params = {'ifunc_tag': inv_tag}
+            if 'tag_m2c4proj' in self.params['modalrec']:
+                dm_inv_params['m2c_tag'] = self.params['modalrec']['tag_m2c4proj']
+            base_inv_array, _ = load_influence_functions(
+                self.cm, dm_inv_params, self.pixel_pupil,
+                verbose=verbose, is_inverse_basis=True
+            )
+
+        if base_inv_array is None:
+            raise ValueError("No valid base_inv_array found in configuration")
+
+        return base_inv_array
+
+
+    def _save_projection_matrix(self, pm, source_info, comp_name, saved_matrices, verbose):
+        """Save projection matrix helper."""
+        if verbose:
+            print(f"    Saving {source_info['name']}: {source_info['filename']}")
+            print(f"    PM shape: {pm.shape}")
+
+        plot_debug = False
+        if plot_debug:
+            plt.figure(figsize=(10, 8))
+            plt.imshow(pm, cmap='viridis')
+            plt.colorbar()
+            plt.title(f"PM: {source_info['name']} - {comp_name}")
+            plt.tight_layout()
+            plt.show()
+
+        config_name = (os.path.basename(self.params_file).split('.')[0]
+                    if isinstance(self.params_file, str) else "config")
+        pupdata_tag = f"{config_name}_opt{source_info['index']}"
+
+        pm_obj = Intmat(pm, pupdata_tag=pupdata_tag, norm_factor=1.0,
+                        target_device_idx=None, precision=None)
+        pm_obj.save(source_info['path'])
+        saved_matrices[f"{source_info['name']}_{comp_name}"] = source_info['path']
+
 
     def compute_projection_matrices(self, output_dir=None, overwrite=False,
-                                verbose=None, display=False):
+                                    verbose=None):
         """
         Compute and save projection matrices for all combinations of optical sources and DMs/layers.
-        Reuses cached parameters to avoid redundant loading.
-        Uses modal_analysis or dm_inv from the parameters file as the basis.
-
+        Uses multi-base optimization when possible.
+        
         Args:
             output_dir (str, optional): Output directory for saved matrices
             overwrite (bool, optional): Whether to overwrite existing files
             verbose (bool, optional): Override the class's verbose setting
-            display (bool, optional): Whether to display plots
 
         Returns:
             dict: Dictionary mapping Source-Component pairs to saved projection matrix paths
         """
         saved_matrices = {}
 
-        # Find the SPECULA repository path for default paths
-        specula_init_path = specula.__file__
-        specula_package_dir = os.path.dirname(specula_init_path)
-        specula_repo_path = os.path.dirname(specula_package_dir)
-
         # Set up directories
         if output_dir is None:
-            output_dir = os.path.join(specula_repo_path, "main", "scao", "calib", "MCAO", "pm")
+            raise ValueError("output_dir must be specified.")
 
-        # Create directory if it doesn't exist
         os.makedirs(output_dir, exist_ok=True)
 
         # Use verbose flag from instance if not overridden
         verbose_flag = self.verbose if verbose is None else verbose
 
-        # Load base_inv_array from dm_inv or modal_analysis
-        base_inv_array = None
-        if 'dm_inv' in self.params or 'modal_analysis' in self.params:
-            if 'dm_inv' in self.params:
-                if verbose_flag:
-                    print("Loading inverse basis functions from dm_inv")
-                dm_inv_params = self.params['dm_inv']
-            else:
-                if verbose_flag:
-                    print("Loading inverse basis functions from modal_analysis")
-                dm_inv_params = self.params['modal_analysis']
+        # ==================== GET COMPONENTS ====================
+        components = []
+        for dm in self.dm_list:
+            components.append({'type': 'dm', 'index': int(dm['index']), 'name': dm['name']})
+        for layer in extract_layer_list(self.params):
+            components.append({'type': 'layer', 'index': int(layer['index']), 'name': layer['name']})
 
-            # Load influence functions from dm_inv
-            base_inv_array, inv_mask = load_influence_functions(
-                self.cm,
-                dm_inv_params,
-                self.pixel_pupil,
-                verbose=verbose_flag
-            )
-
-            n_valid_pixels = np.sum(inv_mask > 0.5)
-
-            if base_inv_array is not None:
-                if verbose_flag:
-                    print(f"Loaded inverse basis with shape {base_inv_array.shape}")
-                    print(f"Mask has {n_valid_pixels} valid pixels")
-
-        if base_inv_array is None:
-            raise ValueError("No valid base_inv_array found in the configuration file.")
-
-        # Extract all DM and layer configurations
-        dm_list = self.dm_list
-        layer_list = extract_layer_list(self.params)
-
-        if verbose_flag:
-            print(f"Found {len(dm_list)} DMs and {len(layer_list)} layers")
-            for dm in dm_list:
-                print(f"  DM: {dm['name']} (index: {dm['index']})")
-            for layer in layer_list:
-                print(f"  Layer: {layer['name']} (index: {layer['index']})")
-
-        # Find all optical sources
+        # ==================== GET OPTICAL SOURCES ====================
         opt_sources = extract_opt_list(self.params)
 
         if verbose_flag:
-            print(f"Found {len(opt_sources)} optical sources")
-            for src in opt_sources:
-                print(f"  Source: {src['name']} (index: {src['index']})")
-            print("Computing projection matrices for optical sources with DMs and layers")
+            print(f"Computing PMs for {len(opt_sources)} sources × {len(components)} components")
 
-        # Process each Source-DM combination
-        for source in opt_sources:
-            source_name = source['name']
-            source_idx = source['index']
-            source_config = source['config']
+        # ==================== CHECK WHICH FILES NEED COMPUTATION ====================
+        # First pass: check which files exist to avoid loading base unnecessarily
+        all_files_exist = True
+        sources_needing_computation = []
 
-            # Get source parameters
-            gs_pol_coo = source_config.get('polar_coordinates', [0.0, 0.0])
-            gs_height = source_config.get('height', float('inf'))
+        for component in components:
+            comp_idx = component['index']
+            comp_type = component['type']
 
-            # Process DMs first
-            for dm in dm_list:
-                dm_idx = int(dm['index'])
-                dm_name = dm['name']
+            for source in opt_sources:
+                source_idx = source['index']
 
-                if verbose_flag:
-                    print(f"\nProcessing Source {source_name} (index {source_idx}) and DM {dm_name} (index {dm_idx})")
-
-                # Generate filename for this combination
-                pm_filename = generate_pm_filename(self.params_file, opt_index=source_idx, dm_index=dm_idx)
-
-                # Full path for the file
+                pm_filename = generate_pm_filename(
+                    self.params_file, opt_index=source_idx,
+                    dm_index=comp_idx if comp_type == 'dm' else None,
+                    layer_index=comp_idx if comp_type == 'layer' else None
+                )
                 pm_path = os.path.join(output_dir, pm_filename)
 
-                # Check if the file already exists
+                if not os.path.exists(pm_path) or overwrite:
+                    all_files_exist = False
+                    sources_needing_computation.append({
+                        'component': component,
+                        'source': source
+                    })
+
+                    if verbose_flag:
+                        status = "will overwrite" if os.path.exists(pm_path) else "missing"
+                        print(f"  {pm_filename}: {status}")
+                else:
+                    # File exists and not overwriting - add to saved_matrices
+                    saved_matrices[f"{source['name']}_{component['name']}"] = pm_path
+
+        # ==================== EARLY EXIT IF ALL FILES EXIST ====================
+        if all_files_exist and not overwrite:
+            if verbose_flag:
+                print(f"\n✓ All {len(saved_matrices)} projection matrices already exist")
+                print(f"  Set overwrite=True to recompute")
+            return saved_matrices
+
+        # ==================== LOAD BASE (ONLY IF NEEDED) ====================
+        if verbose_flag:
+            print(f"\n  Loading base inverse array (needed for"
+                  f" {len(sources_needing_computation)} computations)...")
+
+        base_inv_array = self._load_base_inv_array(verbose_flag)
+
+        # ==================== PROCESS EACH COMPONENT ====================
+        for component in components:
+            comp_idx = component['index']
+            comp_name = component['name']
+            comp_type = component['type']
+
+            if verbose_flag:
+                print(f"\n{'='*60}")
+                print(f"Processing {comp_type.upper()} {comp_name} (index {comp_idx})")
+                print(f"{'='*60}")
+
+            # Load component ONCE
+            component_params = self.get_component_params(
+                comp_idx, is_layer=(comp_type == 'layer'), cut_start_mode=True
+            )
+
+            # ==================== CHECK ALL SOURCES ====================
+            sources_to_compute = []
+            for source in opt_sources:
+                source_name = source['name']
+                source_idx = source['index']
+                source_config = source['config']
+
+                pm_filename = generate_pm_filename(
+                    self.params_file, opt_index=source_idx,
+                    dm_index=comp_idx if comp_type == 'dm' else None,
+                    layer_index=comp_idx if comp_type == 'layer' else None
+                )
+                pm_path = os.path.join(output_dir, pm_filename)
+
                 if os.path.exists(pm_path) and not overwrite:
                     if verbose_flag:
-                        print(f"  File {pm_filename} already exists. Skipping computation.")
-                    saved_matrices[f"{source_name}_{dm_name}"] = pm_path
+                        print(f"  Exists: {pm_filename}")
                     continue
 
-                # Get DM parameters
-                dm_params = self.get_dm_params(dm_idx,cut_start_mode=True)
+                if 'polar_coordinate' in source_config:
+                    gs_pol_coo = source_config.get('polar_coordinate')
+                elif 'polar_coordinates' in source_config:
+                    gs_pol_coo = source_config.get('polar_coordinates')
+                else:
+                    raise ValueError(f"No polar coordinates found for source {source_name}")
 
-                # Set default Basis parameters (no rotation/translation/magnification)
-                base_rotation = 0.0
-                base_translation = (0.0, 0.0)
-                base_magnification = (1.0, 1.0)
+                sources_to_compute.append({
+                    'name': source_name,
+                    'index': source_idx,
+                    'filename': pm_filename,
+                    'path': pm_path,
+                    'gs_pol_coo': gs_pol_coo,
+                    'gs_height': source_config.get('height', float('inf'))
+                })
 
-                # Check if base_inv_array is properly loaded
-                if base_inv_array is None:
-                    if verbose_flag:
-                        print("  No base_inv_array provided. Creating a simple identity matrix.")
-                    n_valid_pixels = np.sum(self.pup_mask > 0.5)
-                    base_inv_array = np.eye(n_valid_pixels)
+            if not sources_to_compute:
+                continue
 
+            # ==================== COMPUTE PROJECTION MATRICES ====================
+            # *** REMOVE the all_gs_same optimization - not applicable here ***
+
+            if verbose_flag:
+                print(f"\n  Computing {len(sources_to_compute)} PMs individually")
+
+            for source_info in sources_to_compute:
                 if verbose_flag:
-                    print(f"  Computing projection matrix with base_inv_array shape: {base_inv_array.shape}")
-                    print(f"  Source coordinates: {gs_pol_coo}, height: {gs_height}")
-                    print(f"  DM height: {dm_params['dm_height']}, rotation: {dm_params['dm_rotation']}")
+                    print(f"\n  Processing {source_info['name']}:")
 
-                # Calculate the projection matrix
-                pm = synim.projection_matrix(
+                # Transpose ONCE using ORIGINAL pupil mask
+                base_inv_array_transposed = synpm.transpose_base_array_for_specula(
+                    base_inv_array,
+                    self.pup_mask,
+                    verbose=verbose_flag
+                )
+
+                pm = synpm.projection_matrix(
                     pup_diam_m=self.pup_diam_m,
                     pup_mask=self.pup_mask,
-                    dm_array=dm_params['dm_array'],
-                    dm_mask=dm_params['dm_mask'],
-                    base_inv_array=base_inv_array,
-                    dm_height=dm_params['dm_height'],
-                    dm_rotation=dm_params['dm_rotation'],
-                    base_rotation=base_rotation,
-                    base_translation=base_translation,
-                    base_magnification=base_magnification,
-                    gs_pol_coo=gs_pol_coo,
-                    gs_height=gs_height,
+                    dm_array=component_params['dm_array'],
+                    dm_mask=component_params['dm_mask'],
+                    base_inv_array=base_inv_array_transposed,
+                    dm_height=component_params['dm_height'],
+                    dm_rotation=component_params['dm_rotation'],
+                    base_rotation=0.0,
+                    base_translation=(0.0, 0.0),
+                    base_magnification=(1.0, 1.0),
+                    gs_pol_coo=source_info['gs_pol_coo'],
+                    gs_height=source_info['gs_height'],
                     verbose=verbose_flag,
-                    display=display,
                     specula_convention=True
                 )
 
-                if verbose_flag:
-                    print(f"  Projection matrix shape: {pm.shape}")
-                    #print(f"  First few values of PM: {pm[:min(5, pm.shape[0]), :min(5, pm.shape[1])]}")
-
-                # Display the matrix if requested
-                if display:
-                    plt.figure(figsize=(10, 8))
-                    plt.imshow(pm, cmap='viridis')
-                    plt.colorbar()
-                    plt.title(f"Projection Matrix: {source_name} - {dm_name}")
-                    plt.tight_layout()
-                    plt.show()
-
-                # Create tag for the pupdata
-                if isinstance(self.params_file, str):
-                    config_name = os.path.basename(self.params_file).split('.')[0]
-                else:
-                    config_name = "config"
-
-                pupdata_tag = f"{config_name}_opt{source_idx}"
-
-                # Create Intmat object and save it (we reuse the Intmat class for storage)
-                pm_obj = Intmat(
-                    pm,
-                    pupdata_tag=pupdata_tag,
-                    norm_factor=1.0,
-                    target_device_idx=None,  # Use default device
-                    precision=None    # Use default precision
+                self._save_projection_matrix(
+                    pm, source_info, comp_name, saved_matrices, verbose_flag
                 )
 
-                # Save the projection matrix
-                pm_obj.save(pm_path)
-                if verbose_flag:
-                    print(f"  Projection matrix saved as: {pm_path}")
-
-                saved_matrices[f"{source_name}_{dm_name}"] = pm_path
-
-            # Process Layers
-            for layer in layer_list:
-                layer_idx = int(layer['index'])
-                layer_name = layer['name']
-
-                if verbose_flag:
-                    print(f"\nProcessing Source {source_name} (index {source_idx}) and Layer {layer_name} (index {layer_idx})")
-
-                # Generate filename for this combination
-                pm_filename = generate_pm_filename(self.params_file, opt_index=source_idx, layer_index=layer_idx)
-
-                # Full path for the file
-                pm_path = os.path.join(output_dir, pm_filename)
-
-                # Check if the file already exists
-                if os.path.exists(pm_path) and not overwrite:
-                    if verbose_flag:
-                        print(f"  File {pm_filename} already exists. Skipping computation.")
-                    saved_matrices[f"{source_name}_{layer_name}"] = pm_path
-                    continue
-
-                # Get layer parameters (using the same method as for DMs since structure is similar)
-                layer_params = self.get_dm_params(layer_idx, is_layer=True, cut_start_mode=True)
-
-                # Set default Basis parameters (no rotation/translation/magnification)
-                base_rotation = 0.0
-                base_translation = (0.0, 0.0)
-                base_magnification = (1.0, 1.0)
-
-                # Check if base_inv_array is properly loaded
-                if base_inv_array is None:
-                    if verbose_flag:
-                        print("  No base_inv_array provided. Creating a simple identity matrix.")
-                    n_valid_pixels = np.sum(self.pup_mask > 0.5)
-                    base_inv_array = np.eye(n_valid_pixels)
-
-                if verbose_flag:
-                    print(f"  Computing projection matrix with base_inv_array shape: {base_inv_array.shape}")
-                    print(f"  Source coordinates: {gs_pol_coo}, height: {gs_height}")
-                    print(f"  Layer height: {layer_params['dm_height']}, rotation: {layer_params['dm_rotation']}")
-
-                # Calculate the projection matrix
-                pm = synim.projection_matrix(
-                    pup_diam_m=self.pup_diam_m,
-                    pup_mask=self.pup_mask,
-                    dm_array=layer_params['dm_array'],
-                    dm_mask=layer_params['dm_mask'],
-                    base_inv_array=base_inv_array,
-                    dm_height=layer_params['dm_height'],
-                    dm_rotation=layer_params['dm_rotation'],
-                    base_rotation=base_rotation,
-                    base_translation=base_translation,
-                    base_magnification=base_magnification,
-                    gs_pol_coo=gs_pol_coo,
-                    gs_height=gs_height,
-                    verbose=verbose_flag,
-                    display=display,
-                    specula_convention=True
-                )
-
-                if verbose_flag:
-                    print(f"  Projection matrix shape: {pm.shape}")
-                    print(f"  First few values of PM: {pm[:min(5, pm.shape[0]), :min(5, pm.shape[1])]}")
-
-                # Display the matrix if requested
-                if display:
-                    plt.figure(figsize=(10, 8))
-                    plt.imshow(pm, cmap='viridis')
-                    plt.colorbar()
-                    plt.title(f"Projection Matrix: {source_name} - {layer_name}")
-                    plt.tight_layout()
-                    plt.show()
-
-                # Create tag for the pupdata
-                if isinstance(self.params_file, str):
-                    config_name = os.path.basename(self.params_file).split('.')[0]
-                else:
-                    config_name = "config"
-
-                pupdata_tag = f"{config_name}_opt{source_idx}"
-
-                # Create Intmat object and save it (we reuse the Intmat class for storage)
-                pm_obj = Intmat(
-                    pm,
-                    pupdata_tag=pupdata_tag,
-                    norm_factor=1.0,
-                    target_device_idx=None,  # Use default device
-                    precision=None    # Use default precision
-                )
-
-                # Save the projection matrix
-                pm_obj.save(pm_path)
-                if verbose_flag:
-                    print(f"  Projection matrix saved as: {pm_path}")
-
-                saved_matrices[f"{source_name}_{layer_name}"] = pm_path
+        if verbose_flag:
+            print(f"\n{'='*60}")
+            print(f"Completed: {len(saved_matrices)} projection matrices")
+            print(f"{'='*60}\n")
 
         return saved_matrices
 
-    def compute_projection_matrix(self, regFactor=1e-8, output_dir=None, save=False):
+
+    def compute_projection_matrix(self, reg_factor=1e-8, output_dir=None, save=False):
         """
         Assemble 4D projection matrices from individual PM files and
         calculate the final projection matrix using the full DM and layer matrices.
-        This function computes the projection matrix using a weighted average of the individual matrices,
-        and applies a regularization term to ensure numerical stability.
-
-        The regularization term is added to the diagonal of the pseudoinverse to prevent singularities.
-        The function returns the final projection matrix.
-
+        
+        Optimized version: loads each DM/layer only once and iterates over optical sources.
+        
         Args:
-            regFactor (float, optional): Regularization factor for the pseudoinverse calculation
+            reg_factor (float, optional): Regularization factor for the pseudoinverse calculation.
                 Default is 1e-8.
-            output_dir (str, optional): Directory where PM files are stored and where assembled matrices will be saved
+            output_dir (str, optional): Directory where PM files are stored and where
+                assembled matrices will be saved.
             save (bool): Whether to save the assembled matrices to disk
-
+        
         Returns:
             popt (numpy.ndarray): Final projection matrix (n_dm_modes, n_layer_modes)
-            pm_full_dm (numpy.ndarray): Full DM projection matrix (n_opt_sources, n_dm_modes, n_dm_modes)
-            pm_full_layer (numpy.ndarray): Full Layer projection matrix (n_opt_sources, n_layer_modes, n_layer_modes)
+            pm_full_dm (numpy.ndarray): Full DM projection matrix 
+                (n_opt_sources, n_dm_modes, n_pupil_modes)
+            pm_full_layer (numpy.ndarray): Full Layer projection matrix 
+                (n_opt_sources, n_layer_modes, n_pupil_modes)
         """
 
         # Set up output directory
         if output_dir is None:
-            specula_init_path = specula.__file__
-            specula_package_dir = os.path.dirname(specula_init_path)
-            specula_repo_path = os.path.dirname(specula_package_dir)
-            output_dir = os.path.join(specula_repo_path, "main", "scao", "calib", "MCAO", "pm")
+            raise ValueError("output_dir must be specified.")
+
+        os.makedirs(output_dir, exist_ok=True)
 
         # Extract all necessary lists
         opt_sources = extract_opt_list(self.params)
         dm_list = extract_dm_list(self.params)
         layer_list = extract_layer_list(self.params)
 
+        n_opt = len(opt_sources)
+        n_dm = len(dm_list)
+        n_layer = len(layer_list)
+
         if self.verbose:
-            print(f"Found {len(opt_sources)} optical sources, {len(dm_list)} DMs, and {len(layer_list)} layers")
+            print(f"Found {n_opt} optical sources, {n_dm} DMs, and {n_layer} layers")
 
-        weights_array = np.zeros(len(opt_sources))
-        for i, source in enumerate(opt_sources):
-            source_config = source['config']
-            # Get weight (default to 1.0 if not specified)
-            weight = source_config.get('weight', 1.0)
-            weights_array[i] = weight
+        # Extract weights
+        weights_array = np.array([src['config'].get('weight', 1.0) for src in opt_sources])
 
-        # Build the full projection matrices for DMs and layers
-        for ii, opt_source in enumerate(opt_sources):
-            opt_index = opt_source['index']
+        # Initialize output arrays (we'll determine size from first PM loaded)
+        pm_full_dm = None
+        pm_full_layer = None
+
+        # ==================== PROCESS DMs ====================
+        if n_dm > 0:
+            if self.verbose:
+                print("\n=== Processing DM Projection Matrices ===")
 
             for jj, dm in enumerate(dm_list):
                 dm_index = dm['index']
+                dm_name = dm['name']
 
-                pm_filename = generate_pm_filename(self.params_file, opt_index=opt_index, dm_index=dm_index)
-                if pm_filename is None:
-                    raise ValueError(f"Could not generate filename for opt{opt_index}, dm{dm_index}")
-
-                pm_path = os.path.join(output_dir, pm_filename)
                 if self.verbose:
-                    print(f"--> Loading DM PM: {pm_filename}")
+                    print(f"\nLoading PMs for {dm_name} (index {dm_index})...")
 
-                # check if the file exists
-                if not os.path.exists(pm_path):
-                    raise FileNotFoundError(f"File {pm_path} does not exist")
+                # Load PMs for all optical sources for this DM
+                dm_pms_list = []
 
-                intmat_obj = Intmat.restore(pm_path)
-                intmat_data = intmat_obj.intmat
+                for ii, opt_source in enumerate(opt_sources):
+                    opt_index = opt_source['index']
 
-                # Pile the arrays on the second dimension
-                if jj == 0:
-                    pm_full_i = intmat_data
+                    pm_filename = generate_pm_filename(
+                        self.params_file, opt_index=opt_index, dm_index=dm_index
+                    )
+
+                    if pm_filename is None:
+                        raise ValueError(f"Could not generate filename"
+                                         f" for opt{opt_index}, dm{dm_index}")
+
+                    pm_path = os.path.join(output_dir, pm_filename)
+
+                    if not os.path.exists(pm_path):
+                        raise FileNotFoundError(f"File {pm_path} does not exist")
+
+                    if self.verbose:
+                        print(f"  Loading opt{opt_index}: {pm_filename}")
+
+                    intmat_obj = Intmat.restore(pm_path)
+                    dm_pms_list.append(intmat_obj.intmat)
+
+                # Stack all optical sources for this DM
+                # dm_pms_list[i] has shape (n_dm_modes_i, n_pupil_modes)
+                # We stack along axis 0 to get (n_opt, n_dm_modes_i, n_pupil_modes)
+                dm_stack = np.stack(dm_pms_list, axis=0)
+
+                if self.verbose:
+                    print(f"  Stacked PM shape for {dm_name}: {dm_stack.shape}")
+
+                # Concatenate along DM modes (axis 1)
+                if pm_full_dm is None:
+                    pm_full_dm = dm_stack
                 else:
-                    pm_full_i = np.concatenate((pm_full_i, intmat_data), axis=1)
+                    pm_full_dm = np.concatenate((pm_full_dm, dm_stack), axis=1)
 
                 if self.verbose:
-                    print(f"    Filled array with opt{opt_index}, dm{dm_index} projection data")
+                    print(f"  Current pm_full_dm shape: {pm_full_dm.shape}")
 
-            # Build a 3D array piling the arrays on the new dimension
-            if ii == 0:
-                pm_full_dm = pm_full_i[np.newaxis, :, :]
-            else:
-                pm_full_dm = np.concatenate((pm_full_dm, pm_full_i[np.newaxis, :, :]), axis=0)
-
-        for ii, opt_source in enumerate(opt_sources):
-            opt_index = opt_source['index']
+        # ==================== PROCESS LAYERS ====================
+        if n_layer > 0:
+            if self.verbose:
+                print("\n=== Processing Layer Projection Matrices ===")
 
             for jj, layer in enumerate(layer_list):
                 layer_index = layer['index']
+                layer_name = layer['name']
 
-                pm_filename = generate_pm_filename(self.params_file, opt_index=opt_index, layer_index=layer_index)
-                if pm_filename is None:
+                if self.verbose:
+                    print(f"\nLoading PMs for {layer_name} (index {layer_index})...")
+
+                # Load PMs for all optical sources for this layer
+                layer_pms_list = []
+
+                for ii, opt_source in enumerate(opt_sources):
+                    opt_index = opt_source['index']
+
+                    pm_filename = generate_pm_filename(
+                        self.params_file, opt_index=opt_index, layer_index=layer_index
+                    )
+
+                    if pm_filename is None:
+                        if self.verbose:
+                            print(f"  Warning: Could not generate filename"
+                                  f" for opt{opt_index}, layer{layer_index}")
+                        # Create zero matrix as placeholder
+                        if layer_pms_list:
+                            layer_pms_list.append(np.zeros_like(layer_pms_list[0]))
+                        continue
+
+                    pm_path = os.path.join(output_dir, pm_filename)
+
+                    if not os.path.exists(pm_path):
+                        if self.verbose:
+                            print(f"  Warning: File {pm_path} does not exist, using zeros")
+                        if layer_pms_list:
+                            layer_pms_list.append(np.zeros_like(layer_pms_list[0]))
+                        continue
+
                     if self.verbose:
-                        print(f"Could not generate filename for opt{opt_index}, layer{layer_index}")
-                    continue
+                        print(f"  Loading opt{opt_index}: {pm_filename}")
 
-                pm_path = os.path.join(output_dir, pm_filename)
+                    intmat_obj = Intmat.restore(pm_path)
+                    layer_pms_list.append(intmat_obj.intmat)
+
+                # Stack all optical sources for this layer
+                layer_stack = np.stack(layer_pms_list, axis=0)
+
                 if self.verbose:
-                    print(f"--> Loading Layer PM: {pm_filename}")
-                intmat_obj = Intmat.restore(pm_path)
-                intmat_data = intmat_obj.intmat
+                    print(f"  Stacked PM shape for {layer_name}: {layer_stack.shape}")
 
-                # Pile the arrays on the second dimension
-                if jj == 0:
-                    pm_full_i = intmat_data
+                # Concatenate along layer modes (axis 1)
+                if pm_full_layer is None:
+                    pm_full_layer = layer_stack
                 else:
-                    pm_full_i = np.concatenate((pm_full_i, intmat_data), axis=0)
+                    pm_full_layer = np.concatenate((pm_full_layer, layer_stack), axis=1)
 
                 if self.verbose:
-                    print(f"    Filled array with opt{opt_index}, dm{dm_index} projection data")
-
-            # Build a 3D array piling the arrays on the new dimension
-            if ii == 0:
-                pm_full_layer = pm_full_i[np.newaxis, :, :]
-            else:
-                pm_full_layer = np.concatenate((pm_full_layer, pm_full_i[np.newaxis, :, :]), axis=0)
+                    print(f"  Current pm_full_layer shape: {pm_full_layer.shape}")
 
         # Display summary information
         if self.verbose:
-            print("\nFinal 3D projection matrices:")
+            print("\n=== Final 3D Projection Matrices ===")
             if pm_full_dm is not None:
-                print(f"DM projection matrix shape: {pm_full_dm.shape} (n_modes, n_sources, n_dm_modes)")
+                print(f"DM projection matrix shape: {pm_full_dm.shape} "
+                    f"(n_opt_sources, n_dm_modes, n_pupil_modes)")
             if pm_full_layer is not None:
-                print(f"Layer projection matrix shape: {pm_full_layer.shape} (n_modes, n_sources, n_layer_modes)")
+                print(f"Layer projection matrix shape: {pm_full_layer.shape} "
+                    f"(n_opt_sources, n_layer_modes, n_pupil_modes)")
 
         # Save the matrices if requested
         if save:
@@ -1136,43 +1317,629 @@ class ParamsManager:
                 if self.verbose:
                     print(f"Saved Layer projection matrix to {layer_output_filename}")
 
-        nopt = pm_full_dm.shape[0]
+        # ==================== COMPUTE OPTIMAL PROJECTION ====================
+        if self.verbose:
+            print("\n=== Computing Optimal Projection Matrix ===")
+
+        # Weighted combination
         tpdm_pdm = np.zeros((pm_full_dm.shape[1], pm_full_dm.shape[1]))
         tpdm_pl = np.zeros((pm_full_dm.shape[1], pm_full_layer.shape[1]))
 
         total_weight = np.sum(weights_array)
-        for i in range(nopt):
+
+        for i in range(n_opt):
             pdm_i = pm_full_dm[i, :, :]      # shape: (n_dm_modes, n_pupil_modes)
             pl_i = pm_full_layer[i, :, :]    # shape: (n_layer_modes, n_pupil_modes)
             w = weights_array[i] / total_weight
 
             tpdm_pdm += pdm_i @ pdm_i.T * w
-            tpdm_pl +=  pdm_i @ pl_i.T * w
+            tpdm_pl += pdm_i @ pl_i.T * w
 
-        # Pseudoinverse with regularization (tune eps and regFactor as needed)
+            if self.verbose:
+                print(f"  Processed opt{opt_sources[i]['index']} with weight {w:.3f}")
+
+        # Pseudoinverse with regularization
+        if self.verbose:
+            print(f"\nApplying regularization (reg_factor={reg_factor})")
+
         eps = 1e-14
-        # tpdm_pdm is square, so we can use np.linalg.pinv directly
-        tpdm_pdm_inv = np.linalg.pinv(tpdm_pdm + regFactor * np.eye(tpdm_pdm.shape[0]), rcond=eps)
+        tpdm_pdm_inv = np.linalg.pinv(
+            tpdm_pdm + reg_factor * np.eye(tpdm_pdm.shape[0]),
+            rcond=eps
+        )
         p_opt = tpdm_pdm_inv @ tpdm_pl
 
+        if self.verbose:
+            print(f"Final projection matrix shape: {p_opt.shape} "
+                f"(n_dm_modes, n_layer_modes)")
+            print("=== Computation Complete ===\n")
+
         return p_opt, pm_full_dm, pm_full_layer
+
+
+    def compute_tomographic_projection_matrix(self, reg_factor=1e-8,
+                                            output_dir=None, save=False,
+                                            verbose=None):
+        """
+        Compute tomographic projection matrix following IDL compute_mcao_popt logic.
+        
+        Implements the standard MCAO projection:
+            p_opt = (P_DM^T @ P_DM + reg_factor*I)^(-1) @ P_DM^T @ P_Layer
+        
+        where P_DM and P_Layer are weighted combinations of projection matrices
+        from multiple optical sources.
+        
+        Args:
+            reg_factor (float): Tikhonov regularization factor (default: 1e-8)
+            output_dir (str, optional): Directory where PM files are stored
+            save (bool): Whether to save the projection matrix to disk
+            verbose (bool, optional): Override the class's verbose setting
+        
+        Returns:
+            tuple: (p_opt, pm_full_dm, pm_full_layer, info)
+                - p_opt: Tomographic projection matrix (n_layer_modes, n_dm_modes)
+                - pm_full_dm: Full DM projection matrix (n_opt, n_dm_modes, n_pupil_modes)
+                - pm_full_layer: Full Layer projection matrix (n_opt, n_layer_modes, n_pupil_modes)
+                - info: dict with computation metadata
+        """
+
+        verbose_flag = self.verbose if verbose is None else verbose
+
+        if verbose_flag:
+            print(f"\n{'='*60}")
+            print(f"Computing Tomographic Projection Matrix")
+            print(f"{'='*60}")
+            print(f"  Regularization factor: {reg_factor}")
+            print(f"{'='*60}\n")
+
+        # ==================== LOAD FULL PM MATRICES ====================
+        # Reuse existing function to load/compute all projection matrices
+        _, pm_full_dm, pm_full_layer = self.compute_projection_matrix(
+            reg_factor=reg_factor,
+            output_dir=output_dir,
+            save=False  # Don't save intermediate matrices
+        )
+
+        if verbose_flag:
+            print(f"\n  Loaded PM matrices:")
+            print(f"    pm_full_dm shape: {pm_full_dm.shape}")
+            print(f"      (n_opt_sources, n_dm_modes, n_pupil_modes)")
+            print(f"    pm_full_layer shape: {pm_full_layer.shape}")
+            print(f"      (n_opt_sources, n_layer_modes, n_pupil_modes)")
+
+        # ==================== GET OPTICAL SOURCE WEIGHTS ====================
+        opt_sources = extract_opt_list(self.params)
+        n_opt = len(opt_sources)
+
+        if n_opt == 0:
+            raise ValueError(
+                "No optical sources (source_optX) found in configuration. "
+                "Cannot compute tomographic projection matrix."
+            )
+
+        weights_array = np.array([src['config'].get('weight', 1.0) for src in opt_sources])
+        total_weight = np.sum(weights_array)
+
+        if verbose_flag:
+            print(f"\n  Optical sources: {n_opt}")
+            print(f"  Weights: {weights_array}")
+            print(f"  Total weight: {total_weight}")
+
+        # ==================== COMPUTE WEIGHTED MATRICES ====================
+        if verbose_flag:
+            print(f"\n{'='*60}")
+            print(f"Computing Weighted Combination")
+            print(f"{'='*60}")
+
+        # Get dimensions
+        n_dm_modes = pm_full_dm.shape[1]
+        n_layer_modes = pm_full_layer.shape[1]
+        n_pupil_modes = pm_full_dm.shape[2]
+
+        # Initialize accumulation matrices
+        # tpdm_pdm = P_DM^T @ P_DM (weighted sum over optical sources)
+        # tpdm_pl = P_DM^T @ P_Layer (weighted sum over optical sources)
+        tpdm_pdm = np.zeros((n_dm_modes, n_dm_modes))
+        tpdm_pl = np.zeros((n_dm_modes, n_layer_modes))
+
+        # Accumulate weighted contributions from each optical source
+        for i in range(n_opt):
+            pdm_i = pm_full_dm[i, :, :]      # (n_dm_modes, n_pupil_modes)
+            pl_i = pm_full_layer[i, :, :]    # (n_layer_modes, n_pupil_modes)
+            w = weights_array[i] / total_weight
+
+            # Accumulate: P_DM^T @ P_DM and P_DM^T @ P_Layer
+            tpdm_pdm += pdm_i @ pdm_i.T * w
+            tpdm_pl += pdm_i @ pl_i.T * w
+
+            if verbose_flag:
+                print(f"  Processed opt{opt_sources[i]['index']} (weight={w:.3f})")
+
+        if verbose_flag:
+            print(f"\n  tpdm_pdm shape: {tpdm_pdm.shape} (P_DM^T @ P_DM)")
+            print(f"  tpdm_pl shape: {tpdm_pl.shape} (P_DM^T @ P_Layer)")
+
+        # ==================== TIKHONOV REGULARIZATION ====================
+        if verbose_flag:
+            print(f"\n{'='*60}")
+            print(f"Applying Tikhonov Regularization")
+            print(f"{'='*60}")
+            print(f"  Adding reg_factor * I to P_DM^T @ P_DM")
+
+        tpdm_pdm_reg = tpdm_pdm + reg_factor * np.eye(n_dm_modes)
+
+        # ==================== PSEUDOINVERSE ====================
+        if verbose_flag:
+            print(f"  Computing pseudoinverse...")
+
+        # Condition number check
+        cond_number = np.linalg.cond(tpdm_pdm_reg)
+        if verbose_flag:
+            print(f"  Condition number: {cond_number:.2e}")
+
+        # Compute pseudoinverse
+        rcond = 1e-14  # Same as IDL default
+        tpdm_pdm_inv = np.linalg.pinv(tpdm_pdm_reg, rcond=rcond)
+
+        if verbose_flag:
+            print(f"  ✓ Pseudoinverse computed (rcond={rcond})")
+
+        # ==================== FINAL PROJECTION MATRIX ====================
+        if verbose_flag:
+            print(f"\n{'='*60}")
+            print(f"Computing Final Projection Matrix")
+            print(f"{'='*60}")
+            print(f"  p_opt = (P_DM^T @ P_DM + λI)^(-1) @ P_DM^T @ P_Layer")
+
+        # p_opt = (tpdm_pdm + reg_factor*I)^(-1) @ tpdm_pl
+        p_opt = tpdm_pdm_inv @ tpdm_pl
+
+        if verbose_flag:
+            print(f"\n  ✓ Tomographic projection matrix computed: {p_opt.shape}")
+            print(f"    (n_dm_modes, n_layer_modes) = ({n_dm_modes}, {n_layer_modes})")
+
+        # ==================== SAVE MATRICES ====================
+        if save and output_dir is not None:
+            os.makedirs(output_dir, exist_ok=True)
+
+            # *** SAVE AS RECMAT (SPECULA FORMAT) ***
+            if verbose_flag:
+                print(f"\n{'='*60}")
+                print(f"Saving Results")
+                print(f"{'='*60}")
+
+            # Create Recmat object for p_opt
+            # Note: Recmat expects shape (n_modes, n_slopes)
+            # p_opt has shape (n_dm_modes, n_layer_modes)
+            # In this context: DM modes are the "output modes" and Layer modes are the "input slopes"
+            recmat_obj = Recmat(
+                recmat=p_opt,
+                norm_factor=1.0,  # No normalization applied
+                target_device_idx=self.target_device_idx if hasattr(self, 'target_device_idx') else None,
+                precision=self.precision if hasattr(self, 'precision') else None
+            )
+
+            # Generate filename following SPECULA convention
+            config_name = (os.path.basename(self.params_file).split('.')[0]
+                        if isinstance(self.params_file, str) else "config")
+
+            # Filename pattern: rec_<config>_tomographic_r<reg_factor>.fits
+            rec_filename = f"rec_{config_name}_tomographic_r{reg_factor:.0e}.fits"
+            rec_path = os.path.join(output_dir, rec_filename)
+
+            # Save as FITS (SPECULA format)
+            recmat_obj.save(rec_path, overwrite=True)
+
+            if verbose_flag:
+                print(f"  ✓ Saved tomographic reconstruction matrix (SPECULA format):")
+                print(f"    {rec_filename}")
+                print(f"    Shape: {p_opt.shape} (n_dm_modes, n_layer_modes)")
+                print(f"    Norm factor: {recmat_obj.norm_factor}")
+
+            # Also save intermediate matrices as numpy arrays for debugging
+            np.save(os.path.join(output_dir, "tpdm_pdm.npy"), tpdm_pdm)
+            np.save(os.path.join(output_dir, "tpdm_pl.npy"), tpdm_pl)
+            np.save(os.path.join(output_dir, "tpdm_pdm_reg.npy"), tpdm_pdm_reg)
+
+            if verbose_flag:
+                print(f"\n  ✓ Also saved debug matrices (NumPy format):")
+                print(f"    - tpdm_pdm.npy (P_DM^T @ P_DM)")
+                print(f"    - tpdm_pl.npy (P_DM^T @ P_Layer)")
+                print(f"    - tpdm_pdm_reg.npy (with regularization)")
+
+        # ==================== METADATA ====================
+        info = {
+            'n_opt_sources': n_opt,
+            'n_dm_modes': n_dm_modes,
+            'n_layer_modes': n_layer_modes,
+            'n_pupil_modes': n_pupil_modes,
+            'weights': weights_array,
+            'reg_factor': reg_factor,
+            'condition_number': cond_number,
+            'rcond': rcond,
+            'rec_filename': rec_filename if save else None,  # *** ADD FILENAME ***
+            'rec_path': rec_path if save else None  # *** ADD PATH ***
+        }
+
+        if verbose_flag:
+            print(f"\n{'='*60}")
+            print(f"Tomographic Projection Computation Complete")
+            print(f"{'='*60}\n")
+
+        return p_opt, pm_full_dm, pm_full_layer, info
+
 
     def list_wfs(self):
         """Return a list of all WFS names and types."""
         return [(wfs['name'], wfs['type'], wfs['index']) for wfs in self.wfs_list]
 
+
     def list_dm(self):
         """Return a list of all DM names and indices."""
         return [(dm['name'], dm['index']) for dm in self.dm_list]
+
 
     def get_source_info(self, wfs_name):
         """Return source info for a given WFS."""
         return extract_source_info(self.params, wfs_name)
 
-    def generate_im_filename(self, wfs_type=None, wfs_index=None, dm_index=None, timestamp=False, verbose=False):
-        """Generate the interaction matrix filename for a given WFS-DM combination."""
-        return generate_im_filename(self.params_file, wfs_type, wfs_index, dm_index, timestamp, verbose)
 
-    def generate_im_filenames(self, timestamp=False):
-        """Generate all possible interaction matrix filenames."""
-        return generate_im_filenames(self.params_file, timestamp)
+    def generate_im_filename(self, wfs_type=None, wfs_index=None,
+                            dm_index=None, layer_index=None, timestamp=False, verbose=False):
+        """Generate the interaction matrix filename for a given WFS-DM/Layer combination."""
+        return generate_im_filename(
+            self.params_file,
+            wfs_type=wfs_type,
+            wfs_index=wfs_index,
+            dm_index=dm_index,
+            layer_index=layer_index,  # Aggiungi esplicitamente questo parametro
+            timestamp=timestamp,
+            verbose=verbose
+        )
+
+    def compute_covariance_matrices(self, r0, L0, component_type='layer',
+                                    output_dir=None, overwrite=False,
+                                    full_modes=True, verbose=None):
+        """
+        Compute atmospheric covariance matrices for all components (DMs or layers).
+        
+        Implements smart caching similar to IDL's ifs_covmat:
+        - Generates unique filename based on component parameters, r0, L0
+        - Loads from disk if file exists (unless overwrite=True)
+        - Computes and saves if file doesn't exist
+        - Saves in FITS format (like IDL) for compatibility
+        
+        Args:
+            r0 (float): Fried parameter in meters
+            L0 (float): Outer scale in meters
+            component_type (str): Type of component ('dm' or 'layer')
+            output_dir (str, optional): Directory to save covariance matrices
+            overwrite (bool): Whether to overwrite existing files
+            full_modes (bool): If True, compute covariance for ALL modes available.
+                            If False, use only modes from modal_combination.
+            verbose (bool, optional): Override the class's verbose setting
+            
+        Returns:
+            dict: Dictionary with:
+                - 'C_atm_blocks': List of covariance matrices for each component
+                - 'component_indices': List of component indices
+                - 'n_modes_per_component': List of number of modes for each component
+                - 'start_modes': List of start mode indices for each component
+                - 'r0': Fried parameter used
+                - 'L0': Outer scale used
+                - 'files': List of file paths (saved or loaded)
+        """
+
+        verbose_flag = self.verbose if verbose is None else verbose
+
+        # Validate component_type
+        if component_type not in ['dm', 'layer']:
+            raise ValueError("component_type must be either 'dm' or 'layer'")
+
+        # Get wavelength for conversion nm -> rad^2
+        wavelengthInNm = 500.0  # Default
+        if 'pyramid' in self.params:
+            wavelengthInNm = self.params['pyramid'].get('wavelengthInNm', 500.0)
+        elif 'sh' in self.params:
+            wavelengthInNm = self.params['sh'].get('wavelengthInNm', 500.0)
+        elif 'sh1' in self.params:
+            wavelengthInNm = self.params['sh1'].get('wavelengthInNm', 500.0)
+
+        # Conversion factor (nm to rad^2 at wavelengthInNm)
+        conversion_factor = (wavelengthInNm / 2.0 / np.pi) ** 2
+
+        if verbose_flag:
+            print(f"\n{'='*60}")
+            print(f"Computing Covariance Matrices")
+            print(f"{'='*60}")
+            print(f"  r0 = {r0} m")
+            print(f"  L0 = {L0} m")
+            print(f"  Component type: {component_type}")
+            print(f"  Full modes: {full_modes}")
+            print(f"  Wavelength: {wavelengthInNm} nm")
+            print(f"  Conversion factor: {conversion_factor:.6e}")
+            print(f"{'='*60}\n")
+
+        # Get component list
+        if component_type == 'dm':
+            component_list = self.dm_list
+        else:
+            component_list = extract_layer_list(self.params)
+
+        # Set up output directory (use 'ifunc' subdirectory like IDL)
+        if output_dir is None:
+            output_dir = os.path.join(self.cm.root_dir, 'ifunc')
+        os.makedirs(output_dir, exist_ok=True)
+
+        component_indices = []
+        C_atm_blocks = []
+        n_modes_per_component = []
+        start_modes = []
+        cov_files = []
+
+        # ==================== COMPUTE/LOAD EACH COMPONENT ====================
+        for idx, comp in enumerate(component_list):
+            comp_idx = int(comp['index'])
+            component_indices.append(comp_idx)
+
+            if verbose_flag:
+                print(f"\n[{idx+1}/{len(component_list)}] Processing {component_type}{comp_idx}...")
+
+            # Get component parameters
+            comp_params = self.get_component_params(
+                comp_idx,
+                is_layer=(component_type == 'layer'),
+                cut_start_mode=False  # Load ALL modes
+            )
+
+            # Get start_mode
+            comp_key = f'{component_type}{comp_idx}'
+            if comp_key in self.params and 'start_mode' in self.params[comp_key]:
+                start_mode = self.params[comp_key]['start_mode']
+            else:
+                start_mode = 0
+            start_modes.append(start_mode)
+
+            # Total modes available
+            total_modes = comp_params['dm_array'].shape[2]
+            modes_to_use = list(range(total_modes))
+            n_modes = len(modes_to_use)
+
+            if verbose_flag:
+                print(f"  Total modes available: {total_modes}")
+                print(f"  Start mode: {start_mode}")
+                print(f"  Computing for: {n_modes} modes")
+
+            # ========== GENERATE FILENAME (EXACTLY LIKE IDL) ==========
+            # IDL pattern from scao_calib__define.pro line ~620:
+            # fileNameCov = root_dir+'/ifunc/'+ifunc_tag (or m2c_tag)
+            #             + diam + 'diam_' + r0 + 'r0_' + L0 + 'L0.fits'
+
+            # Get ifunc_tag or m2c_tag from component params
+            if comp_key in self.params:
+                comp_cfg = self.params[comp_key]
+                if 'm2c_tag' in comp_cfg:
+                    base_tag = comp_cfg['m2c_tag']
+                elif 'ifunc_tag' in comp_cfg:
+                    base_tag = comp_cfg['ifunc_tag']
+                else:
+                    # Fallback: use component type and index
+                    base_tag = f"{component_type}{comp_idx}"
+            else:
+                base_tag = f"{component_type}{comp_idx}"
+
+            # Format numbers exactly like IDL (strtrim + format)
+            # IDL: strtrim(string(diam,format='(f12.1)'),2)
+            diam_str = f"{self.pup_diam_m:.1f}".strip()
+            # IDL: strtrim(string(r0,format='(f12.3)'),2)
+            r0_str = f"{r0:.3f}".strip()
+            # IDL: strtrim(string(L0,format='(f12.1)'),2)
+            L0_str = f"{L0:.1f}".strip()
+
+            # Assemble filename exactly like IDL
+            cov_filename = (f"{base_tag}{diam_str}diam_"
+                        f"{r0_str}r0_"
+                        f"{L0_str}L0.fits")
+
+            cov_path = os.path.join(output_dir, cov_filename)
+            cov_files.append(cov_path)
+
+            if verbose_flag:
+                print(f"  Filename: {cov_filename}")
+
+            # ========== CHECK IF FILE EXISTS ==========
+            if os.path.exists(cov_path) and not overwrite:
+                if verbose_flag:
+                    print(f"  ✓ Loading existing: {cov_filename}")
+
+                # Load from FITS
+                with fits.open(cov_path) as hdul:
+                    C_atm = hdul[0].data.copy()
+
+                if verbose_flag:
+                    print(f"    Shape: {C_atm.shape}")
+
+                C_atm_blocks.append(C_atm)
+                continue
+
+            # ========== COMPUTE COVARIANCE MATRIX ==========
+            if verbose_flag:
+                if os.path.exists(cov_path):
+                    print(f"  ⚠ File exists but overwrite=True, recomputing...")
+                else:
+                    print(f"  File not found, computing...")
+
+            # Convert 3D DM array to 2D
+            dm2d = dm3d_to_2d(comp_params['dm_array'], comp_params['dm_mask'])
+
+            # Select modes
+            dm2d_selected = dm2d[modes_to_use, :]
+
+            if verbose_flag:
+                print(f"  dm2d_selected shape: {dm2d_selected.shape}")
+                print(f"  Computing covariance matrix...")
+
+            # Compute covariance matrix
+            C_atm_nm = compute_ifs_covmat(
+                comp_params['dm_mask'],
+                self.pup_diam_m,
+                dm2d_selected,
+                r0,
+                L0,
+                oversampling=1,
+                verbose=False
+            )
+
+            # Convert from nm^2 to rad^2 (like IDL line ~660)
+            C_atm = C_atm_nm * conversion_factor
+
+            if verbose_flag:
+                print(f"  ✓ Covariance computed: {C_atm.shape}")
+                print(f"    RMS (nm): {np.sqrt(np.diag(C_atm_nm)).mean():.2f}")
+                print(f"    RMS (rad): {np.sqrt(np.diag(C_atm)).mean():.4f}")
+
+            # ========== SAVE TO FITS (LIKE IDL) ==========
+            # IDL: writefits, fileNameCov, turb_covmat
+            hdu = fits.PrimaryHDU(C_atm.astype(np.float32))
+            hdu.header['R0'] = (r0, 'Fried parameter [m]')
+            hdu.header['L0'] = (L0, 'Outer scale [m]')
+            hdu.header['DIAMM'] = (self.pup_diam_m, 'Pupil diameter [m]')
+            hdu.header['WAVELNM'] = (wavelengthInNm, 'Wavelength [nm]')
+            hdu.header['NMODES'] = (n_modes, 'Number of modes')
+            hdu.header['STARTMOD'] = (0, 'Covariance includes ALL modes from 0')
+            hdu.header['TOTMODES'] = (total_modes, 'Total modes in covariance')
+            hdu.header['REFSTART'] = (start_mode, 'Reference start_mode (not applied)')
+            hdu.header['COMPTAG'] = (base_tag, 'Component tag')
+            hdu.header['COMPTYPE'] = (component_type, 'Component type (dm/layer)')
+            hdu.header['COMPIDX'] = (comp_idx, 'Component index')
+
+            hdu.writeto(cov_path, overwrite=True)
+
+            if verbose_flag:
+                print(f"  ✓ Saved to FITS: {cov_filename}")
+
+            C_atm_blocks.append(C_atm)
+
+        if verbose_flag:
+            print(f"\n{'='*60}")
+            print(f"Covariance Computation Complete")
+            print(f"{'='*60}")
+            print(f"  Components processed: {len(C_atm_blocks)}")
+            print(f"  Files in: {output_dir}")
+            print(f"{'='*60}\n")
+
+        return {
+            'C_atm_blocks': C_atm_blocks,
+            'component_indices': component_indices,
+            'n_modes_per_component': n_modes_per_component,
+            'start_modes': start_modes,
+            'r0': r0,
+            'L0': L0,
+            'wavelength_nm': wavelengthInNm,
+            'conversion_factor': conversion_factor,
+            'files': cov_files
+        }
+
+
+    def assemble_covariance_matrix(self, C_atm_blocks, component_indices,
+                                    mode_indices=None, weights=None,
+                                    wfs_type=None, component_type='layer',
+                                    verbose=None):
+        """
+        Assemble the full covariance matrix from individual blocks,
+        extracting only the modes specified in mode_indices.
+        
+        Args:
+            C_atm_blocks (list): List of covariance matrices for each component
+            component_indices (list): List of component indices
+            mode_indices (list, optional): List of mode index arrays for each component.
+                                        If None, uses modal_combination.
+            weights (list, optional): Weights for each component. If None, uses equal weights.
+            wfs_type (str, optional): WFS type for modal_combination lookup
+            component_type (str): Type of component ('dm' or 'layer')
+            verbose (bool, optional): Override the class's verbose setting
+            
+        Returns:
+            np.ndarray: Full covariance matrix with selected modes
+        """
+        verbose_flag = self.verbose if verbose is None else verbose
+
+        # If mode_indices not provided, get from modal_combination
+        if mode_indices is None:
+            if wfs_type is None:
+                raise ValueError("Either mode_indices or wfs_type must be provided")
+
+            modal_key = f'modes_{wfs_type}_{component_type}'
+            if ('modal_combination' not in self.params or
+                modal_key not in self.params['modal_combination']):
+                raise ValueError(f"modal_combination.{modal_key} not found in params")
+
+            modes_config = self.params['modal_combination'][modal_key]
+            mode_indices = []
+
+            for i, (comp_idx, n_modes_cfg) in enumerate(zip(component_indices, modes_config)):
+                if n_modes_cfg > 0:
+                    # Get start_mode
+                    comp_key = f'{component_type}{comp_idx}'
+                    if comp_key in self.params and 'start_mode' in self.params[comp_key]:
+                        start_mode = self.params[comp_key]['start_mode']
+                    else:
+                        start_mode = 0
+
+                    n_total = C_atm_blocks[i].shape[0]
+                    mode_indices.append(list(range(start_mode, n_total)))
+                else:
+                    mode_indices.append([])
+
+            if verbose_flag:
+                print(f"Using modal_combination: {modal_key}")
+                print(f"  Mode counts: {modes_config}")
+
+        # Set default weights
+        if weights is None:
+            weights = [1.0] * len(component_indices)
+
+        # Calculate total modes
+        total_modes = sum(len(mi) for mi in mode_indices)
+
+        if verbose_flag:
+            print(f"\nAssembling covariance matrix:")
+            print(f"  Components: {component_indices}")
+            print(f"  Modes per component: {[len(mi) for mi in mode_indices]}")
+            print(f"  Total modes: {total_modes}")
+            print(f"  Weights: {weights}")
+
+        # Initialize full covariance matrix
+        C_atm_full = np.zeros((total_modes, total_modes))
+
+        # Conversion factor (nm to rad^2 at 500nm)
+        conversion_factor = (500 / 2 / np.pi) ** 2
+
+        # Fill the blocks
+        current_idx = 0
+        for i, (C_atm_block, modes, weight) in enumerate(zip(C_atm_blocks, mode_indices, weights)):
+            if len(modes) == 0:
+                continue
+
+            n_modes = len(modes)
+
+            # Extract the sub-block for selected modes
+            # C_atm_block has shape (n_total_modes, n_total_modes)
+            # We want to extract modes[i] × modes[j]
+            idx_modes = np.ix_(modes, modes)
+            C_atm_sub = C_atm_block[idx_modes]
+
+            # Place in full matrix
+            idx_full = slice(current_idx, current_idx + n_modes)
+            C_atm_full[idx_full, idx_full] = C_atm_sub * weight * conversion_factor
+
+            if verbose_flag:
+                print(f"  Component {i+1}: modes {modes[0]}-{modes[-1]} → "
+                    f"full matrix [{current_idx}:{current_idx + n_modes}]")
+
+            current_idx += n_modes
+
+        if verbose_flag:
+            print(f"\n  ✓ Full covariance matrix assembled: {C_atm_full.shape}")
+
+        return C_atm_full

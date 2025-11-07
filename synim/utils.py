@@ -1,21 +1,529 @@
-import os
-import re
-import yaml
-import datetime
+""""Utility functions for SynIM simulations, including mask extrapolation"""
+
 import numpy as np
+import matplotlib.pyplot as plt
 
-from scipy.special import eval_legendre
-from scipy.ndimage import rotate
+from scipy.ndimage import affine_transform, binary_dilation
+from scipy.ndimage import rotate, shift, zoom
 
-import specula
-specula.init(device_idx=-1, precision=1)
 
-from specula.calib_manager import CalibManager
-from specula.data_objects.ifunc import IFunc
-from specula.data_objects.m2c import M2C
-from specula.data_objects.simul_params import SimulParams
-from specula.data_objects.pupilstop import Pupilstop
-from specula.data_objects.subap_data import SubapData
+# Labels for the extrapolation directions
+directions_labels = ['Down (y+1)', 'Up (y-1)', 'Right (x+1)', 'Left (x-1)']
+
+def calculate_extrapolation_indices_coeffs(mask, debug=False, debug_pixels=None):
+    """
+    Calculates indices and coefficients for extrapolating edge pixels of a mask.
+
+    Parameters:
+        mask (ndarray): Binary mask (True/1 inside, False/0 outside).
+        debug (bool): If True, displays debug information and plots.
+        debug_pixels (list): List of [y, x] coordinates for detailed debug output.
+
+    Returns:
+        tuple: (edge_pixels, reference_indices, coefficients)
+            - edge_pixels: Linear indices of the edge pixels to extrapolate.
+            - reference_indices: Array of reference pixel indices for extrapolation.
+            - coefficients: Coefficients for linear extrapolation.
+    """
+
+    # Convert the mask to boolean
+    binary_mask = mask.astype(bool)
+
+    # Identify edge pixels (outside but adjacent to the mask) using binary dilation
+    dilated_mask = binary_dilation(binary_mask)
+    edge_pixels = np.where(dilated_mask & ~binary_mask)
+    edge_pixels_linear = np.ravel_multi_index(edge_pixels, mask.shape)
+
+    if debug:
+        print(f"Found {len(edge_pixels[0])} edge pixels to extrapolate.")
+
+        # Plot the original mask and the edge pixels
+        plt.figure(figsize=(10, 4))
+        plt.subplot(121)
+        plt.imshow(binary_mask, cmap='gray', interpolation='nearest')
+        plt.title('Original Mask')
+
+        plt.subplot(122)
+        edge_mask = np.zeros_like(binary_mask)
+        edge_mask[edge_pixels] = 1
+        plt.imshow(binary_mask, cmap='gray', alpha=0.5, interpolation='nearest')
+        plt.imshow(edge_mask, cmap='hot', alpha=0.5, interpolation='nearest')
+        plt.title('Edge Pixels to Extrapolate (red)')
+        plt.tight_layout()
+        plt.show()
+
+    # Preallocate arrays for reference indices and coefficients
+    reference_indices = np.full((len(edge_pixels[0]), 8), -1, dtype=np.int32)
+    coefficients = np.zeros((len(edge_pixels[0]), 8), dtype=np.float32)
+
+    # Directions for extrapolation (y+1, y-1, x+1, x-1)
+    directions = [
+        (1, 0),  # y+1 (down)
+        (-1, 0), # y-1 (up)
+        (0, 1),  # x+1 (right)
+        (0, -1)  # x-1 (left)
+    ]
+
+    # Iterate over each edge pixel
+    problem_indices = []
+    for i, (y, x) in enumerate(zip(*edge_pixels)):
+        # Check if this pixel is in the debug list
+        is_debug_pixel = False
+        if debug_pixels is not None:
+            for p in debug_pixels:
+                if p[0] == y and p[1] == x:
+                    is_debug_pixel = True
+                    break
+
+        valid_directions = 0
+
+        if is_debug_pixel:
+            print(f"\n[DEBUG] Detailed analysis for pixel [{y},{x}]:")
+
+        # Examine the 4 directions
+        for dir_idx, (dy, dx) in enumerate(directions):
+            # Coordinates of reference points at distance 1 and 2
+            y1, x1 = y + dy, x + dx
+            y2, x2 = y + 2*dy, x + 2*dx
+
+            # Check if the points are valid (inside the image and inside the mask)
+            valid_ref1 = (0 <= y1 < mask.shape[0] and
+                          0 <= x1 < mask.shape[1] and
+                          binary_mask[y1, x1])
+
+            valid_ref2 = (0 <= y2 < mask.shape[0] and
+                          0 <= x2 < mask.shape[1] and
+                          binary_mask[y2, x2])
+
+            if is_debug_pixel:
+                print(f"  Direction {directions_labels[dir_idx]}: ")
+                print(f"    Ref1 [{y1},{x1}] valid: {valid_ref1}")
+                print(f"    Ref2 [{y2},{x2}] valid: {valid_ref2}")
+
+            if valid_ref1:
+                # Index of the first reference point (linear index)
+                ref_idx1 = y1 * mask.shape[1] + x1
+                reference_indices[i, 2*dir_idx] = ref_idx1
+
+                if valid_ref2:
+                    # Index of the second reference point (linear index)
+                    ref_idx2 = y2 * mask.shape[1] + x2
+                    reference_indices[i, 2*dir_idx + 1] = ref_idx2
+
+                    # Coefficients for linear extrapolation: 2*P₁ - P₂
+                    coefficients[i, 2*dir_idx] = 2.0
+                    coefficients[i, 2*dir_idx + 1] = -1.0
+                    valid_directions += 1
+
+                    if is_debug_pixel:
+                        print(f"    Using extrapolation: 2*{ref_idx1} - {ref_idx2}")
+                else:
+                    # If the second point is invalid, check if it's the only valid pixel
+                    if valid_directions == 0:
+                        coefficients[i, 2*dir_idx] = 1.0
+                        valid_directions += 1
+                        if is_debug_pixel:
+                            print(f"    Using first ref value: {ref_idx1} (only valid pixel)")
+                    else:
+                        # Set coefficients to 0
+                        coefficients[i, 2*dir_idx] = 0.0
+                        coefficients[i, 2*dir_idx + 1] = 0.0
+            else:
+                # Set coefficients to 0 if the first reference is invalid
+                coefficients[i, 2*dir_idx] = 0.0
+                coefficients[i, 2*dir_idx + 1] = 0.0
+
+        # Normalize coefficients based on the number of valid directions
+        if valid_directions > 1:
+            factor = 1.0 / valid_directions
+
+            if is_debug_pixel:
+                print(f"  Valid directions: {valid_directions}, factor: {factor}")
+                print("  Coefficients before normalization:", coefficients[i])
+
+            for dir_idx in range(4):
+                if coefficients[i, 2*dir_idx] != 0:
+                    coefficients[i, 2*dir_idx] *= factor
+                    if coefficients[i, 2*dir_idx + 1] != 0:
+                        coefficients[i, 2*dir_idx + 1] *= factor
+
+            if is_debug_pixel:
+                print("  Coefficients after normalization:", coefficients[i])
+                problem_indices.append(i)
+
+    if debug:
+        print(f"Average valid directions per pixel:"
+              f" {np.sum(coefficients != 0) / (len(edge_pixels[0]) * 2):.2f}")
+
+        # Display coefficient matrix for the first 10 pixels
+        if len(edge_pixels[0]) >= 10:
+            print("\nCoefficients for the first 10 pixels:")
+            for i in range(min(10, len(edge_pixels[0]))):
+                print(f"Pixel {i} ({edge_pixels[0][i]}, {edge_pixels[1][i]}): {coefficients[i]}")
+                print(f"Indices: {reference_indices[i]}")
+
+    return edge_pixels_linear, reference_indices, coefficients
+
+
+def apply_extrapolation(data, edge_pixels, reference_indices, coefficients, debug=False, problem_indices=None):
+    """
+    Applies linear extrapolation to edge pixels using precalculated indices and coefficients.
+
+    Parameters:
+        data (ndarray): Input array to extrapolate.
+        edge_pixels (ndarray): Linear indices of edge pixels to extrapolate.
+        reference_indices (ndarray): Indices of reference pixels.
+        coefficients (ndarray): Coefficients for linear extrapolation.
+        debug (bool): If True, displays debug information.
+        problem_indices (list): Indices of problematic pixels to analyze.
+
+    Returns:
+        ndarray: Array with extrapolated pixels.
+    """
+    # Create a copy of the input array
+    result = data.copy()
+    flat_result = result.ravel()
+    flat_data = data.ravel()
+
+    if debug:
+        # Iterate over each edge pixel
+        for i, edge_idx in enumerate(edge_pixels):
+            is_problem_pixel = problem_indices is not None and i in problem_indices
+
+            # Compute the 2D coordinates of the pixel
+            edge_y = edge_idx // data.shape[1]
+            edge_x = edge_idx % data.shape[1]
+
+            if is_problem_pixel:
+                print(f"\n[DEBUG] Calculating extrapolated value for pixel [{edge_y},{edge_x}]:")
+                print(f"  Original value: {flat_data[edge_idx]}")
+
+            # Initialize the extrapolated value
+            extrap_value = 0.0
+
+            # Sum contributions from all references
+            for j in range(reference_indices.shape[1]):
+                ref_idx = reference_indices[i, j]
+                if ref_idx >= 0:  # If the index is valid
+                    ref_y = ref_idx // data.shape[1]
+                    ref_x = ref_idx % data.shape[1]
+                    contrib = coefficients[i, j] * flat_data[ref_idx]
+                    extrap_value += contrib
+
+                    if is_problem_pixel:
+                        print(f"  Ref [{ref_y},{ref_x}] = {flat_data[ref_idx]} ×"
+                              f"{coefficients[i, j]:.4f} = {contrib:.4f}")
+
+            # Assign the extrapolated value
+            flat_result[edge_idx] = extrap_value
+    else:       
+        # Create a mask for valid reference indices (>= 0)
+        valid_ref_mask = reference_indices >= 0
+
+        # Replace invalid indices with 0 to avoid indexing errors
+        safe_ref_indices = np.where(valid_ref_mask, reference_indices, 0)
+
+        # Get data values for all reference indices at once
+        ref_data = flat_data[safe_ref_indices]  # Shape: (n_valid_edges, 8)
+
+        # Zero out contributions from invalid references
+        masked_coeffs = np.where(valid_ref_mask, coefficients, 0.0)
+
+        # Compute all contributions at once and sum across reference positions
+        contributions = masked_coeffs * ref_data  # Element-wise multiplication
+        extrap_values = np.sum(contributions, axis=1)  # Sum across reference positions
+
+        # Assign extrapolated values to edge pixels
+        flat_result[edge_pixels] = extrap_values
+
+    return result
+
+
+def shiftzoom_from_source_dm_params(source_pol_coo, source_height, dm_height, pixel_pitch):
+    """
+    Compute the shift and zoom parameters for a DM based on the source coordinates and heights.
+    
+    Parameters:
+    - source_pol_coo: tuple, (radius, angle) in polar coordinates
+    - source_height: float, height of the source
+    - dm_height: float, height of the DM
+    - pixel_pitch: float, pixel pitch in meters
+
+    Returns:
+    - shift: tuple, (x_shift, y_shift) in pixels
+    - zoom: tuple, (x_zoom, y_zoom) magnification factors
+    """
+
+    arcsec2rad = np.pi/180/3600
+
+    if np.isinf(source_height):
+        mag_factor = 1.0
+    else:
+        mag_factor = source_height/(source_height-dm_height)
+    source_rec_coo_asec = polar_to_xy(source_pol_coo[0],source_pol_coo[1]*np.pi/180)
+    source_rec_coo_m = source_rec_coo_asec*dm_height*arcsec2rad
+    # change sign to get the shift in the right direction considering the convention applied in rotshiftzoom_array
+    source_rec_coo_pix = -1 * source_rec_coo_m / pixel_pitch
+
+    shift = tuple(source_rec_coo_pix)
+    zoom = (mag_factor, mag_factor)
+
+    return shift, zoom
+
+
+def rotshiftzoom_array_noaffine(input_array, dm_translation=(0.0, 0.0),  dm_rotation=0.0,   dm_magnification=(1.0, 1.0),
+                                    wfs_translation=(0.0, 0.0), wfs_rotation=0.0, wfs_magnification=(1.0, 1.0), output_size=None):
+    """
+    This function applies magnification, rotation, shift and resize of a 2D or 3D numpy array
+    
+    Parameters:
+    - input_array: numpy array, input data to be transformed
+    - dm_translation: tuple, translation for DM (x, y)
+    - dm_rotation: float, rotation angle for DM in degrees
+    - dm_magnification: tuple, magnification factors for DM (x, y)
+    - wfs_translation: tuple, translation for WFS (x, y)
+    - wfs_rotation: float, rotation angle for WFS in degrees
+    - wfs_magnification: tuple, magnification factors for WFS (x, y)
+    - output_size: tuple, desired output size (height, width)
+
+    Returns:
+    - output: numpy array, transformed data
+    """
+
+    if np.isnan(input_array).any():
+        np.nan_to_num(input_array, copy=False, nan=0.0, posinf=None, neginf=None)
+
+    # Check if phase is 2D or 3D
+    if len(input_array.shape) == 3:
+        dm_translation_ = dm_translation + (0,)
+        dm_magnification_ = dm_magnification + (1,)
+        wfs_translation_ = wfs_translation + (0,)
+        wfs_magnification_ = wfs_magnification + (1,)
+    else:
+        dm_translation_ = dm_translation
+        dm_magnification_ = dm_magnification
+        wfs_translation_ = wfs_translation
+        wfs_magnification_ = wfs_magnification
+
+    # resize
+    if output_size == None:
+        output_size = input_array.shape
+
+    # (1) DM magnification
+    if all(element == 1 for element in dm_magnification_):
+        array_mag = input_array
+    else:
+        array_mag = zoom(input_array, dm_magnification_)
+
+    # (2) DM rotation
+    if dm_rotation == 0:
+        array_rot = array_mag
+    else:
+        array_rot = rotate(array_mag, dm_rotation, axes=(1, 0), reshape=False)
+
+    # (3) DM translation
+    if all(element == 0 for element in dm_translation_):
+        array_shi = array_rot
+    else:
+        array_shi = shift(array_rot, dm_translation_)
+
+    # (4) WFS rotation
+    if wfs_rotation == 0:
+        array_rot = array_shi
+    else:
+        array_rot = rotate(array_shi, wfs_rotation, axes=(1, 0), reshape=False)
+
+    # (5) WFS translation
+    if all(element == 0 for element in wfs_translation_):
+        array_shi = array_rot
+    else:
+        array_shi = shift(array_rot, wfs_translation_)
+
+    # (6) WFS magnification
+    if all(element == 1 for element in wfs_magnification_):
+        array_mag = array_shi
+    else:
+        array_mag = zoom(array_shi, wfs_magnification_)
+
+    if (array_mag.shape[0] > output_size[0]) | (array_mag.shape[1] > output_size[1]):
+        # smaller output size
+        if len(input_array.shape) == 3:
+            output = array_mag[int(0.5*(array_mag.shape[0]-output_size[0])):int(0.5*(array_mag.shape[0]+output_size[0])), \
+                               int(0.5*(array_mag.shape[1]-output_size[1])):int(0.5*(array_mag.shape[1]+output_size[1])),:]
+        else:
+            output = array_mag[int(0.5*(array_mag.shape[0]-output_size[0])):int(0.5*(array_mag.shape[0]+output_size[0])), \
+                               int(0.5*(array_mag.shape[1]-output_size[1])):int(0.5*(array_mag.shape[1]+output_size[1]))]
+    elif (array_mag.shape[0] < output_size[0]) | (array_mag.shape[1] < output_size[1]):
+        # bigger output size
+        if len(input_array.shape) == 3:
+            output = np.zeros(output_size+(input_array.shape[2],))
+            output[int(0.5*(output_size[0]-array_mag.shape[0])):int(0.5*(output_size[0]+array_mag.shape[0])), \
+                   int(0.5*(output_size[1]-array_mag.shape[1])):int(0.5*(output_size[1]+array_mag.shape[1])),:] = array_mag
+        else:
+            output[int(0.5*(output_size[0]-array_mag.shape[0])):int(0.5*(output_size[0]+array_mag.shape[0])), \
+                   int(0.5*(output_size[1]-array_mag.shape[1])):int(0.5*(output_size[1]+array_mag.shape[1]))] = array_mag
+    else:
+        output = array_mag
+
+    return output
+
+
+def rotshiftzoom_array(input_array, dm_translation=(0.0, 0.0),
+                       dm_rotation=0.0, dm_magnification=(1.0, 1.0),
+                       wfs_translation=(0.0, 0.0), wfs_rotation=0.0,
+                       wfs_magnification=(1.0, 1.0), output_size=None):
+    """
+    This function applies magnification, rotation, shift and resize of a 2D or 3D numpy array using affine transformation.
+    Rotation is applied in the same direction as the first function.
+
+    Parameters:
+    - input_array: numpy array, input data to be transformed
+    - dm_translation: tuple, translation for DM (x, y)
+    - dm_rotation: float, rotation angle for DM in degrees
+    - dm_magnification: tuple, magnification factors for DM (x, y)
+    - wfs_translation: tuple, translation for WFS (x, y)
+    - wfs_rotation: float, rotation angle for WFS in degrees
+    - wfs_magnification: tuple, magnification factors for WFS (x, y)
+    - output_size: tuple, desired output size (height, width)
+
+    Returns:
+    - output: numpy array, transformed data
+    """
+
+    # Parameter handling: conversion of single values to tuples
+    try:
+        if not hasattr(dm_translation, '__len__') or len(dm_translation) != 2:
+            dm_translation = (float(dm_translation), float(dm_translation))
+    except (TypeError, ValueError):
+        dm_translation = (0.0, 0.0)
+
+    try:
+        if not hasattr(wfs_translation, '__len__') or len(wfs_translation) != 2:
+            wfs_translation = (float(wfs_translation), float(wfs_translation))
+    except (TypeError, ValueError):
+        wfs_translation = (0.0, 0.0)
+
+    try:
+        if not hasattr(dm_magnification, '__len__'):
+            # If it is a single value, we create a tuple with two identical elements
+            dm_magnification = (float(dm_magnification), float(dm_magnification))
+        elif len(dm_magnification) != 2:
+            # if it is a sequence but not of length 2
+            dm_magnification = (float(dm_magnification[0]), float(dm_magnification[0]))
+    except (TypeError, ValueError):
+        dm_magnification = (1.0, 1.0)
+
+    try:
+        if not hasattr(wfs_magnification, '__len__'):
+            # If it is a single value, we create a tuple with two identical elements
+            wfs_magnification = (float(wfs_magnification), float(wfs_magnification))
+        elif len(wfs_magnification) != 2:
+            # if it is a sequence but not of length 2
+            wfs_magnification = (float(wfs_magnification[0]), float(wfs_magnification[0]))
+    except (TypeError, ValueError):
+        wfs_magnification = (1.0, 1.0)
+
+    if np.isnan(input_array).any():
+        input_array = np.nan_to_num(input_array, copy=True, nan=0.0, posinf=None, neginf=None)
+
+    # Check if array is 2D or 3D
+    is_3d = len(input_array.shape) == 3
+
+    # resize
+    if output_size is None:
+        output_size = input_array.shape[:2]  # Only take the first two dimensions
+
+    # Center of the input array
+    center = np.array(input_array.shape[:2]) / 2.0
+    # Convert rotations to radians
+    # Note: Inverting the sign of rotation to match the first function's direction
+    dm_rot_rad = np.deg2rad(-dm_rotation)  # Negative sign to reverse direction
+    wfs_rot_rad = np.deg2rad(-wfs_rotation)  # Negative sign to reverse direction
+
+    # Initialize the output array
+    if is_3d:
+        output = np.zeros((output_size[0], output_size[1], input_array.shape[2]),
+                          dtype=input_array.dtype)
+    else:
+        output = np.zeros(output_size, dtype=input_array.dtype)
+
+    # Create the transformation matrices
+    # For DM transformation
+    dm_scale_matrix = np.array(
+        [[1.0/dm_magnification[0], 0], [0, 1.0/dm_magnification[1]]]
+    )
+    dm_rot_matrix = np.array(
+        [[np.cos(dm_rot_rad), -np.sin(dm_rot_rad)], [np.sin(dm_rot_rad), np.cos(dm_rot_rad)]]
+    )
+    dm_matrix = np.dot(dm_rot_matrix, dm_scale_matrix)
+
+    # For WFS transformation
+    wfs_scale_matrix = np.array(
+        [[1.0/wfs_magnification[0], 0], [0, 1.0/wfs_magnification[1]]]
+    )
+    wfs_rot_matrix = np.array(
+        [[np.cos(wfs_rot_rad), -np.sin(wfs_rot_rad)],
+         [np.sin(wfs_rot_rad), np.cos(wfs_rot_rad)]]
+    )
+    wfs_matrix = np.dot(wfs_rot_matrix, wfs_scale_matrix)
+
+    # Combine transformations (first DM, then WFS)
+    combined_matrix = np.dot(wfs_matrix, dm_matrix)
+
+    # For 3D arrays, extend the transformation matrix to 3x3
+    if is_3d:
+        # Create a 3x3 identity matrix and insert the 2x2 transformation in the top-left
+        combined_matrix_3d = np.eye(3)
+        combined_matrix_3d[:2, :2] = combined_matrix
+        combined_matrix = combined_matrix_3d
+
+    # Calculate offset
+    output_center = np.array(output_size) / 2.0
+    if is_3d:
+        # For 3D, calculate offset only for the first two dimensions
+        offset_2d = center[:2] - np.dot(combined_matrix[:2, :2], output_center) \
+            - np.dot(dm_matrix, dm_translation) - wfs_translation
+        offset = np.array([offset_2d[0], offset_2d[1], 0])
+    else:
+        offset = center - np.dot(combined_matrix, output_center) \
+            - np.dot(dm_matrix, dm_translation) - wfs_translation
+
+    # Apply transformation
+    output = affine_transform(
+        input_array,
+        combined_matrix,
+        offset=offset,
+        output_shape=output_size if not is_3d else output_size + (input_array.shape[2],),
+        order=1
+    )
+
+    return output
+
+
+def has_transformations(rotation, translation, magnification):
+    """
+    Helper function to check if there are any non-trivial transformations.
+    
+    Returns:
+    - bool: True if there are transformations, False otherwise
+    """
+    # Check rotation
+    has_rotation = rotation != 0.0
+
+    # Check translation
+    if hasattr(translation, '__len__'):
+        has_translation = not all(t == 0.0 for t in translation)
+    else:
+        has_translation = translation != 0.0
+
+    # Check magnification
+    if hasattr(magnification, '__len__'):
+        has_magnification = not all(m == 1.0 for m in magnification)
+    else:
+        has_magnification = magnification != 1.0
+
+    return has_rotation or has_translation or has_magnification
+
 
 def rebin(array, new_shape, method='average'):
     """
@@ -32,55 +540,62 @@ def rebin(array, new_shape, method='average'):
     """
 
     if array.ndim == 1:
-        array = array.reshape((-1, 1))  # Convert 1D array to 2D
+        array = array.reshape(array.shape[0], 1)
 
     shape = array.shape
     m, n = shape[0:2]
-    M, N = new_shape      
+    M, N = new_shape
 
     if M > m or N > n:
-        if M % m != 0 or N % n != 0:
+        # Expansion case
+        if m % M != 0 or n % N != 0:
             raise ValueError("New shape must be multiples of the input dimensions.")
-
-        m_factor, n_factor = M // m, N // n
-
-        # Replicate the array in both dimensions
-        if len(shape) == 3:
-            rebinned_array = np.tile(array, (m_factor, n_factor, 1))
+        if array.ndim == 3:
+            rebinned_array = np.tile(array, (M//m, N//n, 1))
         else:
-            rebinned_array = np.tile(array, (m_factor, n_factor))
+            rebinned_array = np.tile(array, (M//m, N//n))
     else:    
-        if method == 'sum':
-            if len(shape) == 3:
-                rebinned_array = array[:M*(m//M), :N*(n//N), :].reshape((M, m//M, N, n//N, shape[2])).sum(axis=(1, 3))
+        # Compression case
+        if M == 0 or N == 0:
+            raise ValueError("New shape dimensions must be greater than 0.")
+
+        if array.ndim == 3:
+            if method == 'sum':
+                rebinned_array = np.sum(
+                    array[:M*(m//M), :N*(n//N), :].reshape((M, m//M, N, n//N, shape[2])),
+                    axis=(1, 3))
+            elif method == 'average':
+                rebinned_array = np.mean(
+                    array[:M*(m//M), :N*(n//N), :].reshape((M, m//M, N, n//N, shape[2])),
+                    axis=(1, 3))
+            elif method == 'nanmean':
+                with np.errstate(invalid='ignore'):
+                    rebinned_array = np.nanmean(
+                        array[:M*(m//M), :N*(n//N), :].reshape((M, m//M, N, n//N, shape[2])),
+                        axis=(1, 3))
             else:
-                rebinned_array = array[:M*(m//M), :N*(n//N)].reshape((M, m//M, N, n//N)).sum(axis=(1, 3))
-        elif method == 'average':
-            if len(shape) == 3:
-                rebinned_array = array[:M*(m//M), :N*(n//N), :].reshape((M, m//M, N, n//N, shape[2])).mean(axis=(1, 3))
-            else:
-                rebinned_array = array[:M*(m//M), :N*(n//N)].reshape((M, m//M, N, n//N)).mean(axis=(1, 3))
-        elif method == 'nanmean':
-            if len(shape) == 3:
-                rebinned_array = np.nanmean(array[:M*(m//M), :N*(n//N), :].reshape((M, m//M, N, n//N, shape[2])), axis=(1, 3))
-            else:
-                rebinned_array = np.nanmean(array[:M*(m//M), :N*(n//N)].reshape((M, m//M, N, n//N)), axis=(1, 3))
+                raise ValueError(f"Unsupported method: {method}."
+                                 " Use 'sum', 'average', or 'nanmean'.")
         else:
-            raise ValueError("Unsupported rebin method. Use 'sum' or 'average'.")
+            if method == 'sum':
+                rebinned_array = np.sum(
+                    array[:M*(m//M), :N*(n//N)].reshape((M, m//M, N, n//N)),
+                    axis=(1, 3))
+            elif method == 'average':
+                rebinned_array = np.mean(
+                    array[:M*(m//M), :N*(n//N)].reshape((M, m//M, N, n//N)),
+                    axis=(1, 3))
+            elif method == 'nanmean':
+                with np.errstate(invalid='ignore'):
+                    rebinned_array = np.nanmean(
+                        array[:M*(m//M), :N*(n//N)].reshape((M, m//M, N, n//N)),
+                        axis=(1, 3))
+            else:
+                raise ValueError(f"Unsupported method: {method}."
+                                 " Use 'sum', 'average', or 'nanmean'.")
 
     return rebinned_array
 
-def polar_to_xy(r,theta):
-    # conversion polar to rectangular coordinates
-    # theta is in rad
-    return np.array(( r * np.cos(theta),r * np.sin(theta) ))
-
-def xy_to_polar(x, y):
-    # conversion rectangular to polar coordinates
-    # theta is in rad
-    r = np.sqrt(x**2 + y**2)
-    theta = np.arctan2(y, x)
-    return r, theta
 
 def apply_mask(array, mask, norm=False, fill_value=None):
     """
@@ -116,8 +631,18 @@ def apply_mask(array, mask, norm=False, fill_value=None):
         result = array * norm_mask
         if norm and fill_value is None:
             # Set to 0 where mask was zero (to avoid inf)
-            result = np.where(mask if mask.ndim == array.ndim else mask[:, :, np.newaxis], result, 0)
+            result = np.where(
+                mask if mask.ndim == array.ndim else mask[:, :, np.newaxis], 
+                result, 0
+                )
         return result
+
+
+def polar_to_xy(r,theta):
+    # conversion polar to rectangular coordinates
+    # theta is in rad
+    return np.array(( r * np.cos(theta),r * np.sin(theta) ))
+
 
 def make_xy(sampling, ratio, is_polar=False, is_double=False, is_vector=False,
             use_zero=False, quarter=False, fft=False):
@@ -133,8 +658,8 @@ def make_xy(sampling, ratio, is_polar=False, is_double=False, is_vector=False,
     Returns:
     - x: numpy 2D array
     - y: numpy 2D array
-    """    
-    
+    """
+
     if sampling <= 1:
         raise ValueError("make_xy -- sampling must be larger than 1")
 
@@ -173,6 +698,15 @@ def make_xy(sampling, ratio, is_polar=False, is_double=False, is_vector=False,
         y = x
 
     return x, y
+
+
+def xy_to_polar(x, y):
+    # conversion rectangular to polar coordinates
+    # theta is in rad
+    r = np.sqrt(x**2 + y**2)
+    theta = np.arctan2(y, x)
+    return r, theta
+
 
 def make_mask(npoints, obsratio=None, diaratio=1.0, xc=0.0, yc=0.0, square=False, inverse=False, centeronpixel=False):
     """
@@ -222,6 +756,7 @@ def make_mask(npoints, obsratio=None, diaratio=1.0, xc=0.0, yc=0.0, square=False
 
     return mask
 
+
 def make_orto_modes(array):
     # return an othogonal 2D array
 
@@ -238,692 +773,6 @@ def make_orto_modes(array):
 
     return Q
 
-def zern_degree(j):
-    """
-    From Armando Riccardi IDL function.
-    """
-    # return the zernike degree
-    n = np.floor(0.5 * (np.sqrt(8 * j - 7) - 3)) + 1
-    cn = n * (n + 1) / 2 + 1
-
-    if np.isscalar(n):
-        if n % 2 == 0:
-            m = np.floor((j - cn + 1) / 2) * 2
-        else:
-            m = np.floor((j - cn) / 2) * 2 + 1
-    else:
-        # new code for j vector
-        idx_even = np.where(n % 2 == 0)[0]
-        idx_odd = np.where((n + 1) % 2 == 0)[0]
-        m = n * 0
-        temp = j - cn
-        m[idx_even] = np.floor((temp[idx_even] + 1) / 2) * 2
-        m[idx_odd] = np.floor(temp[idx_odd] / 2) * 2 + 1
-
-    return n, m.astype(int)
-
-def zern_jradial(n, m, r):
-    """
-    Compute radial Zernike polynomial. 
-    From Armando Riccardi IDL function.
-
-    Parameters:
-    - n: int, radial order
-    - m: int, azimuthal order (0 <= m <= n, n-m even)
-    - r: numpy array, radial coordinate
-
-    Returns:
-    - jpol: numpy array, radial Zernike polynomial
-    """
-
-    if n < 0 or m < 0 or m > n or (n - m) % 2 != 0:
-        raise ValueError("Invalid values for n and m.")
-
-    nmm2 = (n - m) // 2
-
-    if m == 0:
-        return eval_legendre(nmm2, 2.0 * r ** 2 - 1.0)
-    else:
-        prefactor = np.sqrt(2.0 / (1.0 + 2.0 * n))
-        return prefactor * r ** m * eval_legendre(nmm2, 2.0 * r ** 2 - 1.0)
-
-def zern_jpolar(j, rho, theta):
-    """
-    Compute polar Zernike polynomial.
-    From Armando Riccardi IDL function.
-
-    Parameters:
-    - j: int, index of the polynomial, j >= 1
-    - rho: numpy array, point to evaluate (polar coord.)
-    - theta: numpy array, 
-
-    Returns:
-    - jpol: numpy 2D array, j-th Zernike polynomial in the point of polar coordinates r, theta
-    """
-
-    if j < 1:
-        print("zern_jpolar -- must have j >= 1")
-        return 0.0
-
-    n, m = zern_degree(j)
-
-    result = np.sqrt(n + 1 + rho ** 2) * zern_jradial(n, m, rho)
-
-    if m == 0:
-        return result
-    elif j % 2 == 0:
-        return np.sqrt(2) * result * np.cos(m * theta)
-    else:
-        return np.sqrt(2) * result * np.sin(m * theta)
-
-def zern(j, x, y):
-    """
-    Compute the value of J-th Zernike polynomial in the points of coordinates x,y.
-    From Armando Riccardi IDL function.
-
-    Parameters:
-    - j: int, index of the polynomial, j >= 1
-    - rho: numpy 2D array, X coordinates
-    - theta: numpy 2D array, X coordinates
-
-    Returns:
-    - jzern: numpy 2D array, j-th Zernike polynomial in the point of coordinates x ,y
-    """
-
-    rho = np.sqrt(x**2 + y**2)
-    theta = np.arctan2(y, x)
-    return zern_jpolar(j, rho, theta)
-
-def zern2phi(dim, maxZernNumber, mask=None, no_round_mask=False, xsign=1, ysign=1, rot_angle=0, verbose=False):
-    """
-    Computes the Zernike phase cube and orthonormalizes it on a desired pupil (mask).
-    From Guido Agapito IDL function.
-
-    Parameters:
-    - dim: int, number of point on the side of the output array
-    - maxZernNumber: int, number of zernike modes excluding piston
-    - mask: optional, numpy 2D array, mask
-    - xsign: optional, sign of the x axis (for Zernike computation with zern function)
-    - ysign: optional, sign of the y axis (for Zernike computation with zern function)
-    - rot_angle: optional, float, rotation in deg
-    - verbose, optional
-
-    Returns:
-    - z2phi: numpy 3D array, set of maxZernNumber zernike modes
-    """
-
-    if not no_round_mask:
-        round_mask = np.array(make_mask(dim))
-    else:
-        round_mask = np.ones((dim, dim), dtype=float)
-
-    if verbose:
-        print('Computing Zernike cube...')
-
-    xx, yy = make_xy(dim, 1, is_polar=False, is_double=False, is_vector=False,
-            use_zero=False, quarter=False, fft=False)
-
-    z2phi = np.zeros((dim, dim, maxZernNumber + 1), dtype=float)
-
-    for i in range(maxZernNumber + 1):
-        zern_shape = zern(i + 1, xsign * xx, ysign * yy)
-        if rot_angle != 0:
-            zern_shape = rotate(zern_shape, rot_angle, axes=(1, 0), reshape=False)
-        z2phi[:, :, i] = zern_shape * round_mask
-
-    if verbose:
-        print('... Zernike cube computed')
-
-    if mask is not None:
-        if verbose:
-            print('Orthogonalizing Zernike cube...')
-
-        idx1D = np.where(mask.flatten())
-        idx2D = np.where(mask)
-
-        z2phi_temp = z2phi.reshape(-1, maxZernNumber + 1)
-        z2phi_on_pupil = z2phi_temp[idx1D,:]
-        z2phi_on_pupil = z2phi_on_pupil.reshape(-1,maxZernNumber + 1)
-
-        z2phi_matrix_ortho = make_orto_modes(z2phi_on_pupil)
-
-        #z2phi = np.zeros((dim, dim, maxZernNumber + 1), dtype=float)
-        z2phi = np.full((dim,dim, maxZernNumber + 1),np.nan)
-
-        for i in range(maxZernNumber + 1):
-            temp = np.zeros((dim, dim), dtype=float)
-            temp[idx2D[0],idx2D[1]] = z2phi_matrix_ortho[:, i] * 1/np.std(z2phi_matrix_ortho[:, i])
-            temp[idx2D[0],idx2D[1]] = temp[idx2D[0],idx2D[1]] - np.mean(temp[idx2D[0],idx2D[1]])
-            z2phi[:, :, i] = temp
-
-        if verbose:
-            print('Zernike cube orthogonalized!')
-
-    z2phi = z2phi[:, :, 1:]
-
-    return z2phi
-
-def is_simple_config(config):
-    """
-    Detect if this is a simple SCAO config or a complex MCAO config.
-    
-    Args:
-        config (dict): Configuration dictionary
-        
-    Returns:
-        bool: True for simple SCAO config, False for complex MCAO config
-    """
-    # Check for multiple DMs
-    dm_count = sum(1 for key in config if key.startswith('dm') and key != 'dm')
-
-    # Check for multiple WFSs
-    wfs_count = sum(1 for key in config if 
-                   (key.startswith('sh_') or key.startswith('pyramid')) and key != 'pyramid')
-
-    return dm_count == 0 and wfs_count == 0
-
-def wfs_fov_from_config(wfs_params):
-    """
-    Extract field of view value from WFS parameters.
-    
-    Args:
-        wfs_params (dict): Dictionary with WFS parameters
-        
-    Returns:
-        float: Field of view in arcseconds
-    """
-    if wfs_params.get('sensor_fov') is not None:
-        wfs_fov_arcsec = wfs_params['sensor_fov']
-    elif wfs_params.get('fov') is not None:
-        wfs_fov_arcsec = wfs_params['fov']
-    elif wfs_params.get('subap_wanted_fov') is not None:
-        wfs_fov_arcsec = wfs_params['subap_wanted_fov']
-    else:
-        wfs_fov_arcsec = 0
-    return wfs_fov_arcsec
-
-def determine_source_type(wfs_name):
-    """
-    Determine the source type from a WFS name.
-    
-    Args:
-        wfs_name (str): Name of the WFS
-        
-    Returns:
-        str: Source type ('lgs', 'ngs', or 'ref')
-    """
-    if 'lgs' in wfs_name:
-        return 'lgs'
-    elif 'ngs' in wfs_name:
-        return 'ngs'
-    elif 'ref' in wfs_name:
-        return 'ref'
-    return 'ngs'  # default
-
-def extract_source_coordinates(config, wfs_key):
-    """
-    Extract polar coordinates for a given source.
-    
-    Args:
-        config (dict): Configuration dictionary
-        wfs_key (str): Key of the WFS in the config
-        
-    Returns:
-        list: [distance, angle] polar coordinates
-    """
-    # First check if coordinates are in WFS parameters
-    if wfs_key in config and 'gs_pol_coo' in config[wfs_key]:
-        return config[wfs_key]['gs_pol_coo']
-
-    # Try to find source corresponding to this WFS
-    source_match = re.search(r'((?:lgs|ngs|ref)\d+)', wfs_key)
-    if source_match:
-        source_key = f'source_{source_match.group(1)}'
-        if source_key in config:
-            if 'polar_coordinates' in config[source_key]:
-                return config[source_key]['polar_coordinates']
-            elif 'polar_coordinate' in config[source_key]:
-                return config[source_key]['polar_coordinate']
-
-    # Try on_axis_source for simple configs
-    if 'on_axis_source' in config:
-        if 'polar_coordinates' in config['on_axis_source']:
-            return config['on_axis_source']['polar_coordinates']
-        elif 'polar_coordinate' in config['on_axis_source']:
-            return config['on_axis_source']['polar_coordinate']
-
-    # Default to on-axis
-    return [0.0, 0.0]
-
-def extract_source_height(config, wfs_key):
-    """
-    Extracts the actual height of the source from the configuration.
-    If zenithAngleInDeg is present, returns height * airmass.
-    If height is not present, returns np.inf.
-    """
-    # Compute airmass
-    if 'main' in config:
-        zenith_angle = config['main'].get('zenithAngleInDeg', None)
-        zenith_rad = np.deg2rad(zenith_angle)
-        airmass = 1.0 / np.cos(zenith_rad)
-    else:
-        airmass = 1.0
-
-    # First check if coordinates are in WFS parameters
-    if wfs_key in config and 'height' in config[wfs_key]:
-        return config[wfs_key]['height'] * airmass
-
-    # Try to find source corresponding to this WFS
-    source_match = re.search(r'((?:lgs|ngs|ref)\d+)', wfs_key)
-    if source_match:
-        source_key = f'source_{source_match.group(1)}'
-        if source_key in config:
-            if 'height' in config[source_key]:
-                return config[source_key]['height'] * airmass
-
-    # Try on_axis_source for simple configs
-    if 'on_axis_source' in config:
-        if 'height' in config['on_axis_source']:
-            return config['on_axis_source']['height'] * airmass
-
-    return np.inf  # Default to infinity if no height is specified
-
-def load_pupilstop(cm, pupilstop_params, pixel_pupil, pixel_pitch, verbose=False):
-    """
-    Load or create a pupilstop.
-    
-    Args:
-        cm (CalibManager): SPECULA calibration manager
-        pupilstop_params (dict): Parameters for the pupilstop
-        pixel_pupil (int): Number of pixels across pupil
-        pixel_pitch (float): Pixel pitch in meters
-        verbose (bool): Whether to print details
-        
-    Returns:
-        numpy.ndarray: Pupil mask array
-    """
-    if 'tag' in pupilstop_params or 'pupil_mask_tag' in pupilstop_params:
-        if 'pupil_mask_tag' in pupilstop_params:
-            pupilstop_tag = pupilstop_params['pupil_mask_tag']
-            if verbose:
-                print(f"     Loading pupilstop from file, tag: {pupilstop_tag}")
-        else:
-            pupilstop_tag = pupilstop_params['tag']
-            if verbose:
-                print(f"     Loading pupilstop from file, tag: {pupilstop_tag}")
-        pupilstop_path = cm.filename('pupilstop', pupilstop_tag)
-        pupilstop = Pupilstop.restore(pupilstop_path)
-        return pupilstop.A
-    else:
-        # Create pupilstop from parameters
-        mask_diam = pupilstop_params.get('mask_diam', 1.0)
-        obs_diam = pupilstop_params.get('obs_diam', 0.0)
-
-        # Create a new Pupilstop instance with the given parameters
-        simul_params = SimulParams(pixel_pupil=pixel_pupil, pixel_pitch=pixel_pitch)
-        pupilstop = Pupilstop(
-            simul_params,
-            mask_diam=mask_diam,
-            obs_diam=obs_diam,
-            target_device_idx=-1,
-            precision=0
-        )
-        return pupilstop.A
-
-def load_influence_functions(cm, dm_params, pixel_pupil, verbose=False):
-    """
-    Load or generate DM influence functions.
-    
-    Args:
-        cm (CalibManager): SPECULA calibration manager
-        dm_params (dict): DM parameters
-        pixel_pupil (int): Number of pixels across pupil
-        verbose (bool): Whether to print details
-        
-    Returns:
-        tuple: (dm_array, dm_mask) - 3D array of DM influence functions and mask
-    """
-    if 'ifunc_object' in dm_params or 'ifunc_tag' in dm_params:        
-        if 'ifunc_tag' in dm_params:
-            ifunc_tag = dm_params['ifunc_tag']
-            if verbose:
-                print(f"     Loading influence function from file, tag: {ifunc_tag}")
-        else:
-            ifunc_tag = dm_params['ifunc_object']
-            if verbose:
-                print(f"     Loading influence function from file, tag: {ifunc_tag}")
-        ifunc_path = cm.filename('ifunc', ifunc_tag)
-        ifunc = IFunc.restore(ifunc_path)
-
-        m2c_tag = None
-        if 'm2c_tag' in dm_params:
-            m2c_tag = dm_params['m2c_tag']
-            if verbose:
-                print(f"     Loading M2C from file, tag: {m2c_tag}")
-        if 'm2c_object' in dm_params:
-            m2c_tag = dm_params['m2c_object']
-            if verbose:
-                print(f"     Loading M2C from file, tag: {m2c_tag}")
-        if m2c_tag is not None:
-            m2c_path = cm.filename('m2c', m2c_tag)
-            m2c = M2C.restore(m2c_path)
-            # multiply the influence function by the M2C
-            ifunc.influence_function = m2c.m2c.T @ ifunc.influence_function
-
-        if ifunc.influence_function.shape[0] > dm_params['nmodes']:
-            ifunc.influence_function = ifunc.influence_function[:dm_params['nmodes'],:]
-
-        # Convert influence function from 2D to 3D
-        if ifunc.mask_inf_func is not None:           
-            # Create empty 3D array (height, width, n_modes)
-            dm_array = dm2d_to_3d(ifunc.influence_function, ifunc.mask_inf_func)
-            if verbose:
-                print(f"     DM array shape: {dm_array.shape}")
-            # Create the DM mask
-            dm_mask = ifunc.mask_inf_func.copy()
-            if verbose:
-                print(f"     DM mask shape: {dm_mask.shape}")
-                print(f"     DM mask sum: {np.sum(dm_mask)}")
-            return dm_array, dm_mask
-        else:
-            # If we don't have a mask, assume the influence function is already properly organized
-            raise ValueError("IFunc without mask_inf_func is not supported. Mask is required to reconstruct the 3D array.")
-
-    elif 'type_str' in dm_params:
-        if verbose:
-            print(f"     Loading influence function from type_str: {dm_params['type_str']}")
-        # Create influence functions directly using Zernike modes
-        from specula.lib.compute_zern_ifunc import compute_zern_ifunc
-        nmodes = dm_params.get('nmodes', 100)
-        obsratio = dm_params.get('obsratio', 0.0)
-        npixels = dm_params.get('npixels', pixel_pupil)
-
-        if 'mask_object' in dm_params:
-            mask_tag = dm_params['mask_object']
-            mask_path = cm.filename('pupilstop', mask_tag)
-            print(f"     Loading mask from file, tag: {mask_tag}")
-            pupilstop = Pupilstop.restore(mask_path)
-            mask = pupilstop.A
-        else:
-            mask = None
-            print("     No mask provided. Using default mask.")
-
-        # Compute Zernike influence functions
-        z_ifunc, z_mask = compute_zern_ifunc(npixels, nmodes, xp=np, dtype=float,
-                                             obsratio=obsratio, diaratio=1.0,
-                                             start_mode=0, mask=mask)
-
-        # Create empty 3D array (height, width, n_modes)
-        dm_array = dm2d_to_3d(z_ifunc, z_mask)
-        if verbose:
-            print(f"     DM array shape: {dm_array.shape}")
-        dm_mask = z_mask
-        if verbose:
-            print(f"     DM mask shape: {dm_mask.shape}")
-            print(f"     DM mask sum: {np.sum(dm_mask)}")
-        return dm_array, dm_mask
-    else:
-        raise ValueError("No valid influence function configuration found. Need either 'ifunc_tag', 'ifunc_object', or 'type_str'.")
-
-def find_subapdata(cm, wfs_params, wfs_key, params, verbose=False):
-    """
-    Find and load SubapData for valid subapertures.
-    
-    Args:
-        cm (CalibManager): SPECULA calibration manager
-        wfs_params (dict): WFS parameters
-        wfs_key (str): WFS key in configuration
-        params (dict): Full configuration parameters
-        verbose (bool): Whether to print details
-        
-    Returns:
-        numpy.ndarray: Array of valid subaperture indices or None
-    """
-    subap_path = None
-    subap_tag = None
-
-    # First check - Try to get subapdata from WFS params
-    if 'subapdata_object' in wfs_params or 'subapdata_tag' in wfs_params:
-        if 'subapdata_tag' in wfs_params:
-            subap_tag = wfs_params['subapdata_tag']
-            if verbose:
-                print("     Loading subapdata from file, tag:", subap_tag)
-            subap_path = cm.filename('subap_data', subap_tag)
-        else:
-            subap_tag = wfs_params['subapdata_object']
-            if verbose:
-                print("     Loading subapdata from file, tag:", subap_tag)
-            subap_path = cm.filename('subapdata', subap_tag)
-
-    # Second check - Try to find corresponding slopec section based on WFS name
-    elif wfs_key is not None:
-        # Determine potential slopec key based on WFS key (e.g., sh_lgs1 -> slopec_lgs1)
-        slopec_key = None
-        if wfs_key.startswith('sh_'):
-            potential_slopec = 'slopec_' + wfs_key[3:]
-            if potential_slopec in params:
-                slopec_key = potential_slopec
-        elif wfs_key.startswith('pyramid_'):
-            potential_slopec = 'slopec_' + wfs_key[8:]
-            if potential_slopec in params:
-                slopec_key = potential_slopec
-        # Handle numeric indices (e.g., sh1 -> slopec1)
-        elif any(char.isdigit() for char in wfs_key):
-            # Extract numeric portion
-            numeric_part = ''.join(char for char in wfs_key if char.isdigit())
-            if numeric_part:
-                potential_slopec = f'slopec{numeric_part}'
-                if potential_slopec in params:
-                    slopec_key = potential_slopec
-        
-        # Check standard slopec key
-        if slopec_key is None and 'slopec' in params:
-            slopec_key = 'slopec'
-        
-        if slopec_key:
-            slopec_params = params[slopec_key]
-            if 'subapdata_tag' in slopec_params:
-                if verbose:
-                    print(f"     Loading subapdata from {slopec_key}, tag:", slopec_params['subapdata_tag'])
-                subap_tag = slopec_params['subapdata_tag']
-                subap_path = cm.filename('subap_data', subap_tag)
-            elif 'subapdata_object' in slopec_params:
-                if verbose:
-                    print(f"     Loading subapdata from {slopec_key}, tag:", slopec_params['subapdata_object'])
-                subap_tag = slopec_params['subapdata_object']
-                subap_path = cm.filename('subapdata', subap_tag)
-
-    # Third check - Try generic slopec section
-    elif 'slopec' in params:
-        slopec_params = params['slopec']
-        if 'subapdata_tag' in slopec_params:
-            if verbose:
-                print("     Loading subapdata from slopec, tag:", slopec_params['subapdata_tag'])
-            subap_tag = slopec_params['subapdata_tag']
-            subap_path = cm.filename('subap_data', subap_tag)
-        elif 'subapdata_object' in slopec_params:
-            if verbose:
-                print("     Loading subapdata from slopec, tag:", slopec_params['subapdata_object'])
-            subap_tag = slopec_params['subapdata_object']
-            subap_path = cm.filename('subapdata', subap_tag)
- 
-    if subap_path is None:
-        if verbose:
-            print("     No subapdata file found. Using default.")
-        return None
-    else:
-        if verbose:
-            print("     Subapdata file found:", subap_path)
-
-    # Try to load the subapdata if a path was found
-    if subap_path and os.path.exists(subap_path):
-        if verbose:
-            print("     Loading subapdata from file:", subap_path)
-        subap_data = SubapData.restore(subap_path)
-        return np.transpose(np.asarray(np.where(subap_data.single_mask())))
-
-    return None
-
-def insert_interaction_matrix_part(im_full, intmat_obj, mode_idx, slope_idx_start, slope_idx_end, verbose=False):
-    """
-    Insert part of an interaction matrix into a combined matrix.
-    
-    Args:
-        im_full (numpy.ndarray): Target combined interaction matrix
-        intmat_obj (Intmat): Source interaction matrix object
-        mode_idx (list): Indices of modes to extract
-        slope_idx_start (int): Start index for slopes in target matrix
-        slope_idx_end (int): End index for slopes in target matrix
-        verbose (bool): Whether to print details
-        
-    Returns:
-        bool: True if insertion was successful
-    """
-    # Make sure we don't exceed matrix dimensions
-    if not mode_idx or slope_idx_end > im_full.shape[1]:
-        if verbose:
-            print(f"  Warning: Invalid indices for matrix insertion")
-        return False
-
-    # Calculate how many modes we can actually use from this IM
-    available_dm_modes = intmat_obj.intmat.shape[0]
-    actual_mode_indices = [idx for idx in mode_idx if idx < available_dm_modes]
-
-    if not actual_mode_indices:
-        if verbose:
-            print(f"  Warning: No valid mode indices. "
-                  f"Available modes: {available_dm_modes}, requested: {mode_idx}")
-        return False
-
-    # Insert the valid modes into our combined matrix
-    n_slopes = slope_idx_end - slope_idx_start
-    im_full[mode_idx, slope_idx_start:slope_idx_end] = intmat_obj.intmat[actual_mode_indices, :n_slopes]
-
-    if verbose:
-        print(f"  Inserted {len(actual_mode_indices)} modes at indices {actual_mode_indices}, "
-              f"slopes {slope_idx_start}:{slope_idx_end}")
-
-    return True
-
-def build_source_filename_part(source_config,zenith_angle=None):
-    """
-    Build filename part for source parameters.
-    
-    Args:
-        source_config (dict): Source configuration
-        
-    Returns:
-        list: Filename parts for source
-    """
-    parts = []
-
-    if 'polar_coordinates' in source_config:
-        dist, angle = source_config['polar_coordinates']
-        parts.append(f"pd{dist:.1f}a{angle:.0f}")
-    elif 'polar_coordinate' in source_config:
-        dist, angle = source_config['polar_coordinate']
-        parts.append(f"pd{dist:.1f}a{angle:.0f}")
-    elif 'pol_coords' in source_config:
-        dist, angle = source_config['pol_coords']
-        parts.append(f"pd{dist:.1f}a{angle:.0f}")
-
-    if 'height' in source_config:
-        if source_config['height'] is not None and not np.isinf(source_config['height']):
-            airmass = 1.0
-            if zenith_angle is not None:
-                zenith_rad = np.deg2rad(zenith_angle)
-                airmass /= np.cos(zenith_rad)
-        parts.append(f"h{source_config['height']*airmass:.0f}")
-
-    return parts
-
-def build_pupil_filename_part(pupil_params):
-    """
-    Build filename part for pupil parameters.
-    
-    Args:
-        pupil_params (dict): Pupil configuration
-        
-    Returns:
-        list: Filename parts for pupil
-    """
-    parts = []
-
-    if pupil_params:
-        ps = pupil_params.get('pixel_pupil', 0)
-        pp = pupil_params.get('pixel_pitch', 0)
-        parts.append(f"ps{ps}p{pp:.4f}")
-
-        if 'obsratio' in pupil_params and pupil_params['obsratio'] > 0:
-            parts.append(f"o{pupil_params['obsratio']:.3f}")
-
-    return parts
-
-def build_wfs_filename_part(wfs_config, wfs_type):
-    """
-    Build filename part for WFS parameters.
-    
-    Args:
-        wfs_config (dict): WFS configuration
-        wfs_type (str): Type of WFS ('sh' or 'pyr')
-        
-    Returns:
-        list: Filename parts for WFS
-    """
-    parts = []
-
-    if wfs_type == 'sh':
-        nsubaps = wfs_config.get('subap_on_diameter', 0)
-        wl = wfs_config.get('wavelengthInNm', 0)
-        fov = wfs_fov_from_config(wfs_config)
-        npx = wfs_config.get('subap_npx', 0)
-        parts.append(f"sh{nsubaps}x{nsubaps}_wl{wl}_fv{fov:.1f}_np{npx}")
-
-    elif wfs_type == 'pyr':
-        pup_diam = wfs_config.get('pup_diam', 0)
-        wl = wfs_config.get('wavelengthInNm', 0)
-        fov = wfs_fov_from_config(wfs_config)
-        mod_amp = wfs_config.get('mod_amp', 0)
-        parts.append(f"pyr{pup_diam:.1f}_wl{wl}_fv{fov:.1f}_ma{mod_amp:.1f}")
-
-    return parts
-
-def build_dm_filename_part(dm_config, config=None):
-    """
-    Build filename part for DM parameters.
-    
-    Args:
-        dm_config (dict): DM configuration
-        config (dict, optional): Full configuration (for DM reference in simple config)
-        
-    Returns:
-        list: Filename parts for DM
-    """
-    parts = []
-
-    height = dm_config.get('height', 0)
-    parts.append(f"dmH{height}")
-
-    # Check for custom influence functions - use config for simple configs
-    target_config = config['dm'] if config and 'dm' in config else dm_config
-
-    if 'ifunc_tag' in target_config:
-        parts.append(f"ifunc_{target_config['ifunc_tag']}")
-        if 'm2c_tag' in target_config:
-            parts.append(f"m2c_{target_config['m2c_tag']}")
-    elif 'ifunc_object' in target_config:
-        parts.append(f"ifunc_{target_config['ifunc_object']}")
-        if 'm2c_object' in target_config:
-            parts.append(f"m2c_{target_config['m2c_object']}")
-    elif 'type_str' in target_config:
-        nmodes = dm_config.get('nmodes', 0)
-        parts.append(f"nm{nmodes}_{target_config['type_str']}")
-    else:
-        # Default case
-        nmodes = dm_config.get('nmodes', 0)
-        parts.append(f"nm{nmodes}")
-
-    return parts
 
 def dm3d_to_2d(dm_array, mask):
     """
@@ -951,6 +800,7 @@ def dm3d_to_2d(dm_array, mask):
 
     return dm_array_2d
 
+
 def dm2d_to_3d(dm_array, mask, normalize=True):
     """
     Convert a 2D DM influence function to a 3D array using a mask.
@@ -977,1102 +827,31 @@ def dm2d_to_3d(dm_array, mask, normalize=True):
         # normalize by the RMS
         if normalize:
             dm_i /= np.sqrt(np.mean(dm_i**2))
+            dm_i -= np.mean(dm_i)
         dm_i_3d = np.zeros(mask.shape, dtype=float)
         dm_i_3d[idx] = dm_i
         dm_array_3d[:, :, i] = dm_i_3d
 
     return dm_array_3d
 
-def parse_pro_file(pro_file_path):
-    """
-    Parse a .pro file and extract its structure into a Python dictionary.
-    Improved version to handle IDL-style syntax better.
 
-    Args:
-        pro_file_path (str): Path to the .pro file.
-
-    Returns:
-        dict: Parsed data as a dictionary.
-    """
-    data = {}
-    current_section = None
-
-    with open(pro_file_path, 'r') as file:
-        for line_num, line in enumerate(file, 1):
-            # Remove comments (everything after ;)
-            comment_pos = line.find(';')
-            if comment_pos != -1:
-                line = line[:comment_pos]
-
-            line = line.strip()
-            if not line:
-                continue
-
-            try:
-                # Recognize the start of a new section (e.g., {main, {dm1, etc.)
-                section_match = re.match(r'^\{(\w+),?', line)
-                if section_match:
-                    current_section = section_match.group(1).lower()
-                    data[current_section] = {}
-                    continue
-
-                # Recognize the end of a section
-                if line == '}':
-                    current_section = None
-                    continue
-
-                # If we're in a section, process key-value pairs
-                if current_section:
-                    # Match both : and = assignments
-                    key_value_match = re.match(r'(\w+)\s*[:=]\s*(.+)', line)
-                    if key_value_match:
-                        key = key_value_match.group(1).strip()
-                        value = key_value_match.group(2).strip()
-
-                        # Remove trailing comma
-                        if value.endswith(','):
-                            value = value[:-1].strip()
-
-                        # Parse the value
-                        parsed_value = _parse_pro_value(value)
-                        data[current_section][key] = parsed_value
-
-            except Exception as e:
-                print(f"Warning: Error parsing line {line_num}: '{line}' - {e}")
-                continue
-
-    return data
-
-def _parse_pro_value(value):
-    """
-    Parse a single value from a PRO file, handling IDL-specific syntax.
-    """
-    value = value.strip()
-
-    # Handle special IDL values
-    if value == '!VALUES.F_INFINITY':
-        return float('inf')
-
-    # Handle boolean values (IDL style)
-    if value.lower() in ['0b', 'false']:
-        return False
-    elif value.lower() in ['1b', 'true']:
-        return True
-
-    # Handle quoted strings
-    if (value.startswith("'") and value.endswith("'")) or \
-       (value.startswith('"') and value.endswith('"')):
-        return value[1:-1]
-
-    # Handle arrays [val1, val2, ...]
-    if value.startswith('[') and value.endswith(']'):
-        return _parse_pro_array(value)
-
-    # Handle replicate function: replicate(val, n)
-    replicate_match = re.match(r'replicate\(([^,]+),\s*(\d+)\)', value, re.IGNORECASE)
-    if replicate_match:
-        val = _parse_pro_value(replicate_match.group(1))
-        num = int(replicate_match.group(2))
-        return [val] * num
-
-    # *** MIGLIORAMENTO: Pattern per numeri più flessibile ***
-    # Handle integers (with optional L suffix)
-    if re.match(r'^-?\d+[lL]?$', value):
-        return int(value.rstrip('lL'))
-
-    # Handle floats (inclusi quelli che finiscono con .)
-    if re.match(r'^-?\d*\.?\d*([eE][+-]?\d+)?[dD]?$', value) and any(c.isdigit() for c in value):
-        try:
-            return float(value.rstrip('dD'))
-        except ValueError:
-            pass
-
-    # Handle scientific notation
-    if re.match(r'^-?\d+[eE][+-]?\d+$', value):
-        return float(value)
-
-    # Handle mathematical expressions (e.g., 38.5/480)
-    if '/' in value and re.match(r'^[\d\.\+\-\*/\(\)\s]+$', value):
-        try:
-            return eval(value)
-        except:
-            pass
-
-    # Handle 'auto' and other special string values without quotes
-    if value.lower() in ['auto']:
-        return value.lower()
-
-    # Default: return as string
-    return value
-
-def _parse_pro_array(array_str):
-    """
-    Parse a PRO array string like [val1, val2, val3].
-    
-    Args:
-        array_str (str): Array string including brackets
-        
-    Returns:
-        list: Parsed array
-    """
-    # Remove brackets
-    content = array_str[1:-1].strip()
-    if not content:
-        return []
-
-    # Split by comma
-    elements = []
-    parts = content.split(',')
-
-    for part in parts:
-        part = part.strip()
-        if part:
-            # Handle replicate within arrays
-            if 'replicate(' in part.lower():
-                replicate_match = re.match(r'replicate\(([^,]+),\s*(\d+)\)', part, re.IGNORECASE)
-                if replicate_match:
-                    val = _parse_pro_value(replicate_match.group(1))
-                    num = int(replicate_match.group(2))
-                    elements.extend([val] * num)
-                    continue
-
-            # Parse individual element
-            elements.append(_parse_pro_value(part))
-
-    return elements
-
-def parse_params_file(file_path):
-    """
-    Parse a parameters file (YAML or .pro) and return its contents as a dictionary.
-
-    Args:
-        file_path (str): Path to the parameters file.
-
-    Returns:
-        dict: Parsed data as a dictionary.
-    """
-    if file_path.endswith('.yml') or file_path.endswith('.yaml'):
-        with open(file_path, 'r') as file:
-            return yaml.safe_load(file)
-    elif file_path.endswith('.pro'):
-        return parse_pro_file(file_path)
-    else:
-        raise ValueError(f"Unsupported file format: {file_path}")
-
-def prepare_interaction_matrix_params(params, wfs_type=None, wfs_index=None, dm_index=None):
-    """
-    Prepares parameters for synim.interaction_matrix from a SPECULA YAML configuration file.
-    
-    Args:
-        params (dict): Dictionary with configuration parameters.
-        wfs_type (str, optional): Type of WFS ('sh', 'pyr') or source type ('lgs', 'ngs', 'ref')
-        wfs_index (int, optional): Index of the WFS to use (1-based)
-        dm_index (int, optional): Index of the DM to use (1-based)
-        
-    Returns:
-        dict: Parameters ready to be passed to synim.interaction_matrix
-    """
-
-    # Prepare the CalibManager
-    main_params = params['main']
-    cm = CalibManager(main_params['root_dir'])
-
-    # Extract general parameters
-    pixel_pupil = main_params['pixel_pupil']
-    pixel_pitch = main_params['pixel_pitch']
-    pup_diam_m = pixel_pupil * pixel_pitch
-
-    # Determine if this is a simple or complex configuration
-    simple_config = is_simple_config(params)
-
-    # Extract all WFS and DM configurations
-    wfs_list = extract_wfs_list(params)
-    dm_list = extract_dm_list(params)
-
-    # Load pupilstop and create pupil mask
-    pup_mask = None
-    if 'pupilstop' in params:
-        pupilstop_params = params['pupilstop']
-        pup_mask = load_pupilstop(cm, pupilstop_params, pixel_pupil, pixel_pitch, verbose=True)
-
-    # If no pupilstop defined, create a default circular pupil
-    if pup_mask is None:
-        simul_params = SimulParams(pixel_pupil=pixel_pupil, pixel_pitch=pixel_pitch)
-        pupilstop = Pupilstop(
-            simul_params,
-            mask_diam=1.0,
-            obs_diam=0.0,
-            target_device_idx=-1,
-            precision=0
-        )
-        pup_mask = pupilstop.A
-
-    # Find the appropriate DM based on dm_index
-    selected_dm = None
-
-    if dm_index is not None:
-        # Try to find DM with specified index
-        for dm in dm_list:
-            if dm['index'] == str(dm_index):
-                selected_dm = dm
-                print(f"DM -- Using specified DM: {dm['name']}")
-                break
-
-    # If no DM found with specified index or no index specified, use first DM
-    if selected_dm is None and dm_list:
-        selected_dm = dm_list[0]
-        print(f"DM -- Using first available DM: {selected_dm['name']}")
-
-    if selected_dm is None:
-        raise ValueError("No DM configuration found in the YAML file.")
-
-    dm_key = selected_dm['name']
-    dm_params = selected_dm['config']
-
-    # Extract DM parameters
-    dm_height = dm_params.get('height', 0)
-    dm_rotation = dm_params.get('rotation', 0.0)
-
-    # Load influence functions
-    dm_array, dm_mask = load_influence_functions(cm, dm_params, pixel_pupil, verbose=True)
-
-    if 'nmodes' in dm_params:
-        nmodes = dm_params['nmodes']
-        if dm_array.shape[2] > nmodes:
-            print(f"     Trimming DM array to first {nmodes} modes")
-            dm_array = dm_array[:, :, :nmodes]
-
-    # WFS selection logic
-    selected_wfs = None
-    source_type = None
-
-    print("WFS -- Looking for WFS parameters...")
-
-    # Simple SCAO configuration case
-    if simple_config:
-        print("     Simple SCAO configuration detected")
-        if len(wfs_list) > 0:
-            selected_wfs = wfs_list[0]
-            source_type = 'ngs'  # Default for simple configs
-            print(f"     Using WFS: {selected_wfs['name']} of type {selected_wfs['type']}")
-        else:
-            raise ValueError("No WFS configuration found in the YAML file.")
-    else:
-        # Complex MCAO configuration
-        print("     Complex MCAO configuration detected")
-
-        # Case 1: wfs_type specifies the sensor type ('sh', 'pyr')
-        if wfs_type in ['sh', 'pyr']:
-            print(f"     Looking for WFS of type: {wfs_type}")
-            matching_wfs = [wfs for wfs in wfs_list if wfs['type'] == wfs_type]
-
-            if wfs_index is not None:
-                # Try to find specific index
-                for wfs in matching_wfs:
-                    if wfs['index'] == str(wfs_index):
-                        selected_wfs = wfs
-                        print(f"     Found WFS with specified index: {wfs['name']}")
-                        break
-
-            # If no specific index found, use the first one
-            if selected_wfs is None and matching_wfs:
-                selected_wfs = matching_wfs[0]
-                print(f"     Using first WFS of type {wfs_type}: {selected_wfs['name']}")
-
-        # Case 2: wfs_type specifies the source type ('lgs', 'ngs', 'ref')
-        elif wfs_type in ['lgs', 'ngs', 'ref']:
-            source_type = wfs_type
-            print(f"     Looking for WFS associated with {wfs_type} source")
-
-            # Pattern for WFS names corresponding to the source type
-            pattern = f"sh_{source_type}"
-            matching_wfs = [wfs for wfs in wfs_list if pattern in wfs['name']]
-
-            if wfs_index is not None:
-                # Try to find specific index within the source type
-                target_name = f"{pattern}{wfs_index}"
-                for wfs in matching_wfs:
-                    if wfs['name'] == target_name:
-                        selected_wfs = wfs
-                        print(f"     Found WFS with specified index: {wfs['name']}")
-                        break
-
-            # If no specific index found, use the first one
-            if selected_wfs is None and matching_wfs:
-                selected_wfs = matching_wfs[0]
-                print(f"     Using first WFS for {wfs_type}: {selected_wfs['name']}")
-
-        # Case 3: Only wfs_index is specified (no wfs_type)
-        elif wfs_index is not None:
-            print(f"     Looking for WFS with index: {wfs_index}")
-            for wfs in wfs_list:
-                if wfs['index'] == str(wfs_index):
-                    selected_wfs = wfs
-                    print(f"     Found WFS with specified index: {wfs['name']}")
-                    break
-
-        # Case 4: No specific criteria, use the first available WFS
-        if selected_wfs is None and wfs_list:
-            selected_wfs = wfs_list[0]
-            print(f"     Using first available WFS: {selected_wfs['name']}")
-
-    # If no WFS found, raise error
-    if selected_wfs is None:
-        raise ValueError("No matching WFS configuration found in the YAML file.")
-
-    wfs_key = selected_wfs['name']
-    wfs_params = selected_wfs['config']
-    wfs_type_detected = selected_wfs['type']
-    
-    # Determine source type from WFS name if not already set
-    if source_type is None:
-        source_type = determine_source_type(wfs_key)
-
-    print(f"     Source type determined: {source_type}")
-
-    # Extract WFS parameters
-    wfs_rotation = wfs_params.get('rotation', 0.0)
-    wfs_translation = wfs_params.get('translation', [0.0, 0.0])
-    wfs_magnification = wfs_params.get('magnification', 1.0)
-    wfs_fov_arcsec = wfs_fov_from_config(wfs_params)
-
-    if wfs_type_detected == 'sh':
-        # Shack-Hartmann specific parameters
-        wfs_nsubaps = wfs_params.get('subap_on_diameter', 0)
-    else:
-        # Pyramid specific parameters
-        wfs_nsubaps = wfs_params.get('pup_diam', 0)
-
-    # Load SubapData for valid subapertures
-    idx_valid_sa = find_subapdata(cm, wfs_params, wfs_key, params, verbose=True)
-
-    # Guide star parameters
-    if source_type == 'lgs':
-        # LGS is at finite height
-        # Try to get height from source or use typical LGS height
-        gs_height = None
-
-        # Check if there's a specific source for this WFS and try to get height
-        source_match = re.search(r'(lgs\d+)', wfs_key)
-        if source_match:
-            source_key = f'source_{source_match.group(1)}'
-            if source_key in params:
-                gs_height = params[source_key].get('height', None)
-
-        # If still no height, use default
-        if gs_height is None:
-            gs_height = 90000.0  # Default LGS height in meters
-    else:
-        # NGS and REF are at infinite distance
-        gs_height = float('inf')
-
-    # Get source polar coordinates
-    gs_pol_coo = extract_source_coordinates(params, wfs_key)
-
-    # Return the prepared parameters
-    return {
-        'pup_diam_m': pup_diam_m,
-        'pup_mask': pup_mask,
-        'dm_array': dm_array,
-        'dm_mask': dm_mask,
-        'dm_height': dm_height,
-        'dm_rotation': dm_rotation,
-        'wfs_key': wfs_key,
-        'wfs_type': wfs_type_detected,
-        'wfs_nsubaps': wfs_nsubaps,
-        'wfs_rotation': wfs_rotation,
-        'wfs_translation': wfs_translation,
-        'wfs_magnification': wfs_magnification,
-        'wfs_fov_arcsec': wfs_fov_arcsec,
-        'gs_pol_coo': gs_pol_coo,
-        'gs_height': gs_height,
-        'idx_valid_sa': idx_valid_sa,
-        'dm_key': dm_key,
-        'source_type': source_type
-    }
-
-def extract_opt_list(config):
-    """ Find all optical sources in the config """
-    opt_sources = []
-    for key, value in config.items():
-        if key.startswith('source_opt'):
-            try:
-                index = int(key.replace('source_opt', ''))
-                opt_sources.append({
-                    'name': key,
-                    'index': index,
-                    'config': value
-                })
-            except ValueError:
-                # Skip if we can't extract a valid index
-                pass
-
-    # Sort by index
-    opt_sources.sort(key=lambda x: x['index'])
-
-    return opt_sources
-
-def extract_wfs_list(config):
-    """Extract all WFS configurations from config"""
-    wfs_list = []
-
-    # Find Pyramid WFSs
-    for key in config:
-        if key == 'pyramid' or (isinstance(key, str) and (key.startswith('pyramid') or key == 'pyr')):
-            wfs_list.append({
-                'name': key,
-                'type': 'pyr',
-                'index': re.findall(r'\d+', key)[0] if re.findall(r'\d+', key) else '1',
-                'config': config[key]
-            })
-
-    # Find Shack-Hartmann WFSs
-    for key in config:
-        if key == 'sh' or key.startswith('sh_') or key.startswith('sh'):
-            wfs_list.append({
-                'name': key,
-                'type': 'sh', 
-                'index': re.findall(r'\d+', key)[0] if re.findall(r'\d+', key) else '1',
-                'config': config[key]
-            })
-
-    return wfs_list
-
-def extract_dm_list(config):
-    """Extract all DM configurations from config"""
-    dm_list = []
-
-    for key in config:
-        if key == 'dm' or (isinstance(key, str) and key.startswith('dm')):
-            dm_list.append({
-                'name': key,
-                'index': re.findall(r'\d+', key)[0] if re.findall(r'\d+', key) else '1',
-                'config': config[key]
-            })
-
-    # If no DMs found, create a default one
-    if len(dm_list) == 0 and 'dm' in config:
-        dm_list.append({
-            'name': 'dm',
-            'index': '1',
-            'config': config['dm']
-        })
-
-    return dm_list
-
-def extract_layer_list(config):
-    """Extract all layer configurations from config"""
-    layer_list = []
-
-    for key in config:
-        if isinstance(key, str) and key.startswith('layer'):
-            layer_list.append({
-                'name': key,
-                'index': re.findall(r'\d+', key)[0] if re.findall(r'\d+', key) else '1',
-                'config': config[key]
-            })
-
-    return layer_list
-
-def extract_source_info(config, wfs_name):
-    """Extract source information related to a specific WFS"""
-    source_info = {}
-
-    # Check both formats: direct reference or connection through prop
-    if 'inputs' in config[wfs_name] and 'in_ef' in config[wfs_name]['inputs']:
-        source_ref = config[wfs_name]['inputs']['in_ef']
-
-        # Format might be 'prop.out_source_lgs1_ef' or direct 'out_source_lgs1_ef'
-        match = re.search(r'out_(\w+)_ef', source_ref)
-        if match:
-            source_name = match.group(1)
-
-            # Find the source in the config
-            if source_name in config:
-                source = config[source_name]
-                source_info['type'] = 'lgs' if 'lgs' in source_name else 'ngs'
-                source_info['name'] = source_name
-                if 'polar_coordinates' in source:
-                    source_info['pol_coords'] = source['polar_coordinates']
-                if 'height' in source:
-                    source_info['height'] = source['height']
-                if 'wavelengthInNm' in source:
-                    source_info['wavelength'] = source['wavelengthInNm']
-
-    # Direct reference within source objects (for simple YAML)
-    if not source_info and 'on_axis_source' in config:
-        source_info['type'] = 'ngs'
-        source_info['name'] = 'on_axis_source'
-        if config['on_axis_source'].get('polar_coordinates'):
-            source_info['pol_coords'] = config['on_axis_source']['polar_coordinates']
-        elif config['on_axis_source'].get('polar_coordinate'):
-            source_info['pol_coords'] = config['on_axis_source']['polar_coordinate']
-        else:
-            source_info['pol_coords'] = [0, 0]
-        source_info['wavelength'] = config['on_axis_source'].get('wavelengthInNm', 750)
-
-    return source_info
-
-def generate_im_filename(config_file, wfs_type=None, wfs_index=None, dm_index=None, timestamp=False, verbose=False):
-    """
-    Generate a specific interaction matrix filename based on WFS and DM indices.
-    
-    Args:
-        config_file (str): Path to YAML or PRO configuration file
-        wfs_type (str, optional): Type of WFS ('sh', 'pyr') or source type ('lgs', 'ngs', 'ref')
-        wfs_index (int, optional): Index of the WFS to use (1-based)
-        dm_index (int, optional): Index of the DM to use (1-based)
-        timestamp (bool, optional): Whether to include timestamp in the filename
-        verbose (bool, optional): Whether to print verbose output
-        
-    Returns:
-        str: Filename for the interaction matrix with the specified parameters
-    """
-    # Load configuration
-    if isinstance(config_file, str):
-        config = parse_params_file(config_file)
-    else:
-        # Assume it's already a parsed config dictionary
-        config = config_file
-
-    # Convert indices to strings for comparison
-    wfs_index_str = str(wfs_index) if wfs_index is not None else None
-    dm_index_str = str(dm_index) if dm_index is not None else None
-
-    # Determine if this is a simple or complex configuration
-    simple_config = is_simple_config(config)
-
-    # For simple configuration, there's typically only one WFS and DM
-    if simple_config:
-        if verbose:
-            print("Simple SCAO configuration detected")
-        # Just generate the single filename that would be created
-        filenames = generate_im_filenames(config)
-
-        # Simple configs typically use NGS
-        if 'ngs' in filenames and filenames['ngs']:
-            return filenames['ngs'][0]
-        # Fall back to any available filename
-        for source_type in ['lgs', 'ref']:
-            if source_type in filenames and filenames[source_type]:
-                return filenames[source_type][0]
-
-        # No valid filename found
-        return None
-
-    # For complex configuration, we need to find the matching WFS and DM
-    if verbose:
-        print("Complex MCAO configuration detected")
-
-    # Get lists of all WFSs and DMs
-    wfs_list = extract_wfs_list(config)
-    dm_list = extract_dm_list(config)
-
-    # Filter WFS list based on wfs_type and wfs_index
-    filtered_wfs = wfs_list
-    if wfs_type:
-        # Check if wfs_type is a sensor type ('sh', 'pyr')
-        if wfs_type in ['sh', 'pyr']:
-            filtered_wfs = [wfs for wfs in filtered_wfs if wfs['type'] == wfs_type]
-        # Check if wfs_type is a source type ('lgs', 'ngs', 'ref')
-        elif wfs_type in ['lgs', 'ngs', 'ref']:
-            filtered_wfs = [wfs for wfs in filtered_wfs if wfs_type in wfs['name']]
-
-    if wfs_index_str:
-        filtered_wfs = [wfs for wfs in filtered_wfs if wfs['index'] == wfs_index_str]
-
-    # Filter DM list based on dm_index
-    filtered_dm = dm_list
-    if dm_index_str:
-        filtered_dm = [dm for dm in filtered_dm if dm['index'] == dm_index_str]
-
-    # If we couldn't find matching WFS or DM, return None
-    if not filtered_wfs or not filtered_dm:
-        if verbose:
-            print("No matching WFS or DM found with the specified parameters")
-        return None
-
-    # Select the first WFS and DM from the filtered lists
-    selected_wfs = filtered_wfs[0]
-    selected_dm = filtered_dm[0]
-
-    if verbose:
-        print(f"Selected WFS: {selected_wfs['name']} (type: {selected_wfs['type']}, index: {selected_wfs['index']})")
-        print(f"Selected DM: {selected_dm['name']} (index: {selected_dm['index']})")
-
-    # Determine the source type from the WFS name
-    source_type = determine_source_type(selected_wfs['name'])
-
-    # Extract source information
-    source_coords = extract_source_coordinates(config, selected_wfs['name'])
-
-    height = extract_source_height(config, selected_wfs['name'])
-
-    # Generate filename parts
-    base_name = "IM_syn"
-    parts = [base_name]
-
-    # Source info
-    if source_coords is not None:
-        dist, angle = source_coords
-        parts.append(f"pd{dist:.1f}a{angle:.0f}")
-    if height is not None and not np.isinf(height):
-        parts.append(f"h{height:.0f}")
-
-    # WFS info
-    wfs_config = selected_wfs['config']
-    parts.extend(build_wfs_filename_part(wfs_config, selected_wfs['type']))
-
-    # Add DM-specific parts
-    parts.extend(build_dm_filename_part(selected_dm['config']))
-
-    # Add timestamp if requested
-    if timestamp:
-        ts = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
-        parts.append(ts)
-
-    # Join all parts with underscores and add extension
-    filename = "_".join(parts) + ".fits"
-    return filename
-
-def generate_im_filenames(config_file, timestamp=False):
-    """
-    Generate interaction matrix filenames for all WFS-DM combinations, grouped by star type.
-    
-    Args:
-        config_file (str or dict): Path to YAML/PRO file or config dictionary
-        timestamp (bool, optional): Whether to include timestamp in filenames
-        
-    Returns:
-        dict: Dictionary with star types as keys and list of filenames as values
-    """
-    # Load YAML or PRO configuration
-    if isinstance(config_file, str):
-        config = parse_params_file(config_file)
-    else:
-        config = config_file
-
-    # Detect if simple or complex configuration
-    simple_config = is_simple_config(config)
-
-    # Basic system info
-    base_name = 'IM_syn'
-
-    # Pupil parameters
-    pupil_params = {}
-    if 'main' in config:
-        pupil_params['pixel_pupil'] = config['main'].get('pixel_pupil', 0)
-        pupil_params['pixel_pitch'] = config['main'].get('pixel_pitch', 0)
-        zenith_angle = config['main'].get('zenithAngleInDeg', None)
-    else:
-        zenith_angle = None
-
-    if 'pupilstop' in config:
-        pupstop = config['pupilstop']
-        if isinstance(pupstop, dict):
-            pupil_params['obsratio'] = pupstop.get('obsratio', 0.0)
-            pupil_params['tag'] = pupstop.get('tag', '')
-
-    # Output dictionary: key=star type, value=list of filenames
-    filenames_by_type = {
-        'lgs': [],
-        'ngs': [],
-        'ref': []
-    }
-    # Extract all DM configurations
-    dm_list = extract_dm_list(config)
-
-    # For simple configurations with on-axis source
-    if simple_config:
-        # Simple SCAO configuration
-        wfs_type = None
-        wfs_params = {}
-
-        if 'pyramid' in config:
-            wfs_type = 'pyr'
-            wfs_params = config['pyramid']
-        elif 'sh' in config:
-            wfs_type = 'sh'
-            wfs_params = config['sh']
-
-        # Source info
-        source_config = config.get('on_axis_source', {})
-
-        # Build filename parts
-        for dm in dm_list:
-            parts = [base_name]  # <-- Ricomincia da capo per ogni DM
-            # Add source parts
-            parts.extend(build_source_filename_part(source_config, zenith_angle))
-            # Add pupil parts
-            parts.extend(build_pupil_filename_part(pupil_params))
-            # Add WFS parts
-            if wfs_type:
-                parts.extend(build_wfs_filename_part(wfs_params, wfs_type))
-            # Add DM parts - usa SOLO la funzione, non aggiungere dmH a mano!
-            parts.extend(build_dm_filename_part(dm['config'], config))
-            # Add timestamp if requested
-            if timestamp:
-                ts = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
-                parts.append(ts)
-            filename = "_".join(parts) + ".fits"
-            filenames_by_type['ngs'].append(filename)
-            break  # Only one DM in simple config
-    else:
-        # Complex MCAO configuration
-        wfs_list = extract_wfs_list(config)
-
-        # Generate filenames for all WFS-DM combinations
-        for wfs in wfs_list:
-            wfs_type = wfs['type']
-            wfs_params = wfs['config']
-
-            # Determine source type from WFS name
-            source_type = determine_source_type(wfs['name'])
-
-            # Get source information
-            source_config = {}
-            source_match = re.search(r'((?:lgs|ngs|ref)\d+)', wfs['name'])
-            if source_match:
-                source_key = f'source_{source_match.group(1)}'
-                if source_key in config:
-                    source_config = config[source_key]
-
-            # For each DM, generate a filename
-            for dm in dm_list:
-                dm_params = dm['config']
-
-                # Build filename parts
-                parts = [base_name]
-
-                # Add source parts
-                parts.extend(build_source_filename_part(source_config, zenith_angle))
-
-                # Add pupil parts
-                parts.extend(build_pupil_filename_part(pupil_params))
-
-                # Add WFS parts
-                parts.extend(build_wfs_filename_part(wfs_params, wfs_type))
-
-                # Add DM parts
-                parts.extend(build_dm_filename_part(dm_params))
-
-                # Add timestamp if requested
-                if timestamp:
-                    ts = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
-                    parts.append(ts)
-
-                # Join all parts with underscores and add extension
-                filename = "_".join(parts) + ".fits"
-                filenames_by_type[source_type].append(filename)
-
-    return filenames_by_type
-
-def generate_pm_filename(config_file, opt_index=None, dm_index=None, layer_index=None,
-                        timestamp=False, verbose=False):
-    """
-    Generate a specific projection matrix filename based on optical source and DM/layer indices.
-
-    Args:
-        config_file (str or dict): Path to YAML/PRO configuration file or config dictionary
-        opt_index (int, optional): Index of the optical source to use (1-based)
-        dm_index (int, optional): Index of the DM to use (1-based)
-        layer_index (int, optional): Index of the layer to use (1-based)
-        timestamp (bool, optional): Whether to include timestamp in the filename
-        verbose (bool, optional): Whether to print verbose output
-
-    Returns:
-        str: Filename for the projection matrix with the specified parameters
-    """
-    # Check if both dm_index and layer_index are provided
-    if dm_index is not None and layer_index is not None:
-        raise ValueError("Cannot specify both dm_index and layer_index at the same time")
-
-    # Load configuration
-    if isinstance(config_file, str):
-        config = parse_params_file(config_file)
-    else:
-        config = config_file
-
-    # Convert indices to strings for comparison
-    opt_index_str = str(opt_index) if opt_index is not None else None
-    dm_index_str = str(dm_index) if dm_index is not None else None
-    layer_index_str = str(layer_index) if layer_index is not None else None
-
-    # Find all optical sources
-    opt_sources = extract_opt_list(config)
-
-    # Extract DM and layer configurations
-    dm_list = extract_dm_list(config) if dm_index is not None else []
-    layer_list = extract_layer_list(config) if layer_index is not None else []
-
-    # Filter optical sources based on opt_index
-    if opt_index_str:
-        filtered_sources = [src for src in opt_sources if src['index'] == int(opt_index_str)]
-    else:
-        filtered_sources = opt_sources
-
-    # Filter DM or layer list based on provided index
-    if dm_index_str:
-        filtered_components = [dm for dm in dm_list if dm['index'] == dm_index_str]
-        component_type = "dm"
-    elif layer_index_str:
-        filtered_components = [layer for layer in layer_list if layer['index'] == layer_index_str]
-        component_type = "layer"
-    else:
-        # Default to first DM if no specific component requested
-        filtered_components = dm_list
-        component_type = "dm"
-
-    # If we couldn't find matching source or component, return None
-    if not filtered_sources or not filtered_components:
-        if not filtered_sources:
-            print("Warning: No matching optical source found with the specified parameters")
-        if not filtered_components:
-            print("Warning: No matching DM or layer found with the specified parameters")
-        return None
-
-    # Select the first source and component from the filtered lists
-    selected_source = filtered_sources[0]
-    selected_component = filtered_components[0]
-
-    if verbose:
-        print(f"Selected optical source: {selected_source['name']} (index: {selected_source['index']})")
-        print(f"Selected {component_type}: {selected_component['name']} (index: {selected_component['index']})")
-
-    # Extract source information
-    source_config = selected_source['config']
-    source_coords = source_config.get('polar_coordinates', [0.0, 0.0])
-    source_height = source_config.get('height', float('inf'))
-
-    # Extract component height
-    component_height = selected_component['config'].get('height', 0)
-
-    # Generate filename parts
-    base_name = "PM_syn"
-    parts = [base_name]
-
-    # Specific source identifier
-    parts.append(f"opt{selected_source['index']}")
-
-    # Source coordinates
-    if source_coords:
-        dist, angle = source_coords
-        parts.append(f"pd{dist:.1f}a{angle:.0f}")
-
-    # Source height (only include if not infinite)
-    if not np.isinf(source_height):
-        parts.append(f"h{source_height:.0f}")
-
-    # Component info
-    parts.append(f"{component_type}{selected_component['index']}")
-    parts.append(f"H{component_height}")
-
-    # Add component-specific parts
-    parts.extend(build_dm_filename_part(selected_component['config']))
-
-    # Add timestamp if requested
-    if timestamp:
-        ts = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
-        parts.append(ts)
-
-    # Join all parts with underscores and add extension
-    filename = "_".join(parts) + ".fits"
-    return filename
-
-def generate_pm_filenames(config_file, timestamp=False):
-    """
-    Generate projection matrix filenames for all optical source and DM combinations.
-    
-    Args:
-        config_file (str or dict): Path to YAML/PRO file or config dictionary
-        timestamp (bool, optional): Whether to include timestamp in filenames
-        
-    Returns:
-        list: List of projection matrix filenames
-    """
-    # Load configuration
-    if isinstance(config_file, str):
-        config = parse_params_file(config_file)
-    else:
-        config = config_file
-
-    # Find all optical sources
-    opt_sources = extract_opt_list(config)
-
-    # Extract all DM configurations
-    dm_list = extract_dm_list(config)
-
-    # Output list of filenames
-    filenames = []
-
-    # Generate filenames for all optical source and DM combinations
-    for source in opt_sources:
-        source_config = source['config']
-        source_coords = source_config.get('polar_coordinates', [0.0, 0.0])
-        source_height = source_config.get('height', float('inf'))
-
-        for dm in dm_list:
-            dm_config = dm['config']
-            dm_height = dm_config.get('height', 0)
-
-            # Generate filename parts
-            base_name = "PM_syn"
-            parts = [base_name]
-
-            # Specific source identifier
-            parts.append(f"opt{source['index']}")
-
-            # Source coordinates
-            if source_coords:
-                dist, angle = source_coords
-                parts.append(f"pd{dist:.1f}a{angle:.0f}")
-
-            # Source height (only include if not infinite)
-            if not np.isinf(source_height):
-                parts.append(f"h{source_height:.0f}")
-
-            # DM info
-            parts.append(f"dm{dm['index']}")
-            parts.append(f"dmH{dm_height}")
-
-            # Add DM-specific parts
-            parts.extend(build_dm_filename_part(dm_config))
-
-            # Add timestamp if requested
-            if timestamp:
-                ts = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
-                parts.append(ts)
-
-            # Join all parts with underscores and add extension
-            filename = "_".join(parts) + ".fits"
-            filenames.append(filename)
-
-    return filenames
-
-def compute_mmse_reconstructor(interaction_matrix, C_atm, noise_variance=None, C_noise=None, 
-                              cinverse=False, verbose=False):
-    """
-    Compute the Minimum Mean Square Error (MMSE) reconstructor.
-    
-    Args:
-        interaction_matrix (numpy.ndarray): Interaction matrix A relating modes to slopes
-        C_atm (numpy.ndarray): Covariance matrix of atmospheric modes (Cx)
-        noise_variance (list, optional): List of noise variances per WFS. 
-                                        Used to build C_noise if C_noise is None.
-        C_noise (numpy.ndarray, optional): Covariance matrix of measurement noise (Cz).
-                                         If None, it's built from noise_variance.
-        cinverse (bool, optional): If True, C_atm and C_noise are already inverted.
-        verbose (bool, optional): Whether to print detailed information during computation.
-        
-    Returns:
-        numpy.ndarray: MMSE reconstructor matrix
-    """
-    if verbose:
-        print("Starting MMSE reconstructor computation")
-
-    # Setup matrices
-    A = interaction_matrix
-
-    # Handle noise covariance matrix
-    if C_noise is None and noise_variance is not None:
-        n_slopes_total = A.shape[1]
-        n_wfs = len(noise_variance)
-        n_slopes_per_wfs = n_slopes_total // n_wfs
-
-        if verbose:
-            print(f"Building noise covariance matrix for {n_wfs} WFSs with {n_slopes_per_wfs} slopes each")
-
-        C_noise = np.zeros((n_slopes_total, n_slopes_total))
-        for i in range(n_wfs):
-            # Set the diagonal elements for this WFS
-            start_idx = i * n_slopes_per_wfs
-            end_idx = (i + 1) * n_slopes_per_wfs
-            C_noise[start_idx:end_idx, start_idx:end_idx] = noise_variance[i] * np.eye(n_slopes_per_wfs)
-
-    # Check dimensions
-    if A.shape[1] != C_atm.shape[0]:
-        raise ValueError(f"A ({A.shape}) and C_atm ({C_atm.shape}) must have compatible dimensions")
-
-    if C_noise is not None and A.shape[0] != C_noise.shape[0]:
-        raise ValueError(f"A ({A.shape}) and C_noise ({C_noise.shape}) must have compatible dimensions")
-
-    # Compute inverses if needed
-    if not cinverse:
-        # Check if matrices are diagonal
-        if C_noise is not None:
-            is_diag_noise = np.all(np.abs(np.diag(np.diag(C_noise)) - C_noise) < 1e-10)
-
-            if is_diag_noise:
-                if verbose:
-                    print("C_noise is diagonal, using optimized inversion")
-                C_noise_inv = np.diag(1.0 / np.diag(C_noise))
-            else:
-                if verbose:
-                    print("Inverting C_noise matrix")
-                try:
-                    C_noise_inv = np.linalg.inv(C_noise)
-                except np.linalg.LinAlgError:
-                    if verbose:
-                        print("Warning: C_noise inversion failed, using pseudo-inverse")
-                    C_noise_inv = np.linalg.pinv(C_noise)
-        else:
-            # Default: identity matrix (no noise)
-            if verbose:
-                print("No C_noise provided, using identity matrix")
-            C_noise_inv = np.eye(A.shape[1])
-
-        is_diag_atm = np.all(np.abs(np.diag(np.diag(C_atm)) - C_atm) < 1e-10)
-
-        if is_diag_atm:
-            if verbose:
-                print("C_atm is diagonal, using optimized inversion")
-            C_atm_inv = np.diag(1.0 / np.diag(C_atm))
-        else:
-            if verbose:
-                print("Inverting C_atm matrix")
-            try:
-                C_atm_inv = np.linalg.inv(C_atm)
-            except np.linalg.LinAlgError:
-                if verbose:
-                    print("Warning: C_atm inversion failed, using pseudo-inverse")
-                C_atm_inv = np.linalg.pinv(C_atm)
-    else:
-        # Matrices are already inverted
-        C_atm_inv = C_atm
-        C_noise_inv = C_noise if C_noise is not None else np.eye(A.shape[1])
-
-    # Compute H = A' Cz^(-1) A + Cx^(-1)
-    if verbose:
-        print("Computing H = A' Cz^(-1) A + Cx^(-1)")
-
-    # Check if C_noise_inv is scalar
-    if isinstance(C_noise_inv, (int, float)) or (hasattr(C_noise_inv, 'size') and C_noise_inv.size == 1):
-        H = C_noise_inv * np.dot(A.T, A) + C_atm_inv
-    else:
-        H = np.dot(A.T, np.dot(C_noise_inv, A)) + C_atm_inv
-
-    # Compute H^(-1)
-    if verbose:
-        print("Inverting H")
-    try:
-        H_inv = np.linalg.inv(H)
-    except np.linalg.LinAlgError:
-        if verbose:
-            print("Warning: H inversion failed, using pseudo-inverse")
-        H_inv = np.linalg.pinv(H)
-
-    # Compute W = H^(-1) A' Cz^(-1)
-    if verbose:
-        print("Computing W = H^(-1) A' Cz^(-1)")
-
-    # Check if C_noise_inv is scalar
-    if isinstance(C_noise_inv, (int, float)) or (hasattr(C_noise_inv, 'size') and C_noise_inv.size == 1):
-        W_mmse = C_noise_inv * np.dot(H_inv, A.T)
-    else:
-        W_mmse = np.dot(H_inv, np.dot(A.T, C_noise_inv))
-
-    if verbose:
-        print("MMSE reconstruction matrix computed")
-        print(f"Matrix shape: {W_mmse.shape}")
-
-    return W_mmse
+__all__ = [
+    # Mask creation and manipulation
+    'make_mask',
+    'make_orto_modes',
+    'apply_mask',
+
+    # DM array conversions
+    'dm3d_to_2d',
+    'dm2d_to_3d',
+
+    # Array transformations
+    'rebin',
+    'rotshiftzoom_array',
+    'shiftzoom_from_source_dm_params',
+    'has_transformations',
+
+    # Extrapolation functions
+    'apply_extrapolation',
+    'calculate_extrapolation_indices_coeffs'
+]
