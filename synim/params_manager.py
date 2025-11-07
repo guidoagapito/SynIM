@@ -4,7 +4,7 @@ import numpy as np
 import matplotlib.pyplot as plt
 from astropy.io import fits
 import synim.synim as synim
-import synim.synpm as synpm, transpose_base_array_for_specula
+import synim.synpm as synpm
 
 # Import all utility functions from params_utils
 from synim.utils import *
@@ -1096,7 +1096,7 @@ class ParamsManager:
                     print(f"\n  Processing {source_info['name']}:")
 
                 # Transpose ONCE using ORIGINAL pupil mask
-                base_inv_array_transposed = transpose_base_array_for_specula(
+                base_inv_array_transposed = synpm.transpose_base_array_for_specula(
                     base_inv_array,
                     self.pup_mask,
                     verbose=verbose_flag
