@@ -5,6 +5,7 @@ This repository contains Python code based on standard libraries for the computa
 ## Main Features
 
 - **Computation of synthetic interaction matrices** for various DM-WFS combinations, supporting both SCAO and MCAO configurations.
+- - **Computation of projection matrices** for various DM-Layers combinations for MCAO / LTAO configurations.
 - **Parametric management** via YAML or PRO configuration files, with automatic parsing of system, DM, WFS, and source parameters.
 - **Support for different sensor types** (Shack-Hartmann, Pyramid) and deformable mirrors.
 - **Utility functions** for mask manipulation, influence functions, Zernike polynomials, numerical derivatives, and rebinning operations.
@@ -12,9 +13,11 @@ This repository contains Python code based on standard libraries for the computa
 
 ## Main File Structure
 
-- `synim/synim.py`: Contains all low-level functions for interaction matrix generation, mask manipulation, derivatives, Zernike, etc.
-- `synim/params_manager.py`: The `ParamsManager` class for centralized parameter management and batch generation of interaction matrices. It can work with PASSATA or SPECULA parameters and calibration data.
-- `synim/utils.py`: Utility functions for parsing, parameter extraction, filename generation, and MMSE reconstructor operators.
+- `synim/synim.py`: Contains all low-level functions for interaction matrix generation, derivatives, etc.
+- `synim/synpm.py`: Contains all low-level functions for projection matrix generation
+- `synim/params_manager.py`: The `ParamsManager` class for centralized parameter management and batch generation of interaction matrices, projection matrices and covariance matrices. It can work with PASSATA or SPECULA parameters and calibration data.
+- `synim/utils.py`: General utility functions.
+- `synim/params_utils.py`: Utility functions for parsing, parameter extraction, filename generation, and MMSE reconstructor operators.
 
 ## Example Usage
 
