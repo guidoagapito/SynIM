@@ -531,7 +531,8 @@ def rotshiftzoom_array(input_array, dm_translation=(0.0, 0.0),
         # For 3D, calculate offset only for the first two dimensions
         offset_2d = center[:2] - xp.dot(combined_matrix[:2, :2], output_center) \
             - xp.dot(dm_matrix, xp.array(dm_translation)) - xp.array(wfs_translation)
-        offset = xp.array([offset_2d[0], offset_2d[1], 0])
+        offset = xp.zeros(3, dtype=offset_2d.dtype)
+        offset[:2] = offset_2d
     else:
         offset = center - xp.dot(combined_matrix, output_center) \
             - xp.dot(dm_matrix, xp.array(dm_translation)) - xp.array(wfs_translation)
