@@ -3,8 +3,9 @@
 import numpy as np
 import matplotlib.pyplot as plt
 from synim import (
-    xp, cpuArray, to_xp, float_dtype, affine_transform, binary_dilation, rotate, shift, zoom
+    xp, cpuArray, to_xp, float_dtype, affine_transform, rotate, shift, zoom
 )
+from scipy.ndimage import binary_dilation
 
 # Labels for the extrapolation directions
 directions_labels = ['Down (y+1)', 'Up (y-1)', 'Right (x+1)', 'Left (x-1)']
