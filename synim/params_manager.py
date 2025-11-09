@@ -1847,7 +1847,7 @@ class ParamsManager:
             if verbose_flag:
                 print(f"  ✓ Saved to FITS: {cov_filename}")
 
-            C_atm_blocks.append(C_atm)
+            C_atm_blocks.append(C_atm_rad2)
 
         if verbose_flag:
             print(f"\n{'='*60}")
