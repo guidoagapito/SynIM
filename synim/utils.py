@@ -698,13 +698,11 @@ def rebin(array, new_shape, method='average'):
                     array[:M*(m//M), :N*(n//N), :].reshape((M, m//M, N, n//N, shape[2])),
                     axis=(1, 3))
             elif method == 'nanmean':
-                # *** MODIFIED: Use xp.nanmean with error handling ***
-                with xp.errstate(invalid='ignore'):
-                    if xp.__name__ == 'cupy':
-                        # CuPy doesn't have errstate, but nanmean handles warnings differently
-                        rebinned_array = xp.nanmean(
-                            array[:M*(m//M), :N*(n//N), :].reshape((M, m//M, N, n//N, shape[2])),
-                            axis=(1, 3))
+                if xp.__name__ == 'cupy':
+                    # CuPy doesn't have errstate, but nanmean handles warnings differently
+                    rebinned_array = xp.nanmean(
+                        array[:M*(m//M), :N*(n//N), :].reshape((M, m//M, N, n//N, shape[2])),
+                        axis=(1, 3))
                 else:
                     # NumPy: use errstate
                     with xp.errstate(invalid='ignore'):
