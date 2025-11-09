@@ -27,7 +27,10 @@ def compute_derivatives_with_extrapolation(data,mask=None):
     if mask is not None:
         # Calculate indices and coefficients for extrapolation
         edge_pixels, reference_indices, coefficients = calculate_extrapolation_indices_coeffs(
-            mask, debug=False, debug_pixels=None)
+            cpuArray(mask), debug=False, debug_pixels=None)
+        edge_pixels = to_xp(xp, edge_pixels, dtype=xp.int32)
+        reference_indices = to_xp(xp, reference_indices, dtype=xp.int32)
+        coefficients = to_xp(xp, coefficients, dtype=float_dtype)
         for i in range(data.shape[2]):
             # Apply extrapolation
             temp = data[:,:,i].copy()

@@ -1828,7 +1828,7 @@ class ParamsManager:
 
             # ========== SAVE TO FITS (LIKE IDL) ==========
             # IDL: writefits, fileNameCov, turb_covmat
-            hdu = fits.PrimaryHDU(C_atm_rad2.astype(float_dtype))
+            hdu = fits.PrimaryHDU(cpuArray(C_atm_rad2))
             hdu.header['R0'] = (r0, 'Fried parameter [m]')
             hdu.header['L0'] = (L0, 'Outer scale [m]')
             hdu.header['UNITS'] = ('rad^2', 'Covariance units')
