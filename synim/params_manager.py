@@ -133,8 +133,9 @@ class ParamsManager:
 
     def count_mcao_stars(self):
         """
-        Count the number of LGS, NGS, reference stars, DMs, optimisation optics, science stars and layers
-        in the parameter configuration, similar to count_mcao_stars of IDL.
+        Count the number of LGS, NGS, reference stars, DMs, optimisation optics,
+        science stars and layers in the parameter configuration, similar to
+        count_mcao_stars of IDL.
 
             Returns:
         dict: Dictionary with counts.
@@ -506,9 +507,9 @@ class ParamsManager:
         # Calculate the interaction matrix
         im = synim.interaction_matrix(
             pup_diam_m=params['pup_diam_m'],
-            pup_mask=params['pup_mask'],
-            dm_array=params['dm_array'],
-            dm_mask=params['dm_mask'],
+            pup_mask=to_xp(xp, params['pup_mask'], dtype=float_dtype),
+            dm_array=to_xp(xp, params['dm_array'], dtype=float_dtype),
+            dm_mask=to_xp(xp, params['dm_mask'], dtype=float_dtype),
             dm_height=params['dm_height'],
             dm_rotation=params['dm_rotation'],
             wfs_nsubaps=params['wfs_nsubaps'],
@@ -1126,16 +1127,16 @@ class ParamsManager:
 
                 # Transpose ONCE using ORIGINAL pupil mask
                 base_inv_array_transposed = synpm.transpose_base_array_for_specula(
-                    base_inv_array,
-                    self.pup_mask,
+                    to_xp(xp, base_inv_array, dtype=float_dtype),
+                    to_xp(xp, self.pup_mask, dtype=float_dtype),
                     verbose=verbose_flag
                 )
 
                 pm = synpm.projection_matrix(
                     pup_diam_m=self.pup_diam_m,
-                    pup_mask=self.pup_mask,
-                    dm_array=component_params['dm_array'],
-                    dm_mask=component_params['dm_mask'],
+                    pup_mask=to_xp(xp, self.pup_mask, dtype=float_dtype),
+                    dm_array=to_xp(xp, component_params['dm_array'], dtype=float_dtype),
+                    dm_mask=to_xp(xp, component_params['dm_mask'], dtype=float_dtype),
                     base_inv_array=base_inv_array_transposed,
                     dm_height=component_params['dm_height'],
                     dm_rotation=component_params['dm_rotation'],
@@ -1148,7 +1149,6 @@ class ParamsManager:
                     specula_convention=True
                 )
 
-                # *** MODIFIED: Convert to CPU for saving ***
                 pm = cpuArray(pm)
 
                 self._save_projection_matrix(
@@ -1809,9 +1809,9 @@ class ParamsManager:
 
             # Compute covariance matrix
             C_atm_rad2 = compute_ifs_covmat(
-                comp_params['dm_mask'],
+                to_xp(xp, comp_params['dm_mask'], dtype=float_dtype),
                 self.pup_diam_m,
-                dm2d_selected,
+                to_xp(xp, dm2d_selected , dtype=float_dtype),
                 r0,
                 L0,
                 xp=xp,
