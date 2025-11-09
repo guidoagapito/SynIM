@@ -1677,9 +1677,6 @@ class ParamsManager:
         elif 'sh1' in self.params:
             wavelengthInNm = self.params['sh1'].get('wavelengthInNm', 500.0)
 
-        # Conversion factor (nm to rad^2 at wavelengthInNm)
-        conversion_factor = (wavelengthInNm / 2.0 / np.pi) ** 2
-
         if verbose_flag:
             print(f"\n{'='*60}")
             print(f"Computing Covariance Matrices")
@@ -1689,7 +1686,6 @@ class ParamsManager:
             print(f"  Component type: {component_type}")
             print(f"  Full modes: {full_modes}")
             print(f"  Wavelength: {wavelengthInNm} nm")
-            print(f"  Conversion factor: {conversion_factor:.6e}")
             print(f"{'='*60}\n")
 
         # Get component list
@@ -1812,7 +1808,7 @@ class ParamsManager:
                 print(f"  Computing covariance matrix...")
 
             # Compute covariance matrix
-            C_atm_nm = compute_ifs_covmat(
+            C_atm_rad2 = compute_ifs_covmat(
                 comp_params['dm_mask'],
                 self.pup_diam_m,
                 dm2d_selected,
@@ -1822,19 +1818,17 @@ class ParamsManager:
                 verbose=False
             )
 
-            # Convert from nm^2 to rad^2 (like IDL line ~660)
-            C_atm = C_atm_nm * conversion_factor
-
             if verbose_flag:
-                print(f"  ✓ Covariance computed: {C_atm.shape}")
-                print(f"    RMS (nm): {np.sqrt(np.diag(C_atm_nm)).mean():.2f}")
-                print(f"    RMS (rad): {np.sqrt(np.diag(C_atm)).mean():.4f}")
+                print(f"  ✓ Covariance computed: {C_atm_rad2.shape}")
+                print(f"    RMS (nm): {np.sqrt(np.diag(C_atm_rad2*(500**2/2/np.pi**2))).mean():.2f}")
+                print(f"    RMS (rad): {np.sqrt(np.diag(C_atm_rad2)).mean():.4f}")
 
             # ========== SAVE TO FITS (LIKE IDL) ==========
             # IDL: writefits, fileNameCov, turb_covmat
-            hdu = fits.PrimaryHDU(C_atm.astype(np.float32))
+            hdu = fits.PrimaryHDU(C_atm_rad2.astype(np.float32))
             hdu.header['R0'] = (r0, 'Fried parameter [m]')
             hdu.header['L0'] = (L0, 'Outer scale [m]')
+            hdu.header['UNITS'] = ('rad^2', 'Covariance units')
             hdu.header['DIAMM'] = (self.pup_diam_m, 'Pupil diameter [m]')
             hdu.header['WAVELNM'] = (wavelengthInNm, 'Wavelength [nm]')
             hdu.header['NMODES'] = (n_modes, 'Number of modes')
@@ -1868,7 +1862,6 @@ class ParamsManager:
             'r0': r0,
             'L0': L0,
             'wavelength_nm': wavelengthInNm,
-            'conversion_factor': conversion_factor,
             'files': cov_files
         }
 
