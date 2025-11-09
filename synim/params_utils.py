@@ -122,13 +122,13 @@ def extract_source_height(config, wfs_key):
     """
     Extracts the actual height of the source from the configuration.
     If zenithAngleInDeg is present, returns height * airmass.
-    If height is not present, returns np.inf.
+    If height is not present, returns xp.inf.
     """
     # Compute airmass
     if 'main' in config:
         zenith_angle = config['main'].get('zenithAngleInDeg', None)
-        zenith_rad = np.deg2rad(zenith_angle)
-        airmass = 1.0 / np.cos(zenith_rad)
+        zenith_rad = xp.deg2rad(zenith_angle)
+        airmass = 1.0 / xp.cos(zenith_rad)
     else:
         airmass = 1.0
 
@@ -149,7 +149,7 @@ def extract_source_height(config, wfs_key):
         if 'height' in config['on_axis_source']:
             return config['on_axis_source']['height'] * airmass
 
-    return np.inf  # Default to infinity if no height is specified
+    return xp.inf  # Default to infinity if no height is specified
 
 def load_pupilstop(cm, pupilstop_params, pixel_pupil, pixel_pitch, verbose=False):
     """
@@ -236,9 +236,9 @@ def load_influence_functions(cm, dm_params, pixel_pupil, verbose=False, is_inver
         # Check dimensions to determine if this is an inverse basis
         n_rows = ifunc.influence_function.shape[0]
         n_cols = ifunc.influence_function.shape[1]
-        
+
         if ifunc.mask_inf_func is not None:
-            n_valid_pixels = np.sum(ifunc.mask_inf_func > 0.5)
+            n_valid_pixels = xp.sum(ifunc.mask_inf_func > 0.5)
         else:
             raise ValueError("IFunc without mask_inf_func is not supported."
                            " Mask is required.")
@@ -256,7 +256,7 @@ def load_influence_functions(cm, dm_params, pixel_pupil, verbose=False, is_inver
         if is_inverse or is_inverse_basis:
             if verbose:
                 print(f"     Returning 2D inverse basis (optimized format)")
-            
+
             # Make sure it's (n_modes, n_pixels) format
             if ifunc.influence_function.shape[0] < ifunc.influence_function.shape[1]:
                 # Already correct: n_modes x n_pixels
@@ -274,7 +274,7 @@ def load_influence_functions(cm, dm_params, pixel_pupil, verbose=False, is_inver
             dm_mask = ifunc.mask_inf_func.copy()
             if verbose:
                 print(f"     DM mask shape: {dm_mask.shape}")
-                print(f"     DM mask sum: {np.sum(dm_mask)}")
+                print(f"     DM mask sum: {xp.sum(dm_mask)}")
             return dm_array, dm_mask
 
     elif 'type_str' in dm_params:
@@ -307,7 +307,7 @@ def load_influence_functions(cm, dm_params, pixel_pupil, verbose=False, is_inver
         dm_mask = z_mask
         if verbose:
             print(f"     DM mask shape: {dm_mask.shape}")
-            print(f"     DM mask sum: {np.sum(dm_mask)}")
+            print(f"     DM mask sum: {xp.sum(dm_mask)}")
         return dm_array, dm_mask
     else:
         raise ValueError("No valid influence function configuration found."
@@ -323,7 +323,7 @@ def find_subapdata(cm, wfs_params, wfs_key, params, verbose=False):
     Returns:
         numpy.ndarray: Array of valid subaperture indices (numpy) or None
     """
-    
+
     subap_path = None
     subap_tag = None
 
@@ -405,7 +405,7 @@ def find_subapdata(cm, wfs_params, wfs_key, params, verbose=False):
             print("     Loading subapdata from file:", subap_path)
         subap_data = SubapData.restore(subap_path)
         # *** Returns numpy from FITS file ***
-        return np.transpose(np.asarray(np.where(subap_data.single_mask())))
+        return xp.transpose(xp.asarray(xp.where(subap_data.single_mask())))
 
     return None
 
@@ -1180,7 +1180,7 @@ def validate_opt_sources(params, verbose=False):
             pol_coo = opt['config']['polar_coordinate']
             height = opt['config']['height']
             weight = opt['config']['weight']
-            h_str = f"{height:.0f}m" if not np.isinf(height) else "∞ (NGS)"
+            h_str = f"{height:.0f}m" if not xp.isinf(height) else "∞ (NGS)"
             print(f"  {opt['name']}: [{pol_coo[0]:.1f}\", {pol_coo[1]:.0f}°] "
                   f"h={h_str}, w={weight:.2f}")
 
@@ -1396,7 +1396,7 @@ def generate_pm_filename(config_file, opt_index=None,
     # Extract component configuration
     component_config = selected_component['config']
     component_height = component_config.get('height', 0)
-    
+
     # *** NEW: Extract nmodes and start_mode ***
     component_nmodes = component_config.get('nmodes', None)
     component_start_mode = component_config.get('start_mode', 0)
@@ -1413,13 +1413,13 @@ def generate_pm_filename(config_file, opt_index=None,
         parts.append("pd0.0a0")
 
     # Source height (only include if not infinite)
-    if not np.isinf(source_height):
+    if not xp.isinf(source_height):
         parts.append(f"h{source_height:.0f}")
 
     # *** MODIFIED: Component part - always use "dm" prefix, include modes info ***
     # Component height
     parts.append(f"dmH{component_height:.1f}")
-    
+
     # *** NEW: Add modes information ***
     if component_nmodes is not None:
         if component_start_mode > 0:
@@ -1430,7 +1430,7 @@ def generate_pm_filename(config_file, opt_index=None,
         else:
             # Format: mn{nmodes}
             parts.append(f"mn{component_nmodes}")
-    
+
     # Add ifunc/m2c tags
     if 'ifunc_tag' in component_config:
         parts.append(f"ifunc_{component_config['ifunc_tag']}")
@@ -1498,7 +1498,7 @@ def generate_pm_filenames(config_file, timestamp=False):
                 parts.append(f"pd{dist:.1f}a{angle:.0f}")
 
             # Source height (only include if not infinite)
-            if not np.isinf(source_height):
+            if not xp.isinf(source_height):
                 parts.append(f"h{source_height:.0f}")
 
             # DM info
@@ -1555,13 +1555,13 @@ def compute_mmse_reconstructor(interaction_matrix, C_atm,
             print(f"Building noise covariance matrix for {n_wfs}"
                   f" WFSs with {n_slopes_per_wfs} slopes each")
 
-        C_noise = np.zeros((n_slopes_total, n_slopes_total))
+        C_noise = xp.zeros((n_slopes_total, n_slopes_total))
         for i in range(n_wfs):
             # Set the diagonal elements for this WFS
             start_idx = i * n_slopes_per_wfs
             end_idx = (i + 1) * n_slopes_per_wfs
             C_noise[start_idx:end_idx, start_idx:end_idx] = \
-                noise_variance[i] * np.eye(n_slopes_per_wfs)
+                noise_variance[i] * xp.eye(n_slopes_per_wfs)
 
     # Check dimensions
     if A.shape[1] != C_atm.shape[0]:
@@ -1575,47 +1575,46 @@ def compute_mmse_reconstructor(interaction_matrix, C_atm,
     if not cinverse:
         # Check if matrices are diagonal
         if C_noise is not None:
-            is_diag_noise = np.all(np.abs(np.diag(np.diag(C_noise)) - C_noise) < 1e-10)
+            is_diag_noise = xp.all(xp.abs(xp.diag(xp.diag(C_noise)) - C_noise) < 1e-10)
 
             if is_diag_noise:
                 if verbose:
                     print("C_noise is diagonal, using optimized inversion")
-                C_noise_inv = np.diag(1.0 / np.diag(C_noise))
+                C_noise_inv = xp.diag(1.0 / xp.diag(C_noise))
             else:
                 if verbose:
                     print("Inverting C_noise matrix")
                 try:
-                    C_noise_inv = np.linalg.inv(C_noise)
-                except np.linalg.LinAlgError:
+                    C_noise_inv = xp.linalg.inv(C_noise)
+                except xp.linalg.LinAlgError:
                     if verbose:
                         print("Warning: C_noise inversion failed, using pseudo-inverse")
-                    C_noise_inv = np.linalg.pinv(C_noise)
+                    C_noise_inv = xp.linalg.pinv(C_noise)
         else:
             # Default: identity matrix (no noise)
             if verbose:
                 print("No C_noise provided, using identity matrix")
-            C_noise_inv = np.eye(A.shape[1])
+            C_noise_inv = xp.eye(A.shape[1])
 
-        is_diag_atm = np.all(np.abs(np.diag(np.diag(C_atm)) - C_atm) < 1e-10)
+        is_diag_atm = xp.all(xp.abs(xp.diag(xp.diag(C_atm)) - C_atm) < 1e-10)
 
         if is_diag_atm:
             if verbose:
                 print("C_atm is diagonal, using optimized inversion")
-            C_atm_inv = np.diag(1.0 / np.diag(C_atm))
+            C_atm_inv = xp.diag(1.0 / xp.diag(C_atm))
         else:
             if verbose:
                 print("Inverting C_atm matrix")
             try:
-                C_atm_inv = np.linalg.inv(C_atm)
-            except np.linalg.LinAlgError:
+                C_atm_inv = xp.linalg.inv(C_atm)
+            except xp.linalg.LinAlgError:
                 if verbose:
                     print("Warning: C_atm inversion failed, using pseudo-inverse")
-                C_atm_inv = np.linalg.pinv(C_atm)
+                C_atm_inv = xp.linalg.pinv(C_atm)
     else:
         # Matrices are already inverted
         C_atm_inv = C_atm
-        C_noise_inv = C_noise if C_noise is not None else np.eye(A.shape[1])
-
+        C_noise_inv = C_noise if C_noise is not None else xp.eye(A.shape[1])
     # Compute H = A' Cz^(-1) A + Cx^(-1)
     if verbose:
         print("Computing H = A' Cz^(-1) A + Cx^(-1)")
@@ -1623,19 +1622,19 @@ def compute_mmse_reconstructor(interaction_matrix, C_atm,
     # Check if C_noise_inv is scalar
     if isinstance(C_noise_inv, (int, float)) \
         or (hasattr(C_noise_inv, 'size') and C_noise_inv.size == 1):
-        H = C_noise_inv * np.dot(A.T, A) + C_atm_inv
+        H = C_noise_inv * xp.dot(A.T, A) + C_atm_inv
     else:
-        H = np.dot(A.T, np.dot(C_noise_inv, A)) + C_atm_inv
+        H = xp.dot(A.T, xp.dot(C_noise_inv, A)) + C_atm_inv
 
     # Compute H^(-1)
     if verbose:
         print("Inverting H")
     try:
-        H_inv = np.linalg.inv(H)
-    except np.linalg.LinAlgError:
+        H_inv = xp.linalg.inv(H)
+    except xp.linalg.LinAlgError:
         if verbose:
             print("Warning: H inversion failed, using pseudo-inverse")
-        H_inv = np.linalg.pinv(H)
+        H_inv = xp.linalg.pinv(H)
 
     # Compute W = H^(-1) A' Cz^(-1)
     if verbose:
@@ -1644,9 +1643,9 @@ def compute_mmse_reconstructor(interaction_matrix, C_atm,
     # Check if C_noise_inv is scalar
     if isinstance(C_noise_inv, (int, float)) \
         or (hasattr(C_noise_inv, 'size') and C_noise_inv.size == 1):
-        W_mmse = C_noise_inv * np.dot(H_inv, A.T)
+        W_mmse = C_noise_inv * xp.dot(H_inv, A.T)
     else:
-        W_mmse = np.dot(H_inv, np.dot(A.T, C_noise_inv))
+        W_mmse = xp.dot(H_inv, xp.dot(A.T, C_noise_inv))
 
     if verbose:
         print("MMSE reconstruction matrix computed")
