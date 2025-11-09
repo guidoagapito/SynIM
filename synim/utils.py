@@ -663,10 +663,10 @@ def has_transformations(rotation, translation, magnification):
 
 def rebin(array, new_shape, method='average'):
     """Resize array to new dimensions."""
-    
+
     # *** MODIFIED: Convert input to xp ***
     array = to_xp(xp, array, dtype=float_dtype)
-    
+
     if array.ndim == 1:
         array = array.reshape(array.shape[0], 1)
 
@@ -690,29 +690,30 @@ def rebin(array, new_shape, method='average'):
 
         if array.ndim == 3:
             if method == 'sum':
-                # *** MODIFIED: Use xp.sum ***
                 rebinned_array = xp.sum(
                     array[:M*(m//M), :N*(n//N), :].reshape((M, m//M, N, n//N, shape[2])),
                     axis=(1, 3))
             elif method == 'average':
-                # *** MODIFIED: Use xp.mean ***
                 rebinned_array = xp.mean(
                     array[:M*(m//M), :N*(n//N), :].reshape((M, m//M, N, n//N, shape[2])),
                     axis=(1, 3))
             elif method == 'nanmean':
                 # *** MODIFIED: Use xp.nanmean with error handling ***
                 with xp.errstate(invalid='ignore'):
-                    if xp == np:
-                        with np.errstate(invalid='ignore'):
-                            rebinned_array = xp.nanmean(
-                                array[:M*(m//M), :N*(n//N), :].reshape((M, m//M, N, n//N, shape[2])),
-                                axis=(1, 3))
-                    else:
+                if xp.__name__ == 'cupy':
+                    # CuPy doesn't have errstate, but nanmean handles warnings differently
+                    rebinned_array = xp.nanmean(
+                        array[:M*(m//M), :N*(n//N), :].reshape((M, m//M, N, n//N, shape[2])),
+                        axis=(1, 3))
+                else:
+                    # NumPy: use errstate
+                    with xp.errstate(invalid='ignore'):
                         rebinned_array = xp.nanmean(
                             array[:M*(m//M), :N*(n//N), :].reshape((M, m//M, N, n//N, shape[2])),
                             axis=(1, 3))
             else:
-                raise ValueError(f"Unsupported method: {method}. Use 'sum', 'average', or 'nanmean'.")
+                raise ValueError(f"Unsupported method: {method}."
+                                 f" Use 'sum', 'average', or 'nanmean'.")
         else:
             if method == 'sum':
                 rebinned_array = xp.sum(
@@ -723,10 +724,17 @@ def rebin(array, new_shape, method='average'):
                     array[:M*(m//M), :N*(n//N)].reshape((M, m//M, N, n//N)),
                     axis=(1, 3))
             elif method == 'nanmean':
-                with xp.errstate(invalid='ignore'):
+                    # CuPy doesn't have errstate, but nanmean handles warnings differently
+                if xp.__name__ == 'cupy':
                     rebinned_array = xp.nanmean(
                         array[:M*(m//M), :N*(n//N)].reshape((M, m//M, N, n//N)),
                         axis=(1, 3))
+                else:
+                    # NumPy: use errstate
+                    with xp.errstate(invalid='ignore'):
+                        rebinned_array = xp.nanmean(
+                            array[:M*(m//M), :N*(n//N)].reshape((M, m//M, N, n//N)),
+                            axis=(1, 3))
             else:
                 raise ValueError(f"Unsupported method: {method}."
                                  f" Use 'sum', 'average', or 'nanmean'.")
