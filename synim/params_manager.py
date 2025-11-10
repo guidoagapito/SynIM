@@ -1816,10 +1816,10 @@ class ParamsManager:
                 L0,
                 xp=xp,
                 dtype=float_dtype,
-                oversampling=1,
+                oversampling=2,
                 verbose=False
             )
-            
+
             C_atm_rad2 = cpuArray(C_atm_rad2)
 
             if verbose_flag:
