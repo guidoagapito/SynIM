@@ -3,6 +3,12 @@ import re
 import numpy as np
 import matplotlib.pyplot as plt
 from astropy.io import fits
+
+# *** MODIFIED: Import xp, cpuArray, to_xp, float_dtype ***
+from synim import (
+    xp, cpuArray, to_xp, float_dtype, default_target_device_idx, float_dtype, global_precision
+)
+
 import synim.synim as synim
 import synim.synpm as synpm
 
@@ -41,6 +47,9 @@ class ParamsManager:
             self.params = params_file
 
         self.verbose = verbose
+
+        self.target_device_idx = default_target_device_idx
+        self.precision = global_precision
 
         # Set root_dir if provided
         if root_dir:
@@ -115,14 +124,18 @@ class ParamsManager:
             )
             pup_mask = pupilstop.A
 
-        print('---> valid pixels: ', np.sum(pup_mask > 0.5))
+        # *** MODIFIED: Convert to xp with float_dtype ***
+        pup_mask = to_xp(xp, pup_mask, dtype=float_dtype)
+
+        print('---> valid pixels: ', int(np.sum(pup_mask > 0.5)))
 
         return pup_mask
 
     def count_mcao_stars(self):
         """
-        Count the number of LGS, NGS, reference stars, DMs, optimisation optics, science stars and layers
-        in the parameter configuration, similar to count_mcao_stars of IDL.
+        Count the number of LGS, NGS, reference stars, DMs, optimisation optics,
+        science stars and layers in the parameter configuration, similar to
+        count_mcao_stars of IDL.
 
             Returns:
         dict: Dictionary with counts.
@@ -196,6 +209,10 @@ class ParamsManager:
 
         if cut_start_mode and 'start_mode' in component_params:
             dm_array = dm_array[:, :, component_params['start_mode']:]
+
+        # *** MODIFIED: Convert to xp with float_dtype ***
+        dm_array = to_xp(xp, dm_array, dtype=float_dtype)
+        dm_mask = to_xp(xp, dm_mask, dtype=float_dtype)
 
         self.dm_cache[cache_key] = {
             'dm_array': dm_array,
@@ -345,6 +362,10 @@ class ParamsManager:
             self.cm, wfs_params, wfs_key, self.params, verbose=self.verbose
         )
 
+        # *** MODIFIED: Convert to xp if not None ***
+        if idx_valid_sa is not None:
+            idx_valid_sa = to_xp(xp, idx_valid_sa)
+
         # Guide star parameters
         if source_type == 'lgs':
             # LGS is at finite height
@@ -486,9 +507,9 @@ class ParamsManager:
         # Calculate the interaction matrix
         im = synim.interaction_matrix(
             pup_diam_m=params['pup_diam_m'],
-            pup_mask=params['pup_mask'],
-            dm_array=params['dm_array'],
-            dm_mask=params['dm_mask'],
+            pup_mask=to_xp(xp, params['pup_mask'], dtype=float_dtype),
+            dm_array=to_xp(xp, params['dm_array'], dtype=float_dtype),
+            dm_mask=to_xp(xp, params['dm_mask'], dtype=float_dtype),
             dm_height=params['dm_height'],
             dm_rotation=params['dm_rotation'],
             wfs_nsubaps=params['wfs_nsubaps'],
@@ -502,6 +523,9 @@ class ParamsManager:
             verbose=verbose_flag,
             display=display
         )
+
+        # *** MODIFIED: Convert to CPU for saving ***
+        im = cpuArray(im)
 
         return im
 
@@ -658,6 +682,9 @@ class ParamsManager:
                     wfs_name = wfs_info['name']
                     im = im_dict[wfs_name]
 
+                    # *** MODIFIED: Convert to CPU for transpose and saving ***
+                    im = cpuArray(im)
+
                     # Transpose to be coherent with SPECULA convention
                     im = im.transpose()
 
@@ -813,7 +840,7 @@ class ParamsManager:
             print(f"{component_type.upper()} start modes: {component_start_modes}")
 
         # Create the full interaction matrix
-        im_full = np.zeros((n_tot_modes, n_tot_slopes))
+        im_full = np.zeros((n_tot_modes, n_tot_slopes), dtype=float_dtype)
 
         # Load and assemble the interaction matrices
         for ii in range(n_wfs):
@@ -869,7 +896,7 @@ class ParamsManager:
         # Save the full interaction matrix if requested
         if save:
             output_filename = f"im_full_{wfs_type}_{component_type}.npy"
-            np.save(os.path.join(output_im_dir, output_filename), im_full)
+            np.save(os.path.join(output_im_dir, output_filename), cpuArray(im_full))
             if self.verbose:
                 print(f"Saved full interaction matrix to {output_filename}")
 
@@ -918,6 +945,9 @@ class ParamsManager:
         if base_inv_array is None:
             raise ValueError("No valid base_inv_array found in configuration")
 
+        # *** MODIFIED: Convert to xp with float_dtype ***
+        base_inv_array = to_xp(xp, base_inv_array, dtype=float_dtype)
+
         return base_inv_array
 
 
@@ -930,7 +960,7 @@ class ParamsManager:
         plot_debug = False
         if plot_debug:
             plt.figure(figsize=(10, 8))
-            plt.imshow(pm, cmap='viridis')
+            plt.imshow(cpuArray(pm), cmap='viridis')
             plt.colorbar()
             plt.title(f"PM: {source_info['name']} - {comp_name}")
             plt.tight_layout()
@@ -1097,16 +1127,16 @@ class ParamsManager:
 
                 # Transpose ONCE using ORIGINAL pupil mask
                 base_inv_array_transposed = synpm.transpose_base_array_for_specula(
-                    base_inv_array,
-                    self.pup_mask,
+                    to_xp(xp, base_inv_array, dtype=float_dtype),
+                    to_xp(xp, self.pup_mask, dtype=float_dtype),
                     verbose=verbose_flag
                 )
 
                 pm = synpm.projection_matrix(
                     pup_diam_m=self.pup_diam_m,
-                    pup_mask=self.pup_mask,
-                    dm_array=component_params['dm_array'],
-                    dm_mask=component_params['dm_mask'],
+                    pup_mask=to_xp(xp, self.pup_mask, dtype=float_dtype),
+                    dm_array=to_xp(xp, component_params['dm_array'], dtype=float_dtype),
+                    dm_mask=to_xp(xp, component_params['dm_mask'], dtype=float_dtype),
                     base_inv_array=base_inv_array_transposed,
                     dm_height=component_params['dm_height'],
                     dm_rotation=component_params['dm_rotation'],
@@ -1118,6 +1148,8 @@ class ParamsManager:
                     verbose=verbose_flag,
                     specula_convention=True
                 )
+
+                pm = cpuArray(pm)
 
                 self._save_projection_matrix(
                     pm, source_info, comp_name, saved_matrices, verbose_flag
@@ -1307,13 +1339,13 @@ class ParamsManager:
         if save:
             if pm_full_dm is not None:
                 dm_output_filename = "pm_full_dm.npy"
-                np.save(os.path.join(output_dir, dm_output_filename), pm_full_dm)
+                np.save(os.path.join(output_dir, dm_output_filename), cpuArray(pm_full_dm))
                 if self.verbose:
                     print(f"Saved DM projection matrix to {dm_output_filename}")
 
             if pm_full_layer is not None:
                 layer_output_filename = "pm_full_layer.npy"
-                np.save(os.path.join(output_dir, layer_output_filename), pm_full_layer)
+                np.save(os.path.join(output_dir, layer_output_filename), cpuArray(pm_full_layer))
                 if self.verbose:
                     print(f"Saved Layer projection matrix to {layer_output_filename}")
 
@@ -1322,8 +1354,8 @@ class ParamsManager:
             print("\n=== Computing Optimal Projection Matrix ===")
 
         # Weighted combination
-        tpdm_pdm = np.zeros((pm_full_dm.shape[1], pm_full_dm.shape[1]))
-        tpdm_pl = np.zeros((pm_full_dm.shape[1], pm_full_layer.shape[1]))
+        tpdm_pdm = np.zeros((pm_full_dm.shape[1], pm_full_dm.shape[1]), dtype=float_dtype)
+        tpdm_pl = np.zeros((pm_full_dm.shape[1], pm_full_layer.shape[1]), dtype=float_dtype)
 
         total_weight = np.sum(weights_array)
 
@@ -1537,9 +1569,9 @@ class ParamsManager:
                 print(f"    Norm factor: {recmat_obj.norm_factor}")
 
             # Also save intermediate matrices as numpy arrays for debugging
-            np.save(os.path.join(output_dir, "tpdm_pdm.npy"), tpdm_pdm)
-            np.save(os.path.join(output_dir, "tpdm_pl.npy"), tpdm_pl)
-            np.save(os.path.join(output_dir, "tpdm_pdm_reg.npy"), tpdm_pdm_reg)
+            np.save(os.path.join(output_dir, "tpdm_pdm.npy"), cpuArray(tpdm_pdm))
+            np.save(os.path.join(output_dir, "tpdm_pl.npy"), cpuArray(tpdm_pl))
+            np.save(os.path.join(output_dir, "tpdm_pdm_reg.npy"), cpuArray(tpdm_pdm_reg))
 
             if verbose_flag:
                 print(f"\n  ✓ Also saved debug matrices (NumPy format):")
@@ -1645,9 +1677,6 @@ class ParamsManager:
         elif 'sh1' in self.params:
             wavelengthInNm = self.params['sh1'].get('wavelengthInNm', 500.0)
 
-        # Conversion factor (nm to rad^2 at wavelengthInNm)
-        conversion_factor = (wavelengthInNm / 2.0 / np.pi) ** 2
-
         if verbose_flag:
             print(f"\n{'='*60}")
             print(f"Computing Covariance Matrices")
@@ -1657,7 +1686,6 @@ class ParamsManager:
             print(f"  Component type: {component_type}")
             print(f"  Full modes: {full_modes}")
             print(f"  Wavelength: {wavelengthInNm} nm")
-            print(f"  Conversion factor: {conversion_factor:.6e}")
             print(f"{'='*60}\n")
 
         # Get component list
@@ -1780,29 +1808,32 @@ class ParamsManager:
                 print(f"  Computing covariance matrix...")
 
             # Compute covariance matrix
-            C_atm_nm = compute_ifs_covmat(
-                comp_params['dm_mask'],
+            C_atm_rad2 = compute_ifs_covmat(
+                to_xp(xp, comp_params['dm_mask'], dtype=float_dtype),
                 self.pup_diam_m,
-                dm2d_selected,
+                to_xp(xp, dm2d_selected , dtype=float_dtype),
                 r0,
                 L0,
-                oversampling=1,
+                xp=xp,
+                dtype=float_dtype,
+                oversampling=2,
                 verbose=False
             )
 
-            # Convert from nm^2 to rad^2 (like IDL line ~660)
-            C_atm = C_atm_nm * conversion_factor
+            C_atm_rad2 = cpuArray(C_atm_rad2)
 
             if verbose_flag:
-                print(f"  ✓ Covariance computed: {C_atm.shape}")
-                print(f"    RMS (nm): {np.sqrt(np.diag(C_atm_nm)).mean():.2f}")
-                print(f"    RMS (rad): {np.sqrt(np.diag(C_atm)).mean():.4f}")
+                print(f"  ✓ Covariance computed: {C_atm_rad2.shape}")
+                print(f"    RMS (nm):"
+                      f" {np.sqrt(np.diag(C_atm_rad2*(500**2/2/np.pi**2))).mean():.2f}")
+                print(f"    RMS (rad): {np.sqrt(np.diag(C_atm_rad2)).mean():.4f}")
 
             # ========== SAVE TO FITS (LIKE IDL) ==========
             # IDL: writefits, fileNameCov, turb_covmat
-            hdu = fits.PrimaryHDU(C_atm.astype(np.float32))
+            hdu = fits.PrimaryHDU(cpuArray(C_atm_rad2))
             hdu.header['R0'] = (r0, 'Fried parameter [m]')
             hdu.header['L0'] = (L0, 'Outer scale [m]')
+            hdu.header['UNITS'] = ('rad^2', 'Covariance units')
             hdu.header['DIAMM'] = (self.pup_diam_m, 'Pupil diameter [m]')
             hdu.header['WAVELNM'] = (wavelengthInNm, 'Wavelength [nm]')
             hdu.header['NMODES'] = (n_modes, 'Number of modes')
@@ -1818,7 +1849,7 @@ class ParamsManager:
             if verbose_flag:
                 print(f"  ✓ Saved to FITS: {cov_filename}")
 
-            C_atm_blocks.append(C_atm)
+            C_atm_blocks.append(C_atm_rad2)
 
         if verbose_flag:
             print(f"\n{'='*60}")
@@ -1836,7 +1867,6 @@ class ParamsManager:
             'r0': r0,
             'L0': L0,
             'wavelength_nm': wavelengthInNm,
-            'conversion_factor': conversion_factor,
             'files': cov_files
         }
 
@@ -1910,7 +1940,7 @@ class ParamsManager:
             print(f"  Weights: {weights}")
 
         # Initialize full covariance matrix
-        C_atm_full = np.zeros((total_modes, total_modes))
+        C_atm_full = np.zeros((total_modes, total_modes), dtype=float_dtype)
 
         # Conversion factor (nm to rad^2 at 500nm)
         conversion_factor = (500 / 2 / np.pi) ** 2

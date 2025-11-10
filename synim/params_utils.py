@@ -5,6 +5,10 @@ import re
 import yaml
 import datetime
 import numpy as np
+import matplotlib.pyplot as plt
+
+# *** MODIFIED: Import xp, cpuArray, to_xp, float_dtype ***
+from synim import xp, cpuArray, to_xp, float_dtype
 
 # Import all utility functions from utils
 from synim.utils import *
@@ -19,6 +23,7 @@ from specula.data_objects.m2c import M2C
 from specula.data_objects.simul_params import SimulParams
 from specula.data_objects.pupilstop import Pupilstop
 from specula.data_objects.subap_data import SubapData
+from specula.lib.compute_zern_ifunc import compute_zern_ifunc
 
 
 def is_simple_config(config):
@@ -35,7 +40,7 @@ def is_simple_config(config):
     dm_count = sum(1 for key in config if key.startswith('dm') and key != 'dm')
 
     # Check for multiple WFSs
-    wfs_count = sum(1 for key in config if 
+    wfs_count = sum(1 for key in config if
                    (key.startswith('sh_') or key.startswith('pyramid')) and key != 'pyramid')
 
     return dm_count == 0 and wfs_count == 0
@@ -150,16 +155,9 @@ def load_pupilstop(cm, pupilstop_params, pixel_pupil, pixel_pitch, verbose=False
     """
     Load or create a pupilstop.
     
-    Args:
-        cm (CalibManager): SPECULA calibration manager
-        pupilstop_params (dict): Parameters for the pupilstop
-        pixel_pupil (int): Number of pixels across pupil
-        pixel_pitch (float): Pixel pitch in meters
-        verbose (bool): Whether to print details
-        
-    Returns:
-        numpy.ndarray: Pupil mask array
+    NOTE: Returns numpy array from disk - caller should convert with to_xp if needed
     """
+
     if 'tag' in pupilstop_params or 'pupil_mask_tag' in pupilstop_params:
         if 'pupil_mask_tag' in pupilstop_params:
             pupilstop_tag = pupilstop_params['pupil_mask_tag']
@@ -171,6 +169,7 @@ def load_pupilstop(cm, pupilstop_params, pixel_pupil, pixel_pitch, verbose=False
                 print(f"     Loading pupilstop from file, tag: {pupilstop_tag}")
         pupilstop_path = cm.filename('pupilstop', pupilstop_tag)
         pupilstop = Pupilstop.restore(pupilstop_path)
+        # *** Returns numpy from FITS file ***
         return pupilstop.A
     else:
         # Create pupilstop from parameters
@@ -186,6 +185,7 @@ def load_pupilstop(cm, pupilstop_params, pixel_pupil, pixel_pitch, verbose=False
             target_device_idx=-1,
             precision=0
         )
+        # *** Returns numpy ***
         return pupilstop.A
 
 def load_influence_functions(cm, dm_params, pixel_pupil, verbose=False, is_inverse_basis=False):
@@ -236,7 +236,7 @@ def load_influence_functions(cm, dm_params, pixel_pupil, verbose=False, is_inver
         # Check dimensions to determine if this is an inverse basis
         n_rows = ifunc.influence_function.shape[0]
         n_cols = ifunc.influence_function.shape[1]
-        
+
         if ifunc.mask_inf_func is not None:
             n_valid_pixels = np.sum(ifunc.mask_inf_func > 0.5)
         else:
@@ -256,7 +256,7 @@ def load_influence_functions(cm, dm_params, pixel_pupil, verbose=False, is_inver
         if is_inverse or is_inverse_basis:
             if verbose:
                 print(f"     Returning 2D inverse basis (optimized format)")
-            
+
             # Make sure it's (n_modes, n_pixels) format
             if ifunc.influence_function.shape[0] < ifunc.influence_function.shape[1]:
                 # Already correct: n_modes x n_pixels
@@ -313,20 +313,17 @@ def load_influence_functions(cm, dm_params, pixel_pupil, verbose=False, is_inver
         raise ValueError("No valid influence function configuration found."
                          " Need either 'ifunc_tag', 'ifunc_object', or 'type_str'.")
 
+
 def find_subapdata(cm, wfs_params, wfs_key, params, verbose=False):
     """
     Find and load SubapData for valid subapertures.
     
-    Args:
-        cm (CalibManager): SPECULA calibration manager
-        wfs_params (dict): WFS parameters
-        wfs_key (str): WFS key in configuration
-        params (dict): Full configuration parameters
-        verbose (bool): Whether to print details
-        
+    NOTE: Returns numpy array from disk - caller should convert with to_xp if needed
+    
     Returns:
-        numpy.ndarray: Array of valid subaperture indices or None
+        numpy.ndarray: Array of valid subaperture indices (numpy) or None
     """
+
     subap_path = None
     subap_tag = None
 
@@ -387,13 +384,13 @@ def find_subapdata(cm, wfs_params, wfs_key, params, verbose=False):
             if verbose:
                 print("     Loading subapdata from slopec, tag:", slopec_params['subapdata_tag'])
             subap_tag = slopec_params['subapdata_tag']
-            subap_path = cm.filename('subap_data', subap_tag)
+            subap_path = cm.filename('sub_aperture_data', subap_tag)
         elif 'subapdata_object' in slopec_params:
             if verbose:
                 print("     Loading subapdata from slopec, tag:", slopec_params['subapdata_object'])
             subap_tag = slopec_params['subapdata_object']
             subap_path = cm.filename('subapdata', subap_tag)
- 
+
     if subap_path is None:
         if verbose:
             print("     No subapdata file found. Using default.")
@@ -407,11 +404,13 @@ def find_subapdata(cm, wfs_params, wfs_key, params, verbose=False):
         if verbose:
             print("     Loading subapdata from file:", subap_path)
         subap_data = SubapData.restore(subap_path)
+        # *** Returns numpy from FITS file ***
         return np.transpose(np.asarray(np.where(subap_data.single_mask())))
 
     return None
 
-def insert_interaction_matrix_part(im_full, intmat_obj, mode_idx, slope_idx_start, slope_idx_end, verbose=False):
+def insert_interaction_matrix_part(im_full, intmat_obj, mode_idx,
+                                   slope_idx_start, slope_idx_end, verbose=False):
     """
     Insert part of an interaction matrix into a combined matrix.
     
@@ -444,7 +443,8 @@ def insert_interaction_matrix_part(im_full, intmat_obj, mode_idx, slope_idx_star
 
     # Insert the valid modes into our combined matrix
     n_slopes = slope_idx_end - slope_idx_start
-    im_full[mode_idx, slope_idx_start:slope_idx_end] = intmat_obj.intmat[actual_mode_indices, :n_slopes]
+    im_full[mode_idx, slope_idx_start:slope_idx_end] = \
+        intmat_obj.intmat[actual_mode_indices, :n_slopes]
 
     if verbose:
         print(f"  Inserted {len(actual_mode_indices)} modes at indices {actual_mode_indices}, "
@@ -1398,7 +1398,7 @@ def generate_pm_filename(config_file, opt_index=None,
     # Extract component configuration
     component_config = selected_component['config']
     component_height = component_config.get('height', 0)
-    
+
     # *** NEW: Extract nmodes and start_mode ***
     component_nmodes = component_config.get('nmodes', None)
     component_start_mode = component_config.get('start_mode', 0)
@@ -1421,7 +1421,7 @@ def generate_pm_filename(config_file, opt_index=None,
     # *** MODIFIED: Component part - always use "dm" prefix, include modes info ***
     # Component height
     parts.append(f"dmH{component_height:.1f}")
-    
+
     # *** NEW: Add modes information ***
     if component_nmodes is not None:
         if component_start_mode > 0:
@@ -1432,7 +1432,7 @@ def generate_pm_filename(config_file, opt_index=None,
         else:
             # Format: mn{nmodes}
             parts.append(f"mn{component_nmodes}")
-    
+
     # Add ifunc/m2c tags
     if 'ifunc_tag' in component_config:
         parts.append(f"ifunc_{component_config['ifunc_tag']}")
@@ -1617,7 +1617,6 @@ def compute_mmse_reconstructor(interaction_matrix, C_atm,
         # Matrices are already inverted
         C_atm_inv = C_atm
         C_noise_inv = C_noise if C_noise is not None else np.eye(A.shape[1])
-
     # Compute H = A' Cz^(-1) A + Cx^(-1)
     if verbose:
         print("Computing H = A' Cz^(-1) A + Cx^(-1)")

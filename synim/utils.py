@@ -2,10 +2,10 @@
 
 import numpy as np
 import matplotlib.pyplot as plt
-
-from scipy.ndimage import affine_transform, binary_dilation
-from scipy.ndimage import rotate, shift, zoom
-
+from synim import (
+    xp, cpuArray, to_xp, float_dtype, affine_transform, rotate, shift, zoom
+)
+from scipy.ndimage import binary_dilation
 
 # Labels for the extrapolation directions
 directions_labels = ['Down (y+1)', 'Up (y-1)', 'Right (x+1)', 'Left (x-1)']
@@ -25,6 +25,9 @@ def calculate_extrapolation_indices_coeffs(mask, debug=False, debug_pixels=None)
             - reference_indices: Array of reference pixel indices for extrapolation.
             - coefficients: Coefficients for linear extrapolation.
     """
+
+    # *** MODIFIED: Ensure mask is CPU numpy ***
+    mask = cpuArray(mask)
 
     # Convert the mask to boolean
     binary_mask = mask.astype(bool)
@@ -216,22 +219,22 @@ def apply_extrapolation(data, edge_pixels, reference_indices, coefficients, debu
 
             # Assign the extrapolated value
             flat_result[edge_idx] = extrap_value
-    else:       
+    else:
         # Create a mask for valid reference indices (>= 0)
         valid_ref_mask = reference_indices >= 0
 
         # Replace invalid indices with 0 to avoid indexing errors
-        safe_ref_indices = np.where(valid_ref_mask, reference_indices, 0)
+        safe_ref_indices = xp.where(valid_ref_mask, reference_indices, 0)
 
         # Get data values for all reference indices at once
         ref_data = flat_data[safe_ref_indices]  # Shape: (n_valid_edges, 8)
 
         # Zero out contributions from invalid references
-        masked_coeffs = np.where(valid_ref_mask, coefficients, 0.0)
+        masked_coeffs = xp.where(valid_ref_mask, coefficients, 0.0)
 
         # Compute all contributions at once and sum across reference positions
         contributions = masked_coeffs * ref_data  # Element-wise multiplication
-        extrap_values = np.sum(contributions, axis=1)  # Sum across reference positions
+        extrap_values = xp.sum(contributions, axis=1)  # Sum across reference positions
 
         # Assign extrapolated values to edge pixels
         flat_result[edge_pixels] = extrap_values
@@ -254,13 +257,13 @@ def shiftzoom_from_source_dm_params(source_pol_coo, source_height, dm_height, pi
     - zoom: tuple, (x_zoom, y_zoom) magnification factors
     """
 
-    arcsec2rad = np.pi/180/3600
+    arcsec2rad = xp.pi/180/3600
 
-    if np.isinf(source_height):
+    if xp.isinf(source_height):
         mag_factor = 1.0
     else:
         mag_factor = source_height/(source_height-dm_height)
-    source_rec_coo_asec = polar_to_xy(source_pol_coo[0],source_pol_coo[1]*np.pi/180)
+    source_rec_coo_asec = polar_to_xy(source_pol_coo[0],source_pol_coo[1]*xp.pi/180)
     source_rec_coo_m = source_rec_coo_asec*dm_height*arcsec2rad
     # change sign to get the shift in the right direction considering the convention applied in rotshiftzoom_array
     source_rec_coo_pix = -1 * source_rec_coo_m / pixel_pitch
@@ -271,13 +274,17 @@ def shiftzoom_from_source_dm_params(source_pol_coo, source_height, dm_height, pi
     return shift, zoom
 
 
-def rotshiftzoom_array_noaffine(input_array, dm_translation=(0.0, 0.0),  dm_rotation=0.0,   dm_magnification=(1.0, 1.0),
-                                    wfs_translation=(0.0, 0.0), wfs_rotation=0.0, wfs_magnification=(1.0, 1.0), output_size=None):
+def rotshiftzoom_array_noaffine(input_array, dm_translation=(0.0, 0.0), dm_rotation=0.0, 
+                                dm_magnification=(1.0, 1.0), wfs_translation=(0.0, 0.0), 
+                                wfs_rotation=0.0, wfs_magnification=(1.0, 1.0), output_size=None):
     """
-    This function applies magnification, rotation, shift and resize of a 2D or 3D numpy array
+    Apply magnification, rotation, shift and resize of a 2D or 3D array.
+    Uses global rotate/shift/zoom functions (scipy or cupyx.scipy based on synim.init).
+    
+    NOTE: If cupyx.scipy is not available, this will force CPU conversion.
     
     Parameters:
-    - input_array: numpy array, input data to be transformed
+    - input_array: array (numpy or cupy), input data to be transformed
     - dm_translation: tuple, translation for DM (x, y)
     - dm_rotation: float, rotation angle for DM in degrees
     - dm_magnification: tuple, magnification factors for DM (x, y)
@@ -287,14 +294,35 @@ def rotshiftzoom_array_noaffine(input_array, dm_translation=(0.0, 0.0),  dm_rota
     - output_size: tuple, desired output size (height, width)
 
     Returns:
-    - output: numpy array, transformed data
+    - output: transformed array (same library as input)
     """
+    
+    # *** DETECT INPUT TYPE ***
+    input_is_gpu = (xp.__name__ == 'cupy' and isinstance(input_array, xp.ndarray))
+    
+    # *** CHECK IF FUNCTIONS SUPPORT GPU ***
+    # If rotate/shift/zoom are from cupyx.scipy, they can handle cupy arrays
+    # If they're from scipy, we need to convert to numpy
+    funcs_support_gpu = (rotate.__module__ == 'cupyx.scipy.ndimage._interpolation')
+    
+    # *** CONVERT TO CPU IF NEEDED ***
+    needs_cpu = input_is_gpu and not funcs_support_gpu
+    
+    if needs_cpu:
+        # GPU input but functions require CPU (scipy)
+        input_array_proc = cpuArray(input_array)
+        using_gpu = False
+    else:
+        # Either CPU input, or GPU input with cupyx.scipy support
+        input_array_proc = input_array
+        using_gpu = input_is_gpu
 
-    if np.isnan(input_array).any():
-        np.nan_to_num(input_array, copy=False, nan=0.0, posinf=None, neginf=None)
+    # *** HANDLE NaN ***
+    if xp.isnan(input_array_proc).any():
+        xp.nan_to_num(input_array_proc, copy=False, nan=0.0, posinf=None, neginf=None)
 
-    # Check if phase is 2D or 3D
-    if len(input_array.shape) == 3:
+    # Check if array is 2D or 3D
+    if len(input_array_proc.shape) == 3:
         dm_translation_ = dm_translation + (0,)
         dm_magnification_ = dm_magnification + (1,)
         wfs_translation_ = wfs_translation + (0,)
@@ -305,15 +333,18 @@ def rotshiftzoom_array_noaffine(input_array, dm_translation=(0.0, 0.0),  dm_rota
         wfs_translation_ = wfs_translation
         wfs_magnification_ = wfs_magnification
 
-    # resize
-    if output_size == None:
-        output_size = input_array.shape
+    # Set output size
+    if output_size is None:
+        output_size = input_array_proc.shape
+
+    # Use proper array library
+    lib = xp if using_gpu else np
 
     # (1) DM magnification
     if all(element == 1 for element in dm_magnification_):
-        array_mag = input_array
+        array_mag = input_array_proc
     else:
-        array_mag = zoom(input_array, dm_magnification_)
+        array_mag = zoom(input_array_proc, dm_magnification_)
 
     # (2) DM rotation
     if dm_rotation == 0:
@@ -345,27 +376,45 @@ def rotshiftzoom_array_noaffine(input_array, dm_translation=(0.0, 0.0),  dm_rota
     else:
         array_mag = zoom(array_shi, wfs_magnification_)
 
+    # Crop or pad to output_size
     if (array_mag.shape[0] > output_size[0]) | (array_mag.shape[1] > output_size[1]):
-        # smaller output size
-        if len(input_array.shape) == 3:
-            output = array_mag[int(0.5*(array_mag.shape[0]-output_size[0])):int(0.5*(array_mag.shape[0]+output_size[0])), \
-                               int(0.5*(array_mag.shape[1]-output_size[1])):int(0.5*(array_mag.shape[1]+output_size[1])),:]
+        # Smaller output size
+        if len(input_array_proc.shape) == 3:
+            output = array_mag[
+                int(0.5*(array_mag.shape[0]-output_size[0])):int(0.5*(array_mag.shape[0]+output_size[0])), 
+                int(0.5*(array_mag.shape[1]-output_size[1])):int(0.5*(array_mag.shape[1]+output_size[1])),
+                :
+            ]
         else:
-            output = array_mag[int(0.5*(array_mag.shape[0]-output_size[0])):int(0.5*(array_mag.shape[0]+output_size[0])), \
-                               int(0.5*(array_mag.shape[1]-output_size[1])):int(0.5*(array_mag.shape[1]+output_size[1]))]
+            output = array_mag[
+                int(0.5*(array_mag.shape[0]-output_size[0])):int(0.5*(array_mag.shape[0]+output_size[0])), 
+                int(0.5*(array_mag.shape[1]-output_size[1])):int(0.5*(array_mag.shape[1]+output_size[1]))
+            ]
     elif (array_mag.shape[0] < output_size[0]) | (array_mag.shape[1] < output_size[1]):
-        # bigger output size
-        if len(input_array.shape) == 3:
-            output = np.zeros(output_size+(input_array.shape[2],))
-            output[int(0.5*(output_size[0]-array_mag.shape[0])):int(0.5*(output_size[0]+array_mag.shape[0])), \
-                   int(0.5*(output_size[1]-array_mag.shape[1])):int(0.5*(output_size[1]+array_mag.shape[1])),:] = array_mag
+        # Bigger output size
+        if len(input_array_proc.shape) == 3:
+            output = lib.zeros(output_size + (input_array_proc.shape[2],), dtype=array_mag.dtype)
+            output[
+                int(0.5*(output_size[0]-array_mag.shape[0])):int(0.5*(output_size[0]+array_mag.shape[0])), 
+                int(0.5*(output_size[1]-array_mag.shape[1])):int(0.5*(output_size[1]+array_mag.shape[1])),
+                :
+            ] = array_mag
         else:
-            output[int(0.5*(output_size[0]-array_mag.shape[0])):int(0.5*(output_size[0]+array_mag.shape[0])), \
-                   int(0.5*(output_size[1]-array_mag.shape[1])):int(0.5*(output_size[1]+array_mag.shape[1]))] = array_mag
+            output = lib.zeros(output_size, dtype=array_mag.dtype)
+            output[
+                int(0.5*(output_size[0]-array_mag.shape[0])):int(0.5*(output_size[0]+array_mag.shape[0])), 
+                int(0.5*(output_size[1]-array_mag.shape[1])):int(0.5*(output_size[1]+array_mag.shape[1]))
+            ] = array_mag
     else:
         output = array_mag
 
-    return output
+    # *** CONVERT BACK TO GPU IF NEEDED ***
+    if input_is_gpu and not using_gpu:
+        # We used CPU (scipy), convert result back to GPU
+        return to_xp(xp, output, dtype=float_dtype)
+    else:
+        # Already in correct format
+        return output
 
 
 def rotshiftzoom_array(input_array, dm_translation=(0.0, 0.0),
@@ -373,11 +422,12 @@ def rotshiftzoom_array(input_array, dm_translation=(0.0, 0.0),
                        wfs_translation=(0.0, 0.0), wfs_rotation=0.0,
                        wfs_magnification=(1.0, 1.0), output_size=None):
     """
-    This function applies magnification, rotation, shift and resize of a 2D or 3D numpy array using affine transformation.
+    This function applies magnification, rotation, shift and resize of a
+    2D or 3D numpy/cupy array using affine transformation.
     Rotation is applied in the same direction as the first function.
 
     Parameters:
-    - input_array: numpy array, input data to be transformed
+    - input_array: numpy/cupy array, input data to be transformed
     - dm_translation: tuple, translation for DM (x, y)
     - dm_rotation: float, rotation angle for DM in degrees
     - dm_magnification: tuple, magnification factors for DM (x, y)
@@ -387,7 +437,7 @@ def rotshiftzoom_array(input_array, dm_translation=(0.0, 0.0),
     - output_size: tuple, desired output size (height, width)
 
     Returns:
-    - output: numpy array, transformed data
+    - output: numpy/cupy array, transformed data
     """
 
     # Parameter handling: conversion of single values to tuples
@@ -423,8 +473,8 @@ def rotshiftzoom_array(input_array, dm_translation=(0.0, 0.0),
     except (TypeError, ValueError):
         wfs_magnification = (1.0, 1.0)
 
-    if np.isnan(input_array).any():
-        input_array = np.nan_to_num(input_array, copy=True, nan=0.0, posinf=None, neginf=None)
+    if xp.isnan(input_array).any():
+        input_array = xp.nan_to_num(input_array, copy=True, nan=0.0, posinf=None, neginf=None)
 
     # Check if array is 2D or 3D
     is_3d = len(input_array.shape) == 3
@@ -434,61 +484,60 @@ def rotshiftzoom_array(input_array, dm_translation=(0.0, 0.0),
         output_size = input_array.shape[:2]  # Only take the first two dimensions
 
     # Center of the input array
-    center = np.array(input_array.shape[:2]) / 2.0
+    center = xp.array(input_array.shape[:2]) / 2.0
     # Convert rotations to radians
     # Note: Inverting the sign of rotation to match the first function's direction
-    dm_rot_rad = np.deg2rad(-dm_rotation)  # Negative sign to reverse direction
-    wfs_rot_rad = np.deg2rad(-wfs_rotation)  # Negative sign to reverse direction
-
+    dm_rot_rad = xp.deg2rad(-dm_rotation)  # Negative sign to reverse direction
+    wfs_rot_rad = xp.deg2rad(-wfs_rotation)  # Negative sign to reverse direction
     # Initialize the output array
     if is_3d:
-        output = np.zeros((output_size[0], output_size[1], input_array.shape[2]),
+        output = xp.zeros((output_size[0], output_size[1], input_array.shape[2]),
                           dtype=input_array.dtype)
     else:
-        output = np.zeros(output_size, dtype=input_array.dtype)
+        output = xp.zeros(output_size, dtype=input_array.dtype)
 
     # Create the transformation matrices
     # For DM transformation
-    dm_scale_matrix = np.array(
+    dm_scale_matrix = xp.array(
         [[1.0/dm_magnification[0], 0], [0, 1.0/dm_magnification[1]]]
     )
-    dm_rot_matrix = np.array(
-        [[np.cos(dm_rot_rad), -np.sin(dm_rot_rad)], [np.sin(dm_rot_rad), np.cos(dm_rot_rad)]]
+    dm_rot_matrix = xp.array(
+        [[xp.cos(dm_rot_rad), -xp.sin(dm_rot_rad)], [xp.sin(dm_rot_rad), xp.cos(dm_rot_rad)]]
     )
-    dm_matrix = np.dot(dm_rot_matrix, dm_scale_matrix)
+    dm_matrix = xp.dot(dm_rot_matrix, dm_scale_matrix)
 
     # For WFS transformation
-    wfs_scale_matrix = np.array(
+    wfs_scale_matrix = xp.array(
         [[1.0/wfs_magnification[0], 0], [0, 1.0/wfs_magnification[1]]]
     )
-    wfs_rot_matrix = np.array(
-        [[np.cos(wfs_rot_rad), -np.sin(wfs_rot_rad)],
-         [np.sin(wfs_rot_rad), np.cos(wfs_rot_rad)]]
+    wfs_rot_matrix = xp.array(
+        [[xp.cos(wfs_rot_rad), -xp.sin(wfs_rot_rad)],
+         [xp.sin(wfs_rot_rad), xp.cos(wfs_rot_rad)]]
     )
-    wfs_matrix = np.dot(wfs_rot_matrix, wfs_scale_matrix)
+    wfs_matrix = xp.dot(wfs_rot_matrix, wfs_scale_matrix)
 
     # Combine transformations (first DM, then WFS)
-    combined_matrix = np.dot(wfs_matrix, dm_matrix)
+    combined_matrix = xp.dot(wfs_matrix, dm_matrix)
 
     # For 3D arrays, extend the transformation matrix to 3x3
     if is_3d:
         # Create a 3x3 identity matrix and insert the 2x2 transformation in the top-left
-        combined_matrix_3d = np.eye(3)
+        combined_matrix_3d = xp.eye(3)
         combined_matrix_3d[:2, :2] = combined_matrix
         combined_matrix = combined_matrix_3d
 
     # Calculate offset
-    output_center = np.array(output_size) / 2.0
+    output_center = xp.array(output_size) / 2.0
     if is_3d:
         # For 3D, calculate offset only for the first two dimensions
-        offset_2d = center[:2] - np.dot(combined_matrix[:2, :2], output_center) \
-            - np.dot(dm_matrix, dm_translation) - wfs_translation
-        offset = np.array([offset_2d[0], offset_2d[1], 0])
+        offset_2d = center[:2] - xp.dot(combined_matrix[:2, :2], output_center) \
+            - xp.dot(dm_matrix, xp.array(dm_translation)) - xp.array(wfs_translation)
+        offset = xp.zeros(3, dtype=offset_2d.dtype)
+        offset[:2] = offset_2d
     else:
-        offset = center - np.dot(combined_matrix, output_center) \
-            - np.dot(dm_matrix, dm_translation) - wfs_translation
-
-    # Apply transformation
+        offset = center - xp.dot(combined_matrix, output_center) \
+            - xp.dot(dm_matrix, xp.array(dm_translation)) - xp.array(wfs_translation)
+    # Apply transformation (scipy requires numpy)
     output = affine_transform(
         input_array,
         combined_matrix,
@@ -498,6 +547,93 @@ def rotshiftzoom_array(input_array, dm_translation=(0.0, 0.0),
     )
 
     return output
+
+
+def dm3d_to_2d(dm_array, mask):
+    """Convert a 3D DM influence function to a 2D array using a mask."""
+    
+    # *** MODIFIED: Convert inputs to xp with correct dtype ***
+    dm_array = to_xp(xp, dm_array, dtype=float_dtype)
+    mask = to_xp(xp, mask, dtype=float_dtype)
+    
+    # Check if the mask is 2D
+    if mask.ndim != 2:
+        raise ValueError("The mask must be a 2D array.")
+    # Check if the dm_array is 3D
+    if dm_array.ndim != 3:
+        raise ValueError("The dm_array must be a 3D array.")
+    nmodes = dm_array.shape[2]
+    idx = xp.where(mask > 0)
+    dm_array_2d = dm_array[idx[0], idx[1], :].transpose()
+    for i in range(nmodes):
+        # *** MODIFIED: Use float_dtype ***
+        dm_array_2d[i,:] = dm_array_2d[i,:].astype(float_dtype)
+        dm_array_2d[i,:] /= xp.sqrt(xp.mean(dm_array_2d[i,:]**2))
+        dm_array_2d[i,:] -= xp.mean(dm_array_2d[i,:])
+
+    return dm_array_2d
+
+
+def dm2d_to_3d(dm_array, mask, normalize=True):
+    """Convert a 2D DM influence function to a 3D array using a mask."""
+    
+    # *** MODIFIED: Convert inputs to xp with correct dtype ***
+    dm_array = to_xp(xp, dm_array, dtype=float_dtype)
+    mask = to_xp(xp, mask, dtype=float_dtype)
+    
+    # Check if the mask is 2D
+    if mask.ndim != 2:
+        raise ValueError("The mask must be a 2D array.")
+    # Check if the dm_array is 2D
+    if dm_array.ndim != 2:
+        raise ValueError("The dm_array must be a 2D array.")
+    npixels = mask.shape[0]
+    nmodes = dm_array.shape[0]
+    # *** MODIFIED: Use xp and float_dtype ***
+    dm_array_3d = xp.zeros((npixels, npixels, nmodes), dtype=float_dtype)
+    for i in range(nmodes):
+        idx = xp.where(mask > 0)
+        dm_i = dm_array[i]
+        # normalize by the RMS
+        if normalize:
+            dm_i /= xp.sqrt(xp.mean(dm_i**2))
+            dm_i -= xp.mean(dm_i)
+        # *** MODIFIED: Use xp and float_dtype ***
+        dm_i_3d = xp.zeros(mask.shape, dtype=float_dtype)
+        dm_i_3d[idx] = dm_i
+        dm_array_3d[:, :, i] = dm_i_3d
+
+    return dm_array_3d
+
+
+def apply_mask(array, mask, norm=False, fill_value=None):
+    """Apply a 2D or 3D mask to a 2D or 3D array."""
+    
+    # *** MODIFIED: Convert inputs to xp ***
+    array = to_xp(xp, array, dtype=float_dtype)
+    mask = to_xp(xp, mask, dtype=float_dtype)
+    
+    # Broadcast mask for 3D arrays
+    if array.ndim == 3 and mask.ndim == 2:
+        norm_mask = mask[:, :, xp.newaxis]
+    else:
+        norm_mask = mask
+
+    if norm:
+        safe_mask = xp.where(norm_mask == 0, 1, norm_mask)
+        norm_mask = 1.0 / safe_mask
+
+    if fill_value is not None:
+        return xp.where(norm_mask, array, fill_value)
+    else:
+        result = array * norm_mask
+        if norm and fill_value is None:
+            # Set to 0 where mask was zero (to avoid inf)
+            result = xp.where(
+                mask if mask.ndim == array.ndim else mask[:, :, xp.newaxis], 
+                result, 0
+            )
+        return result
 
 
 def has_transformations(rotation, translation, magnification):
@@ -526,18 +662,10 @@ def has_transformations(rotation, translation, magnification):
 
 
 def rebin(array, new_shape, method='average'):
-    """
-    The rebin function resizes a vector or array to dimensions given by the parameters new_shape.
-    In case of a 3D array the third dimension is not affected.
+    """Resize array to new dimensions."""
 
-    Parameters:
-    - array: numpy 2D or 3D array
-    - new_shape: 2 elements tuple
-    - method: 'sum' or 'average' or 'nanmean', used in the compression case
-
-    Returns:
-    - rebinned_array: numpy 2D or 3D array
-    """
+    # *** MODIFIED: Convert input to xp ***
+    array = to_xp(xp, array, dtype=float_dtype)
 
     if array.ndim == 1:
         array = array.reshape(array.shape[0], 1)
@@ -551,9 +679,10 @@ def rebin(array, new_shape, method='average'):
         if m % M != 0 or n % N != 0:
             raise ValueError("New shape must be multiples of the input dimensions.")
         if array.ndim == 3:
-            rebinned_array = np.tile(array, (M//m, N//n, 1))
+            # *** MODIFIED: Use xp.tile ***
+            rebinned_array = xp.tile(array, (M//m, N//n, 1))
         else:
-            rebinned_array = np.tile(array, (M//m, N//n))
+            rebinned_array = xp.tile(array, (M//m, N//n))
     else:    
         # Compression case
         if M == 0 or N == 0:
@@ -561,94 +690,68 @@ def rebin(array, new_shape, method='average'):
 
         if array.ndim == 3:
             if method == 'sum':
-                rebinned_array = np.sum(
+                rebinned_array = xp.sum(
                     array[:M*(m//M), :N*(n//N), :].reshape((M, m//M, N, n//N, shape[2])),
                     axis=(1, 3))
             elif method == 'average':
-                rebinned_array = np.mean(
+                rebinned_array = xp.mean(
                     array[:M*(m//M), :N*(n//N), :].reshape((M, m//M, N, n//N, shape[2])),
                     axis=(1, 3))
             elif method == 'nanmean':
-                with np.errstate(invalid='ignore'):
-                    rebinned_array = np.nanmean(
+                if xp.__name__ == 'cupy':
+                    # CuPy doesn't have errstate, but nanmean handles warnings differently
+                    rebinned_array = xp.nanmean(
                         array[:M*(m//M), :N*(n//N), :].reshape((M, m//M, N, n//N, shape[2])),
                         axis=(1, 3))
+                else:
+                    # NumPy: use errstate
+                    with xp.errstate(invalid='ignore'):
+                        rebinned_array = xp.nanmean(
+                            array[:M*(m//M), :N*(n//N), :].reshape((M, m//M, N, n//N, shape[2])),
+                            axis=(1, 3))
             else:
                 raise ValueError(f"Unsupported method: {method}."
-                                 " Use 'sum', 'average', or 'nanmean'.")
+                                 f" Use 'sum', 'average', or 'nanmean'.")
         else:
             if method == 'sum':
-                rebinned_array = np.sum(
+                rebinned_array = xp.sum(
                     array[:M*(m//M), :N*(n//N)].reshape((M, m//M, N, n//N)),
                     axis=(1, 3))
             elif method == 'average':
-                rebinned_array = np.mean(
+                rebinned_array = xp.mean(
                     array[:M*(m//M), :N*(n//N)].reshape((M, m//M, N, n//N)),
                     axis=(1, 3))
             elif method == 'nanmean':
-                with np.errstate(invalid='ignore'):
-                    rebinned_array = np.nanmean(
+                    # CuPy doesn't have errstate, but nanmean handles warnings differently
+                if xp.__name__ == 'cupy':
+                    rebinned_array = xp.nanmean(
                         array[:M*(m//M), :N*(n//N)].reshape((M, m//M, N, n//N)),
                         axis=(1, 3))
+                else:
+                    # NumPy: use errstate
+                    with xp.errstate(invalid='ignore'):
+                        rebinned_array = xp.nanmean(
+                            array[:M*(m//M), :N*(n//N)].reshape((M, m//M, N, n//N)),
+                            axis=(1, 3))
             else:
                 raise ValueError(f"Unsupported method: {method}."
-                                 " Use 'sum', 'average', or 'nanmean'.")
+                                 f" Use 'sum', 'average', or 'nanmean'.")
 
     return rebinned_array
-
-
-def apply_mask(array, mask, norm=False, fill_value=None):
-    """
-    Apply a 2D or 3D mask to a 2D or 3D array.
-    
-    Default behavior is to multiply the array by the mask (norm = False and fill_value = None).
-    If norm is True, the mask is inverted (1/mask) before applying.
-    If fill_value is provided, it replaces the masked values.
-
-    Args:
-        array (numpy.ndarray): Input 2D or 3D array to be masked.
-        mask (numpy.ndarray): 2D mask to be applied.
-        norm (bool, optional): If True, inverts the mask (1/mask) before applying. Defaults to False.
-        fill_value (float, optional): Value to replace masked elements. If None, masked elements are set to 0. Defaults to None.
-
-    Returns:
-        numpy.ndarray: New array with the mask applied.
-    """
-    mask = np.asarray(mask)
-    if norm:
-        safe_mask = np.where(mask == 0, 1, mask)
-        norm_mask = 1.0 / safe_mask
-    else:
-        norm_mask = mask
-
-    # Broadcast mask for 3D arrays
-    if array.ndim == 3 and mask.ndim == 2:
-        norm_mask = norm_mask[:, :, np.newaxis]
-
-    if fill_value is not None:
-        return np.where(norm_mask, array, fill_value)
-    else:
-        result = array * norm_mask
-        if norm and fill_value is None:
-            # Set to 0 where mask was zero (to avoid inf)
-            result = np.where(
-                mask if mask.ndim == array.ndim else mask[:, :, np.newaxis], 
-                result, 0
-                )
-        return result
 
 
 def polar_to_xy(r,theta):
     # conversion polar to rectangular coordinates
     # theta is in rad
-    return np.array(( r * np.cos(theta),r * np.sin(theta) ))
+    return xp.array(( r * xp.cos(theta),r * xp.sin(theta) ))
 
 
 def make_xy(sampling, ratio, is_polar=False, is_double=False, is_vector=False,
             use_zero=False, quarter=False, fft=False):
     """
-    This function generates zero-centered domains in cartesian plane or axis, tipically for pupil sampling
-    and FFT usage. Converted from Armando Riccardi IDL make_xy procedure of IdlTools/oaa_lib/utilities library.
+    This function generates zero-centered domains in cartesian plane or axis,
+    tipically for pupil sampling and FFT usage.
+    Converted from Armando Riccardi IDL make_xy procedure of IdlTools/oaa_lib/utilities library.
 
     Parameters:
     - sampling: number of points on the side ot he output arrays
@@ -679,17 +782,17 @@ def make_xy(sampling, ratio, is_polar=False, is_double=False, is_vector=False,
 
     ss = float(sampling)
 
-    x = (np.arange(size) - x0) / (ss / 2) * ratio
+    x = (xp.arange(size) - x0) / (ss / 2) * ratio
 
     if not quarter:
         if sampling % 2 == 0 and fft:
-            x = np.roll(x, -sampling // 2)
+            x = xp.roll(x, -sampling // 2)
         elif sampling % 2 != 0 and fft:
-            x = np.roll(x, -(sampling - 1) // 2)
+            x = xp.roll(x, -(sampling - 1) // 2)
 
     if not is_vector or is_polar:
         y = rebin(x, (size, size), method='average')
-        x = np.transpose(y)
+        x = xp.transpose(y)
         if is_polar:
             r, theta = xy_to_polar(x, y)
             return r, theta
@@ -703,12 +806,13 @@ def make_xy(sampling, ratio, is_polar=False, is_double=False, is_vector=False,
 def xy_to_polar(x, y):
     # conversion rectangular to polar coordinates
     # theta is in rad
-    r = np.sqrt(x**2 + y**2)
-    theta = np.arctan2(y, x)
+    r = xp.sqrt(x**2 + y**2)
+    theta = xp.arctan2(y, x)
     return r, theta
 
 
-def make_mask(npoints, obsratio=None, diaratio=1.0, xc=0.0, yc=0.0, square=False, inverse=False, centeronpixel=False):
+def make_mask(npoints, obsratio=None, diaratio=1.0, xc=0.0, yc=0.0,
+              square=False, inverse=False, centeronpixel=False):
     """
     This function generates nn array representing a mask.
     Converted from Lorenzo Busoni IDL make_mask function of IdlTools/oaa_lib/ao_lib library.
@@ -723,7 +827,7 @@ def make_mask(npoints, obsratio=None, diaratio=1.0, xc=0.0, yc=0.0, square=False
     - mask: numpy 2D array
     """
 
-    x, y = np.meshgrid(np.linspace(-1, 1, npoints), np.linspace(-1, 1, npoints))
+    x, y = xp.meshgrid(xp.linspace(-1, 1, npoints), xp.linspace(-1, 1, npoints))
 
     if xc is None:
         xc = 0.0
@@ -734,22 +838,22 @@ def make_mask(npoints, obsratio=None, diaratio=1.0, xc=0.0, yc=0.0, square=False
     ir = obsratio
 
     if centeronpixel:
-        idx = np.argmin(np.abs(xc - x[0, :]))
-        idxneigh = np.argmin(np.abs(xc - x[0, idx - 1:idx + 2]))
+        idx = xp.argmin(xp.abs(xc - x[0, :]))
+        idxneigh = xp.argmin(xp.abs(xc - x[0, idx - 1:idx + 2]))
         k = -0.5 if idxneigh == 0 else 0.5
         xc = x[0, idx] + k * (x[0, 1] - x[0, 0])
 
-        idx = np.argmin(np.abs(yc - y[:, 0]))
-        idxneigh = np.argmin(np.abs(yc - y[idx - 1:idx + 2, 0]))
+        idx = xp.argmin(xp.abs(yc - y[:, 0]))
+        idxneigh = xp.argmin(xp.abs(yc - y[idx - 1:idx + 2, 0]))
         k = -0.5 if idxneigh == 0 else 0.5
         yc = y[idx, 0] + k * (y[1, 0] - y[0, 0])
 
     if square:
-        mask = ((np.abs(x - xc) <= diaratio) & (np.abs(y - yc) <= diaratio) & 
-                ((np.abs(x - xc) >= diaratio * ir) | (np.abs(y - yc) >= diaratio * ir))).astype(np.uint8)
+        mask = ((xp.abs(x - xc) <= diaratio) & (xp.abs(y - yc) <= diaratio) &
+                ((xp.abs(x - xc) >= diaratio * ir) | (xp.abs(y - yc) >= diaratio * ir))).astype(xp.uint8)
     else:
         mask = (((x - xc)**2 + (y - yc)**2 < diaratio**2) & 
-                ((x - xc)**2 + (y - yc)**2 >= (diaratio * ir)**2)).astype(np.uint8)
+                ((x - xc)**2 + (y - yc)**2 >= (diaratio * ir)**2)).astype(xp.uint8)
 
     if inverse:
         mask = 1 - mask
@@ -760,79 +864,18 @@ def make_mask(npoints, obsratio=None, diaratio=1.0, xc=0.0, yc=0.0, square=False
 def make_orto_modes(array):
     # return an othogonal 2D array
 
-    size_array = np.shape(array)
+    size_array = xp.shape(array)
 
     if len(size_array) != 2:
         raise ValueError('Error in input data, the input array must have two dimensions.')
 
     if size_array[1] > size_array[0]:
-        Q, R = np.linalg.qr(array.T)
+        Q, R = xp.linalg.qr(array.T)
         Q = Q.T
     else:
-        Q, R = np.linalg.qr(array)
+        Q, R = xp.linalg.qr(array)
 
     return Q
-
-
-def dm3d_to_2d(dm_array, mask):
-    """
-    Convert a 3D DM influence function to a 2D array using a mask.
-    
-    Args:
-        dm_array (numpy.ndarray): 3D DM influence function array.
-        mask (numpy.ndarray): 2D mask array.
-
-    Returns:
-        numpy.ndarray: 2D DM influence function array.
-    """
-    # Check if the mask is 2D
-    if mask.ndim != 2:
-        raise ValueError("The mask must be a 2D array.")
-    # Check if the dm_array is 3D
-    if dm_array.ndim != 3:
-        raise ValueError("The dm_array must be a 3D array.")
-    nmodes = dm_array.shape[2]
-    idx = np.where(mask > 0)
-    dm_array_2d = dm_array[idx[0], idx[1], :].transpose()
-    for i in range(nmodes):
-        dm_array_2d[i,:] /= np.sqrt(np.mean(dm_array_2d[i,:]**2))
-        dm_array_2d[i,:] -= np.mean(dm_array_2d[i,:])
-
-    return dm_array_2d
-
-
-def dm2d_to_3d(dm_array, mask, normalize=True):
-    """
-    Convert a 2D DM influence function to a 3D array using a mask.
-    
-    Args:
-        dm_array (numpy.ndarray): 2D DM influence function array.
-        mask (numpy.ndarray): 2D mask array.
-
-    Returns:
-        numpy.ndarray: 3D DM influence function array.
-    """
-    # Check if the mask is 2D
-    if mask.ndim != 2:
-        raise ValueError("The mask must be a 2D array.")
-    # Check if the dm_array is 2D
-    if dm_array.ndim != 2:
-        raise ValueError("The dm_array must be a 2D array.")
-    npixels = mask.shape[0]
-    nmodes = dm_array.shape[0]
-    dm_array_3d = np.zeros((npixels, npixels, nmodes), dtype=float)
-    for i in range(nmodes):
-        idx = np.where(mask > 0)
-        dm_i = dm_array[i]
-        # normalize by the RMS
-        if normalize:
-            dm_i /= np.sqrt(np.mean(dm_i**2))
-            dm_i -= np.mean(dm_i)
-        dm_i_3d = np.zeros(mask.shape, dtype=float)
-        dm_i_3d[idx] = dm_i
-        dm_array_3d[:, :, i] = dm_i_3d
-
-    return dm_array_3d
 
 
 __all__ = [

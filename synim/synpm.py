@@ -1,5 +1,5 @@
+from synim import xp, cpuArray, to_xp, float_dtype
 
-import numpy as np
 import matplotlib.pyplot as plt
 from synim.utils import (
     apply_mask,
@@ -32,11 +32,15 @@ def transpose_base_array_for_specula(base_inv_array, pup_mask_original, verbose=
     - transposed_array: numpy array with swapped X-Y coordinates
     """
 
+    # *** MODIFIED: Convert inputs to xp arrays with correct dtype ***
+    base_inv_array = to_xp(xp, base_inv_array, dtype=float_dtype)
+    pup_mask_original = to_xp(xp, pup_mask_original, dtype=float_dtype)
+
     if base_inv_array.ndim == 3:
         # ============================================================
         # SIMPLE CASE: 3D array - just transpose
         # ============================================================
-        transposed = np.transpose(base_inv_array, (1, 0, 2))
+        transposed = xp.transpose(base_inv_array, (1, 0, 2))
 
         if verbose:
             print(f"  Transposed 3D base: {base_inv_array.shape} → {transposed.shape}")
@@ -52,7 +56,7 @@ def transpose_base_array_for_specula(base_inv_array, pup_mask_original, verbose=
 
         # Get original mask info
         pup_pixels_total = pup_mask_original.shape[0] * pup_mask_original.shape[1]
-        n_valid_pixels = np.sum(pup_mask_original > 0.5)
+        n_valid_pixels = int(xp.sum(pup_mask_original > 0.5))
 
         # Determine format
         if n_cols == pup_pixels_total:
@@ -97,17 +101,16 @@ def transpose_base_array_for_specula(base_inv_array, pup_mask_original, verbose=
             print(f"  Reconstructed 3D with dm2d_to_3d: {base_3d_orig.shape}")
 
         # Transpose the 3D
-        base_3d_transposed = np.transpose(base_3d_orig, (1, 0, 2))
+        base_3d_transposed = xp.transpose(base_3d_orig, (1, 0, 2))
 
         if verbose:
             print(f"  Transposed 3D: {base_3d_transposed.shape}")
 
-        # If original was valid-pixels-only, convert back to 2D
         if n_cols == n_valid_pixels or n_rows == n_valid_pixels:
             # Get transposed mask
-            pup_mask_transposed = np.transpose(pup_mask_original)
+            pup_mask_transposed = xp.transpose(pup_mask_original)
 
-            # *** USE dm3d_to_2d TO EXTRACT ***
+            # *** MODIFIED: USE dm3d_to_2d TO EXTRACT ***
             base_2d_transposed = dm3d_to_2d(base_3d_transposed, pup_mask_transposed)
 
             # normalize by number of valid pixels
@@ -202,26 +205,36 @@ def projection_matrix(pup_diam_m, pup_mask,
         print(f"{'='*60}\n")
 
     # ================================================================
-    # STEP 2: Apply SPECULA convention (transpose arrays)
+    # STEP 2: Apply SPECULA convention + Convert to xp with dtype
     # ================================================================
-    # NOTE: This MUST be done BEFORE any transformations
     if specula_convention:
-        # *** SAVE ORIGINAL MASK BEFORE TRANSPOSING ***
+        # *** MODIFIED: Convert inputs to xp FIRST, then save original mask ***
+        dm_array = to_xp(xp, dm_array, dtype=float_dtype)
+        dm_mask = to_xp(xp, dm_mask, dtype=float_dtype)
+        pup_mask = to_xp(xp, pup_mask, dtype=float_dtype)
+        base_inv_array = to_xp(xp, base_inv_array, dtype=float_dtype)
+
+        # Save ORIGINAL (non-transposed) mask for transpose_base_array_for_specula
         pup_mask_original = pup_mask.copy()
 
-        # Transpose all 3D arrays: (height, width, modes) → (width, height, modes)
-        # This swaps X and Y coordinates
-        dm_array = np.transpose(dm_array, (1, 0, 2))
-        dm_mask = np.transpose(dm_mask)
-        pup_mask = np.transpose(pup_mask)
+        # Now transpose
+        dm_array = xp.transpose(dm_array, (1, 0, 2))
+        dm_mask = xp.transpose(dm_mask)
+        pup_mask = xp.transpose(pup_mask)
 
         if specula_convention_inv:
-            # *** USE HELPER FUNCTION WITH ORIGINAL MASK ***
+            # *** PASS xp ARRAY (not CPU!) ***
             base_inv_array = transpose_base_array_for_specula(
                 base_inv_array,
-                pup_mask_original,  # Pass original mask!
+                pup_mask_original,  # Already xp array with correct dtype
                 verbose=False
             )
+    else:
+        # *** MODIFIED: Still convert to xp even without SPECULA convention ***
+        dm_array = to_xp(xp, dm_array, dtype=float_dtype)
+        dm_mask = to_xp(xp, dm_mask, dtype=float_dtype)
+        pup_mask = to_xp(xp, pup_mask, dtype=float_dtype)
+        base_inv_array = to_xp(xp, base_inv_array, dtype=float_dtype)
 
     # ================================================================
     # STEP 3: Setup basic parameters
@@ -354,9 +367,9 @@ def projection_matrix(pup_diam_m, pup_mask,
     # ================================================================
     # STEP 5: Validate transformed arrays
     # ================================================================
-    if np.max(trans_dm_mask) <= 0:
+    if xp.max(trans_dm_mask) <= 0:
         raise ValueError('Transformed DM mask is empty.')
-    if np.max(trans_pup_mask) <= 0:
+    if xp.max(trans_pup_mask) <= 0:
         raise ValueError('Transformed pupil mask is empty.')
 
     # Apply DM mask to DM array
@@ -364,14 +377,14 @@ def projection_matrix(pup_diam_m, pup_mask,
 
     if verbose:
         print(f'  ✓ DM array transformed: {trans_dm_array.shape}')
-        print(f'  ✓ DM mask valid pixels: {np.sum(trans_dm_mask > 0.5)}')
-        print(f'  ✓ Pupil mask valid pixels: {np.sum(trans_pup_mask > 0.5)}')
+        print(f'  ✓ DM mask valid pixels: {xp.sum(trans_dm_mask > 0.5)}')
+        print(f'  ✓ Pupil mask valid pixels: {xp.sum(trans_pup_mask > 0.5)}')
 
     # ================================================================
     # STEP 6: Find valid pixels (intersection of DM and pupil)
     # ================================================================
     valid_mask = trans_pup_mask.copy() #trans_dm_mask * trans_pup_mask
-    idx_valid = np.where(valid_mask > 0.5)  # Returns tuple: (row_indices, col_indices)
+    idx_valid = xp.where(valid_mask > 0.5)  # Returns tuple: (row_indices, col_indices)
     n_valid_pixels = len(idx_valid[0])
 
     if verbose:
@@ -380,9 +393,6 @@ def projection_matrix(pup_diam_m, pup_mask,
     # ================================================================
     # STEP 7: Extract valid pixel values from DM array
     # ================================================================
-    # trans_dm_array shape: (height, width, n_modes)
-    # We want: (n_valid_pixels, n_modes)
-    # Use advanced indexing: extract all modes at valid pixel locations
     dm_valid_values = trans_dm_array[idx_valid[0], idx_valid[1], :]
     # Result shape: (n_valid_pixels, n_modes)
 
@@ -447,7 +457,8 @@ def projection_matrix(pup_diam_m, pup_mask,
     # We want: projection = DM^T × Base
     # Result: (n_dm_modes, n_base_modes)
 
-    projection = np.dot(dm_valid_values.T, base_valid_values)
+    # *** MODIFIED: Use xp.dot instead of np.dot ***
+    projection = xp.dot(dm_valid_values.T, base_valid_values)
 
     if verbose:
         print(f'\n  ✓ PROJECTION COMPUTED: {projection.shape}')
@@ -461,20 +472,24 @@ def projection_matrix(pup_diam_m, pup_mask,
     # ================================================================
     plot_debug = False
     if plot_debug:
-        # Display valid pixels mask
+        # *** MODIFIED: Convert to CPU for plotting if needed ***
+        valid_mask_cpu = cpuArray(valid_mask)
+        trans_dm_array_cpu = cpuArray(trans_dm_array)
+        projection_cpu = cpuArray(projection)
+        
         plt.figure(figsize=(8, 6))
-        plt.imshow(valid_mask, cmap='gray')
+        plt.imshow(valid_mask_cpu, cmap='gray')
         plt.title(f'Valid Pixels Mask ({n_valid_pixels} pixels)')
         plt.colorbar()
 
         # Display a couple of DM modes
         plt.figure(figsize=(12, 5))
         plt.subplot(1, 2, 1)
-        plt.imshow(trans_dm_array[:, :, 0], cmap='seismic')
+        plt.imshow(trans_dm_array_cpu[:, :, 0], cmap='seismic')
         plt.title('Transformed DM Mode 0')
         plt.colorbar()
         plt.subplot(1, 2, 2)
-        plt.imshow(trans_dm_array[:, :, 1], cmap='seismic')
+        plt.imshow(trans_dm_array_cpu[:, :, 1], cmap='seismic')
         plt.title('Transformed DM Mode 1')
         plt.colorbar()
 
@@ -482,7 +497,7 @@ def projection_matrix(pup_diam_m, pup_mask,
         plt.figure(figsize=(10, 6))
         x = np.arange(projection.shape[0])+1
         for i in range(min(5, projection.shape[1])):
-            plt.plot(x, projection[:, i], label=f'Basis mode {i}', marker='o', markersize=3)
+            plt.plot(x, projection_cpu[:, i], label=f'Basis mode {i}', marker='o', markersize=3)
         plt.xscale('log')
         plt.legend()
         plt.title('Projection Coefficients')
@@ -492,7 +507,7 @@ def projection_matrix(pup_diam_m, pup_mask,
 
         # Display projection matrix
         plt.figure(figsize=(10, 8))
-        plt.imshow(projection, cmap='seismic', origin='lower', aspect='auto')
+        plt.imshow(projection_cpu, cmap='seismic', origin='lower', aspect='auto')
         plt.title(f'Projection Matrix ({projection.shape[0]} × {projection.shape[1]})')
         plt.xlabel('Basis mode index')
         plt.ylabel('DM mode index')
