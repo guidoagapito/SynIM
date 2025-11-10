@@ -38,7 +38,8 @@ def update_dm_pup(pup_diam_m, pup_mask, dm_array, dm_mask, dm_height, dm_rotatio
     pixel_pitch = pup_diam_m / pup_diam_pix
 
     if dm_mask.shape[0] != dm_array.shape[0]:
-        raise ValueError('Error in input data, the dm and mask array must have the same dimensions.')
+        raise ValueError('Error in input data, '
+                         'the dm and mask array must have the same dimensions.')
 
     dm_translation, dm_magnification = shiftzoom_from_source_dm_params(
         gs_pol_coo, gs_height, dm_height, pixel_pitch
@@ -47,17 +48,17 @@ def update_dm_pup(pup_diam_m, pup_mask, dm_array, dm_mask, dm_height, dm_rotatio
 
     trans_dm_array = rotshiftzoom_array(
         dm_array, 
-        dm_translation=dm_translation, 
+        dm_translation=dm_translation,
         dm_rotation=dm_rotation,
         dm_magnification=dm_magnification,
-        wfs_translation=wfs_translation, 
+        wfs_translation=wfs_translation,
         wfs_rotation=wfs_rotation,
         wfs_magnification=wfs_magnification,
         output_size=output_size
     )
-    
+
     trans_dm_mask = rotshiftzoom_array(
-        dm_mask, 
+        dm_mask,
         dm_translation=dm_translation,
         dm_rotation=dm_rotation,
         dm_magnification=dm_magnification,
@@ -87,7 +88,7 @@ def update_dm_pup(pup_diam_m, pup_mask, dm_array, dm_mask, dm_height, dm_rotatio
         raise ValueError('Error in input data, the rotated pup mask is empty.')
 
     trans_dm_array = apply_mask(trans_dm_array, trans_dm_mask)
-    
+
     if np.max(trans_dm_array) <= 0:
         raise ValueError('Error in input data, the rotated dm array is empty.')
 
@@ -106,7 +107,7 @@ def projection_matrix_former(pup_diam_m, pup_mask,
     Legacy function - used only for testing the new implementation.
     Computes a projection matrix using the old method.
     """
-    
+
     # *** IMPORT NEEDED FUNCTION ***
     from synim.synpm import transpose_base_array_for_specula
 
@@ -114,7 +115,7 @@ def projection_matrix_former(pup_diam_m, pup_mask,
     if specula_convention:
         # Save ORIGINAL mask BEFORE transposing
         pup_mask_original = pup_mask.copy()
-        
+
         # Transpose arrays
         dm_array = np.transpose(dm_array, (1, 0, 2))
         dm_mask = np.transpose(dm_mask)
@@ -130,7 +131,7 @@ def projection_matrix_former(pup_diam_m, pup_mask,
     trans_dm_array, trans_dm_mask, trans_pup_mask = update_dm_pup(
         pup_diam_m, pup_mask, dm_array, dm_mask, dm_height, dm_rotation,
         base_rotation, base_translation, base_magnification,
-        gs_pol_coo, gs_height, verbose=verbose, 
+        gs_pol_coo, gs_height, verbose=verbose,
         specula_convention=False  # Already transposed above
     )
 
