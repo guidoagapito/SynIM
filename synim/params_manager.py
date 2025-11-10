@@ -6,7 +6,7 @@ from astropy.io import fits
 
 # *** MODIFIED: Import xp, cpuArray, to_xp, float_dtype ***
 from synim import (
-    xp, cpuArray, to_xp, float_dtype, default_target_device_idx, float_dtype, global_precision
+    xp, cpuArray, to_xp, float_dtype, default_target_device_idx, global_precision
 )
 
 import synim.synim as synim
@@ -840,7 +840,7 @@ class ParamsManager:
             print(f"{component_type.upper()} start modes: {component_start_modes}")
 
         # Create the full interaction matrix
-        im_full = np.zeros((n_tot_modes, n_tot_slopes), dtype=float_dtype)
+        im_full = np.zeros((n_tot_modes, n_tot_slopes), dtype=im.dtype)
 
         # Load and assemble the interaction matrices
         for ii in range(n_wfs):
@@ -1354,8 +1354,12 @@ class ParamsManager:
             print("\n=== Computing Optimal Projection Matrix ===")
 
         # Weighted combination
-        tpdm_pdm = np.zeros((pm_full_dm.shape[1], pm_full_dm.shape[1]), dtype=float_dtype)
-        tpdm_pl = np.zeros((pm_full_dm.shape[1], pm_full_layer.shape[1]), dtype=float_dtype)
+        if float_dtype == xp.float32:
+            dtype_np = np.float32
+        else:
+            dtype_np = np.float64
+        tpdm_pdm = np.zeros((pm_full_dm.shape[1], pm_full_dm.shape[1]), dtype=dtype_np)
+        tpdm_pl = np.zeros((pm_full_dm.shape[1], pm_full_layer.shape[1]), dtype=dtype_np)
 
         total_weight = np.sum(weights_array)
 
@@ -1940,7 +1944,11 @@ class ParamsManager:
             print(f"  Weights: {weights}")
 
         # Initialize full covariance matrix
-        C_atm_full = np.zeros((total_modes, total_modes), dtype=float_dtype)
+        if float_dtype == xp.float32:
+            dtype_np = np.float32
+        else:
+            dtype_np = np.float64
+        C_atm_full = np.zeros((total_modes, total_modes), dtype=dtype_np)
 
         # Conversion factor (nm to rad^2 at 500nm)
         conversion_factor = (500 / 2 / np.pi) ** 2
