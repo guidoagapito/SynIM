@@ -127,7 +127,7 @@ class ParamsManager:
         # *** MODIFIED: Convert to xp with float_dtype ***
         pup_mask = to_xp(xp, pup_mask, dtype=float_dtype)
 
-        print('---> valid pixels: ', int(xp.sum(pup_mask > 0.5)))
+        print('---> valid pixels: ', int(np.sum(pup_mask > 0.5)))
 
         return pup_mask
 
@@ -840,7 +840,7 @@ class ParamsManager:
             print(f"{component_type.upper()} start modes: {component_start_modes}")
 
         # Create the full interaction matrix
-        im_full = xp.zeros((n_tot_modes, n_tot_slopes), dtype=float_dtype)
+        im_full = np.zeros((n_tot_modes, n_tot_slopes), dtype=float_dtype)
 
         # Load and assemble the interaction matrices
         for ii in range(n_wfs):
@@ -1204,7 +1204,7 @@ class ParamsManager:
             print(f"Found {n_opt} optical sources, {n_dm} DMs, and {n_layer} layers")
 
         # Extract weights
-        weights_array = xp.array([src['config'].get('weight', 1.0) for src in opt_sources])
+        weights_array = np.array([src['config'].get('weight', 1.0) for src in opt_sources])
 
         # Initialize output arrays (we'll determine size from first PM loaded)
         pm_full_dm = None
@@ -1250,7 +1250,7 @@ class ParamsManager:
                 # Stack all optical sources for this DM
                 # dm_pms_list[i] has shape (n_dm_modes_i, n_pupil_modes)
                 # We stack along axis 0 to get (n_opt, n_dm_modes_i, n_pupil_modes)
-                dm_stack = xp.stack(dm_pms_list, axis=0)
+                dm_stack = np.stack(dm_pms_list, axis=0)
 
                 if self.verbose:
                     print(f"  Stacked PM shape for {dm_name}: {dm_stack.shape}")
@@ -1259,7 +1259,7 @@ class ParamsManager:
                 if pm_full_dm is None:
                     pm_full_dm = dm_stack
                 else:
-                    pm_full_dm = xp.concatenate((pm_full_dm, dm_stack), axis=1)
+                    pm_full_dm = np.concatenate((pm_full_dm, dm_stack), axis=1)
 
                 if self.verbose:
                     print(f"  Current pm_full_dm shape: {pm_full_dm.shape}")
@@ -1292,7 +1292,7 @@ class ParamsManager:
                                   f" for opt{opt_index}, layer{layer_index}")
                         # Create zero matrix as placeholder
                         if layer_pms_list:
-                            layer_pms_list.append(xp.zeros_like(layer_pms_list[0]))
+                            layer_pms_list.append(np.zeros_like(layer_pms_list[0]))
                         continue
 
                     pm_path = os.path.join(output_dir, pm_filename)
@@ -1301,7 +1301,7 @@ class ParamsManager:
                         if self.verbose:
                             print(f"  Warning: File {pm_path} does not exist, using zeros")
                         if layer_pms_list:
-                            layer_pms_list.append(xp.zeros_like(layer_pms_list[0]))
+                            layer_pms_list.append(np.zeros_like(layer_pms_list[0]))
                         continue
 
                     if self.verbose:
@@ -1311,7 +1311,7 @@ class ParamsManager:
                     layer_pms_list.append(intmat_obj.intmat)
 
                 # Stack all optical sources for this layer
-                layer_stack = xp.stack(layer_pms_list, axis=0)
+                layer_stack = np.stack(layer_pms_list, axis=0)
 
                 if self.verbose:
                     print(f"  Stacked PM shape for {layer_name}: {layer_stack.shape}")
@@ -1320,7 +1320,7 @@ class ParamsManager:
                 if pm_full_layer is None:
                     pm_full_layer = layer_stack
                 else:
-                    pm_full_layer = xp.concatenate((pm_full_layer, layer_stack), axis=1)
+                    pm_full_layer = np.concatenate((pm_full_layer, layer_stack), axis=1)
 
                 if self.verbose:
                     print(f"  Current pm_full_layer shape: {pm_full_layer.shape}")
@@ -1354,10 +1354,10 @@ class ParamsManager:
             print("\n=== Computing Optimal Projection Matrix ===")
 
         # Weighted combination
-        tpdm_pdm = xp.zeros((pm_full_dm.shape[1], pm_full_dm.shape[1]), dtype=float_dtype)
-        tpdm_pl = xp.zeros((pm_full_dm.shape[1], pm_full_layer.shape[1]), dtype=float_dtype)
+        tpdm_pdm = np.zeros((pm_full_dm.shape[1], pm_full_dm.shape[1]), dtype=float_dtype)
+        tpdm_pl = np.zeros((pm_full_dm.shape[1], pm_full_layer.shape[1]), dtype=float_dtype)
 
-        total_weight = xp.sum(weights_array)
+        total_weight = np.sum(weights_array)
 
         for i in range(n_opt):
             pdm_i = pm_full_dm[i, :, :]      # shape: (n_dm_modes, n_pupil_modes)
@@ -1375,8 +1375,8 @@ class ParamsManager:
             print(f"\nApplying regularization (reg_factor={reg_factor})")
 
         eps = 1e-14
-        tpdm_pdm_inv = xp.linalg.pinv(
-            tpdm_pdm + reg_factor * xp.eye(tpdm_pdm.shape[0]),
+        tpdm_pdm_inv = np.linalg.pinv(
+            tpdm_pdm + reg_factor * np.eye(tpdm_pdm.shape[0]),
             rcond=eps
         )
         p_opt = tpdm_pdm_inv @ tpdm_pl
@@ -1449,8 +1449,8 @@ class ParamsManager:
                 "Cannot compute tomographic projection matrix."
             )
 
-        weights_array = xp.array([src['config'].get('weight', 1.0) for src in opt_sources])
-        total_weight = xp.sum(weights_array)
+        weights_array = np.array([src['config'].get('weight', 1.0) for src in opt_sources])
+        total_weight = np.sum(weights_array)
 
         if verbose_flag:
             print(f"\n  Optical sources: {n_opt}")
@@ -1471,8 +1471,8 @@ class ParamsManager:
         # Initialize accumulation matrices
         # tpdm_pdm = P_DM^T @ P_DM (weighted sum over optical sources)
         # tpdm_pl = P_DM^T @ P_Layer (weighted sum over optical sources)
-        tpdm_pdm = xp.zeros((n_dm_modes, n_dm_modes))
-        tpdm_pl = xp.zeros((n_dm_modes, n_layer_modes))
+        tpdm_pdm = np.zeros((n_dm_modes, n_dm_modes))
+        tpdm_pl = np.zeros((n_dm_modes, n_layer_modes))
 
         # Accumulate weighted contributions from each optical source
         for i in range(n_opt):
@@ -1498,20 +1498,20 @@ class ParamsManager:
             print(f"{'='*60}")
             print(f"  Adding reg_factor * I to P_DM^T @ P_DM")
 
-        tpdm_pdm_reg = tpdm_pdm + reg_factor * xp.eye(n_dm_modes)
+        tpdm_pdm_reg = tpdm_pdm + reg_factor * np.eye(n_dm_modes)
 
         # ==================== PSEUDOINVERSE ====================
         if verbose_flag:
             print(f"  Computing pseudoinverse...")
 
         # Condition number check
-        cond_number = xp.linalg.cond(tpdm_pdm_reg)
+        cond_number = np.linalg.cond(tpdm_pdm_reg)
         if verbose_flag:
             print(f"  Condition number: {cond_number:.2e}")
 
         # Compute pseudoinverse
         rcond = 1e-14  # Same as IDL default
-        tpdm_pdm_inv = xp.linalg.pinv(tpdm_pdm_reg, rcond=rcond)
+        tpdm_pdm_inv = np.linalg.pinv(tpdm_pdm_reg, rcond=rcond)
 
         if verbose_flag:
             print(f"  ✓ Pseudoinverse computed (rcond={rcond})")
@@ -1819,12 +1819,14 @@ class ParamsManager:
                 oversampling=1,
                 verbose=False
             )
+            
+            C_atm_rad2 = cpuArray(C_atm_rad2)
 
             if verbose_flag:
                 print(f"  ✓ Covariance computed: {C_atm_rad2.shape}")
                 print(f"    RMS (nm):"
-                      f" {xp.sqrt(xp.diag(C_atm_rad2*(500**2/2/xp.pi**2))).mean():.2f}")
-                print(f"    RMS (rad): {xp.sqrt(xp.diag(C_atm_rad2)).mean():.4f}")
+                      f" {np.sqrt(np.diag(C_atm_rad2*(500**2/2/np.pi**2))).mean():.2f}")
+                print(f"    RMS (rad): {np.sqrt(np.diag(C_atm_rad2)).mean():.4f}")
 
             # ========== SAVE TO FITS (LIKE IDL) ==========
             # IDL: writefits, fileNameCov, turb_covmat
@@ -1888,7 +1890,7 @@ class ParamsManager:
             verbose (bool, optional): Override the class's verbose setting
             
         Returns:
-            xp.ndarray: Full covariance matrix with selected modes
+            np.ndarray: Full covariance matrix with selected modes
         """
         verbose_flag = self.verbose if verbose is None else verbose
 
@@ -1938,10 +1940,10 @@ class ParamsManager:
             print(f"  Weights: {weights}")
 
         # Initialize full covariance matrix
-        C_atm_full = xp.zeros((total_modes, total_modes), dtype=float_dtype)
+        C_atm_full = np.zeros((total_modes, total_modes), dtype=float_dtype)
 
         # Conversion factor (nm to rad^2 at 500nm)
-        conversion_factor = (500 / 2 / xp.pi) ** 2
+        conversion_factor = (500 / 2 / np.pi) ** 2
 
         # Fill the blocks
         current_idx = 0
@@ -1954,7 +1956,7 @@ class ParamsManager:
             # Extract the sub-block for selected modes
             # C_atm_block has shape (n_total_modes, n_total_modes)
             # We want to extract modes[i] × modes[j]
-            idx_modes = xp.ix_(modes, modes)
+            idx_modes = np.ix_(modes, modes)
             C_atm_sub = C_atm_block[idx_modes]
 
             # Place in full matrix
