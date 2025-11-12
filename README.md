@@ -1,6 +1,6 @@
 # SynIM
 
-This repository contains Python code for the computation of synthetic interaction matrices and projection matrices for adaptive optics systems equipped with Shack-Hartmann and Pyramid wavefront sensors.
+This repository contains Python code for the computation of synthetic interaction matrices and projection matrices for adaptive optics systems equipped with Shack-Hartmann wavefront sensors.
 
 ## Main Features
 
@@ -232,7 +232,7 @@ Computes Minimum Mean Square Error (MMSE) reconstructor from interaction matrix,
 - [astropy](https://www.astropy.org/) - FITS file I/O
 - [pyyaml](https://pyyaml.org/) - YAML configuration parsing
 - [specula](https://github.com/ArcetriAdaptiveOptics/SPECULA) - AO simulation framework (required for data management)
-- [cupy](https://cupy.dev/) - GPU acceleration (optional, recommended for large systems)
+- [cupy](https://cupy.dev/) - GPU acceleration (optional)
 
 ## Installation
 
