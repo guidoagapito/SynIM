@@ -216,10 +216,9 @@ Computes projection matrices in `synpm.py` with similar workflow optimization fo
 Computes Minimum Mean Square Error (MMSE) reconstructor from interaction matrix, atmospheric covariance, and noise covariance.
 
 ### Utility Functions
-- `rebin()`, `make_mask()`, `apply_mask()`: Array manipulation (GPU-accelerated)
+- `rebin()`, `apply_mask()`: Array manipulation (GPU-accelerated)
 - `rotshiftzoom_array()`: Array transformations with automatic GPU support
 - `compute_derivatives_with_extrapolation()`: Numerical derivatives with edge handling
-- `zern()`, `zern2phi()`: Zernike polynomial generation
 - `dm3d_to_2d()`, `dm2d_to_3d()`: DM array format conversions
 - Parameter file parsing: `parse_params_file()`, `extract_wfs_list()`, `extract_dm_list()`
 - Filename generation: `generate_im_filename()`, `generate_pm_filename()`

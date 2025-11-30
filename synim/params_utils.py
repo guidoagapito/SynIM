@@ -12,7 +12,6 @@ from synim import xp, cpuArray, to_xp, float_dtype
 
 # Import all utility functions from utils
 from synim.utils import *
-from synim.zernike import *
 
 import specula
 specula.init(device_idx=-1, precision=1)

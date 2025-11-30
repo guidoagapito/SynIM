@@ -1,18 +1,17 @@
 import unittest
 import numpy as np
 
-import specula
-specula.init(device_idx=-1, precision=1)
-from specula.data_objects.ifunc import IFunc
-
 from synim.synpm import projection_matrix
 from synim.utils import (
     rotshiftzoom_array,
     shiftzoom_from_source_dm_params,
     apply_mask
 )
-from synim.params_utils import make_mask
 
+import specula
+specula.init(device_idx=-1, precision=1)
+from specula.data_objects.ifunc import IFunc
+from specula.lib.make_mask import make_mask
 
 # ============================================================================
 # LEGACY FUNCTION - USED ONLY FOR TESTING

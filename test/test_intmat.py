@@ -1,9 +1,6 @@
 import unittest
 import numpy as np
 
-import specula
-specula.init(device_idx=-1, precision=1)
-
 from synim.synim import (
     interaction_matrix,
     interaction_matrices_multi_wfs,
@@ -11,8 +8,11 @@ from synim.synim import (
     shiftzoom_from_source_dm_params,
     compute_derivatives_with_extrapolation
 )
-from synim.utils import make_mask, apply_mask, rebin
+from synim.utils import apply_mask, rebin
 
+import specula
+specula.init(device_idx=-1, precision=1)
+from specula.lib.make_mask import make_mask
 
 # ============================================================================
 # LEGACY FUNCTION - USED ONLY FOR TESTING
