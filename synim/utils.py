@@ -296,18 +296,18 @@ def rotshiftzoom_array_noaffine(input_array, dm_translation=(0.0, 0.0), dm_rotat
     Returns:
     - output: transformed array (same library as input)
     """
-    
+
     # *** DETECT INPUT TYPE ***
     input_is_gpu = (xp.__name__ == 'cupy' and isinstance(input_array, xp.ndarray))
-    
+
     # *** CHECK IF FUNCTIONS SUPPORT GPU ***
     # If rotate/shift/zoom are from cupyx.scipy, they can handle cupy arrays
     # If they're from scipy, we need to convert to numpy
     funcs_support_gpu = (rotate.__module__ == 'cupyx.scipy.ndimage._interpolation')
-    
+
     # *** CONVERT TO CPU IF NEEDED ***
     needs_cpu = input_is_gpu and not funcs_support_gpu
-    
+
     if needs_cpu:
         # GPU input but functions require CPU (scipy)
         input_array_proc = cpuArray(input_array)
@@ -551,11 +551,11 @@ def rotshiftzoom_array(input_array, dm_translation=(0.0, 0.0),
 
 def dm3d_to_2d(dm_array, mask):
     """Convert a 3D DM influence function to a 2D array using a mask."""
-    
+
     # *** MODIFIED: Convert inputs to xp with correct dtype ***
     dm_array = to_xp(xp, dm_array, dtype=float_dtype)
     mask = to_xp(xp, mask, dtype=float_dtype)
-    
+
     # Check if the mask is 2D
     if mask.ndim != 2:
         raise ValueError("The mask must be a 2D array.")
@@ -576,11 +576,11 @@ def dm3d_to_2d(dm_array, mask):
 
 def dm2d_to_3d(dm_array, mask, normalize=True):
     """Convert a 2D DM influence function to a 3D array using a mask."""
-    
+
     # *** MODIFIED: Convert inputs to xp with correct dtype ***
     dm_array = to_xp(xp, dm_array, dtype=float_dtype)
     mask = to_xp(xp, mask, dtype=float_dtype)
-    
+
     # Check if the mask is 2D
     if mask.ndim != 2:
         raise ValueError("The mask must be a 2D array.")
@@ -608,11 +608,11 @@ def dm2d_to_3d(dm_array, mask, normalize=True):
 
 def apply_mask(array, mask, norm=False, fill_value=None):
     """Apply a 2D or 3D mask to a 2D or 3D array."""
-    
+
     # *** MODIFIED: Convert inputs to xp ***
     array = to_xp(xp, array, dtype=float_dtype)
     mask = to_xp(xp, mask, dtype=float_dtype)
-    
+
     # Broadcast mask for 3D arrays
     if array.ndim == 3 and mask.ndim == 2:
         norm_mask = mask[:, :, xp.newaxis]
@@ -747,71 +747,6 @@ def polar_to_xy(r,theta):
     # conversion polar to rectangular coordinates
     # theta is in rad
     return xp.array(( r * xp.cos(theta),r * xp.sin(theta) ))
-
-
-def make_xy(sampling, ratio, is_polar=False, is_double=False, is_vector=False,
-            use_zero=False, quarter=False, fft=False):
-    """
-    This function generates zero-centered domains in cartesian plane or axis,
-    tipically for pupil sampling and FFT usage.
-    Converted from Armando Riccardi IDL make_xy procedure of IdlTools/oaa_lib/utilities library.
-
-    Parameters:
-    - sampling: number of points on the side ot he output arrays
-    - ratio: maximum value on the output arrays
-    - ...
-
-    Returns:
-    - x: numpy 2D array
-    - y: numpy 2D array
-    """
-
-    if sampling <= 1:
-        raise ValueError("make_xy -- sampling must be larger than 1")
-
-    if quarter:
-        if sampling % 2 == 0:
-            size = sampling // 2
-            x0 = 0.0 if use_zero else -0.5
-        else:
-            size = (sampling + 1) // 2
-            x0 = 0.0
-    else:
-        size = sampling
-        x0 = (sampling - 1) / 2.0 if is_double else (sampling - 1) / 2
-
-        if sampling % 2 == 0 and use_zero:
-            x0 += 0.5
-
-    ss = float(sampling)
-
-    x = (xp.arange(size) - x0) / (ss / 2) * ratio
-
-    if not quarter:
-        if sampling % 2 == 0 and fft:
-            x = xp.roll(x, -sampling // 2)
-        elif sampling % 2 != 0 and fft:
-            x = xp.roll(x, -(sampling - 1) // 2)
-
-    if not is_vector or is_polar:
-        y = rebin(x, (size, size), method='average')
-        x = xp.transpose(y)
-        if is_polar:
-            r, theta = xy_to_polar(x, y)
-            return r, theta
-
-    if is_vector:
-        y = x
-
-    return x, y
-
-
-def xy_to_polar(x, y):
-    # conversion rectangular to polar coordinates
-    # theta is in rad
-    r = xp.sqrt(x**2 + y**2)
-    theta = xp.arctan2(y, x)
-    return r, theta
 
 
 def make_orto_modes(array):
