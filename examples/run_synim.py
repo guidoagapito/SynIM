@@ -1,7 +1,11 @@
 import numpy as np
 import matplotlib.pyplot as plt
-import synim.utils as utils
 import synim.synim as synim
+
+import specula
+specula.init(-1)  # CPU
+from specula.data_objects.ifunc import IFunc
+from specula.lib.make_mask import make_mask
 
 # pupil parameters
 pup_m = 38.5
@@ -32,20 +36,26 @@ print('DM height [m]', dm_height)
 print('LGS height [m]', LGS_height)
 print('LGS star pos. [arcsec, deg]', LGS_pol_coo)
 
-# Pupil and DM masks
-pup_mask = utils.make_mask(pup_npoints, obsratio=pup_obsratio, diaratio=1.0, xc=0.0, yc=0.0, square=False, inverse=False, centeronpixel=False)
-dm_mask = utils.make_mask(dm_npoints, obsratio=dm_obsratio, diaratio=1.0, xc=0.0, yc=0.0, square=False, inverse=False, centeronpixel=False)
+# Generate Zernike influence functions
+ifunc = IFunc(
+    type_str='zernike',
+    nmodes=n_modes,
+    npixels=dm_npoints,
+    obsratio=0.0,
+    diaratio=1.0
+)
+dm_mask = np.asarray(ifunc.mask_inf_func, dtype=np.float32)
+dm_array = ifunc.ifunc_2d_to_3d(normalize=False)
+
+# Pupil masks
+pup_mask = make_mask(
+    pup_npoints, obsratio=pup_obsratio, diaratio=1.0, xc=0.0, yc=0.0, square=False, inverse=False, centeronpixel=False)
 
 # estimate the valid sub-apertures indices
 pup_mask_sa = synim.rebin(pup_mask, (nsubaps,nsubaps), method='sum')
 idx_valid_sa = np.ravel(np.array(np.where(pup_mask_sa.flat > (0.5*np.max(pup_mask_sa)))).astype(np.int32))
 
-print('Masks computed.')
-
-# DM modes shape (zernike)
-dm_array = utils.zern2phi(dm_npoints, n_modes, mask=dm_mask, no_round_mask=False, xsign=1, ysign=1, rot_angle=0, verbose=False)
-
-print('Zernike computed.')
+print('Masks and Zernike computed.')
 
 fig, axs = plt.subplots(1,2)
 im1 = axs[0].imshow(pup_mask)
