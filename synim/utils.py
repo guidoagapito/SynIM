@@ -811,56 +811,6 @@ def xy_to_polar(x, y):
     return r, theta
 
 
-def make_mask(npoints, obsratio=None, diaratio=1.0, xc=0.0, yc=0.0,
-              square=False, inverse=False, centeronpixel=False):
-    """
-    This function generates nn array representing a mask.
-    Converted from Lorenzo Busoni IDL make_mask function of IdlTools/oaa_lib/ao_lib library.
-
-    Parameters:
-    - npoints: number of points on the side ot he output arrays
-    - obsratio: relative size of obscuration
-    - diaratio: relative size of diameter
-    - ...
-
-    Returns:
-    - mask: numpy 2D array
-    """
-
-    x, y = xp.meshgrid(xp.linspace(-1, 1, npoints), xp.linspace(-1, 1, npoints))
-
-    if xc is None:
-        xc = 0.0
-    if yc is None:
-        yc = 0.0
-    if obsratio is None:
-        obsratio = 0.0
-    ir = obsratio
-
-    if centeronpixel:
-        idx = xp.argmin(xp.abs(xc - x[0, :]))
-        idxneigh = xp.argmin(xp.abs(xc - x[0, idx - 1:idx + 2]))
-        k = -0.5 if idxneigh == 0 else 0.5
-        xc = x[0, idx] + k * (x[0, 1] - x[0, 0])
-
-        idx = xp.argmin(xp.abs(yc - y[:, 0]))
-        idxneigh = xp.argmin(xp.abs(yc - y[idx - 1:idx + 2, 0]))
-        k = -0.5 if idxneigh == 0 else 0.5
-        yc = y[idx, 0] + k * (y[1, 0] - y[0, 0])
-
-    if square:
-        mask = ((xp.abs(x - xc) <= diaratio) & (xp.abs(y - yc) <= diaratio) &
-                ((xp.abs(x - xc) >= diaratio * ir) | (xp.abs(y - yc) >= diaratio * ir))).astype(xp.uint8)
-    else:
-        mask = (((x - xc)**2 + (y - yc)**2 < diaratio**2) & 
-                ((x - xc)**2 + (y - yc)**2 >= (diaratio * ir)**2)).astype(xp.uint8)
-
-    if inverse:
-        mask = 1 - mask
-
-    return mask
-
-
 def make_orto_modes(array):
     # return an othogonal 2D array
 
@@ -880,7 +830,6 @@ def make_orto_modes(array):
 
 __all__ = [
     # Mask creation and manipulation
-    'make_mask',
     'make_orto_modes',
     'apply_mask',
 
