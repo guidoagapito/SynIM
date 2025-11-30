@@ -665,6 +665,7 @@ def rebin(array, new_shape, method='average'):
     """Resize array to new dimensions."""
 
     # *** MODIFIED: Convert input to xp ***
+    orig_dtype = array.dtype
     array = to_xp(xp, array, dtype=float_dtype)
 
     if array.ndim == 1:
@@ -676,13 +677,15 @@ def rebin(array, new_shape, method='average'):
 
     if M > m or N > n:
         # Expansion case
-        if m % M != 0 or n % N != 0:
+        if M % m != 0 or N % n != 0:
             raise ValueError("New shape must be multiples of the input dimensions.")
         if array.ndim == 3:
             # *** MODIFIED: Use xp.tile ***
             rebinned_array = xp.tile(array, (M//m, N//n, 1))
         else:
             rebinned_array = xp.tile(array, (M//m, N//n))
+        if orig_dtype != rebinned_array.dtype:
+            rebinned_array = rebinned_array.astype(orig_dtype)
     else:    
         # Compression case
         if M == 0 or N == 0:
