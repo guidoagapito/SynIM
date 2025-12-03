@@ -1292,11 +1292,13 @@ class ParamsManager:
                     print(f"\n  Processing {source_info['name']}:")
 
                 # Transpose ONCE using ORIGINAL pupil mask
+                base_inv_array_transposed = synpm.transpose_base_array_for_specula(
                     to_xp(xp, base_inv_array, dtype=float_dtype),
                     to_xp(xp, self.pup_mask, dtype=float_dtype),
                     verbose=verbose_flag
                 )
 
+                pm = synpm.projection_matrix(
                     pup_diam_m=self.pup_diam_m,
                     pup_mask=to_xp(xp, self.pup_mask, dtype=float_dtype),
                     dm_array=to_xp(xp, component_params['dm_array'], dtype=float_dtype),
