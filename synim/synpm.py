@@ -373,7 +373,7 @@ def projection_matrix(pup_diam_m, pup_mask,
         raise ValueError('Transformed pupil mask is empty.')
 
     # Apply DM mask to DM array
-    trans_dm_array = apply_mask(trans_dm_array, trans_dm_mask)
+    trans_dm_array = apply_mask(trans_dm_array, trans_dm_mask, in_place=True)
 
     if verbose:
         print(f'  ✓ DM array transformed: {trans_dm_array.shape}')

@@ -168,7 +168,7 @@ def calculate_extrapolation_indices_coeffs(mask, debug=False, debug_pixels=None)
     return edge_pixels_linear, reference_indices, coefficients
 
 
-def apply_extrapolation(data, edge_pixels, reference_indices, coefficients, debug=False, problem_indices=None):
+def apply_extrapolation(data, edge_pixels, reference_indices, coefficients, in_place=False):
     """
     Applies linear extrapolation to edge pixels using precalculated indices and coefficients.
 
@@ -177,23 +177,32 @@ def apply_extrapolation(data, edge_pixels, reference_indices, coefficients, debu
         edge_pixels (ndarray): Linear indices of edge pixels to extrapolate.
         reference_indices (ndarray): Indices of reference pixels.
         coefficients (ndarray): Coefficients for linear extrapolation.
-        debug (bool): If True, displays debug information.
-        problem_indices (list): Indices of problematic pixels to analyze.
+        in_place (bool): If True, modifies the input data array directly.
 
     Returns:
         ndarray: Array with extrapolated pixels.
     """
-    # Create a copy of the input array
-    result = data.copy()
+    # Decide whether to work on a copy or the original
+    if in_place:
+        result = data
+    else:
+        result = data.copy()
+
+    # Handle 2D vs 3D arrays
     if data.ndim == 2:
-        result = result[..., np.newaxis]
-    n_slices = result.shape[2]
-    flat_result = result.reshape(-1, n_slices)
-    flat_data = data.reshape(-1, n_slices)
+        result_reshaped = result[..., np.newaxis]
+        n_slices = 1
+    else:
+        result_reshaped = result
+        n_slices = result.shape[2]
+
+    flat_result = result_reshaped.reshape(-1, n_slices)
+    flat_data = data.reshape(-1, n_slices) if data.ndim == 3 else data.reshape(-1, 1)
 
     # Vectorized extrapolation for all slices
     valid_ref_mask = reference_indices >= 0
     safe_ref_indices = np.where(valid_ref_mask, reference_indices, 0)
+
     for k in range(n_slices):
         ref_data = flat_data[safe_ref_indices, k]  # (n_edge, 8)
         masked_coeffs = np.where(valid_ref_mask, coefficients, 0.0)
@@ -201,8 +210,15 @@ def apply_extrapolation(data, edge_pixels, reference_indices, coefficients, debu
         extrap_values = np.sum(contributions, axis=1)
         flat_result[edge_pixels, k] = extrap_values
 
+    # If in_place, result already points to data, so no need to return differently
+    # If 2D input, squeeze back
     if data.ndim == 2:
-        return result[..., 0]
+        if in_place:
+            # result is already data, just return it
+            return result
+        else:
+            # result is a copy, squeeze and return
+            return result_reshaped[..., 0]
 
     return result
 
@@ -571,10 +587,17 @@ def dm2d_to_3d(dm_array, mask, normalize=True):
     return dm_array_3d
 
 
-def apply_mask(array, mask, norm=False, fill_value=None):
-    """Apply a 2D or 3D mask to a 2D or 3D array."""
-
-    # *** MODIFIED: Convert inputs to xp ***
+def apply_mask(array, mask, norm=False, fill_value=None, in_place=False):
+    """Apply a 2D or 3D mask to a 2D or 3D array.
+    
+    Parameters:
+        array: Input array
+        mask: Mask array
+        norm: If True, normalize by mask
+        fill_value: Value to fill masked regions
+        in_place: If True, modify array in-place (only works if no dtype conversion needed)
+    """
+    # *** Convert inputs to xp ***
     array = to_xp(xp, array, dtype=float_dtype)
     mask = to_xp(xp, mask, dtype=float_dtype)
 
@@ -583,21 +606,25 @@ def apply_mask(array, mask, norm=False, fill_value=None):
         norm_mask = mask[:, :, xp.newaxis]
     else:
         norm_mask = mask
-
     if norm:
         safe_mask = xp.where(norm_mask == 0, 1, norm_mask)
         norm_mask = 1.0 / safe_mask
 
     if fill_value is not None:
-        return xp.where(norm_mask, array, fill_value)
+        result = xp.where(norm_mask, array, fill_value)
     else:
         result = array * norm_mask
         if norm and fill_value is None:
             # Set to 0 where mask was zero (to avoid inf)
             result = xp.where(
-                mask if mask.ndim == array.ndim else mask[:, :, xp.newaxis], 
+                mask if mask.ndim == array.ndim else mask[:, :, xp.newaxis],
                 result, 0
             )
+
+    if in_place:
+        array[:] = result
+        return array
+    else:
         return result
 
 
