@@ -11,13 +11,13 @@ SynIM is a Python package for computing synthetic interaction matrices and proje
 
 ## Key Features
 
-- 🚀 **GPU acceleration** via CuPy for high-performance computation
 - 🔧 **Interaction matrices** for DM-WFS combinations (SCAO/MCAO)
 - 📊 **Projection matrices** for DM-Layer tomography (MCAO/LTAO)
 - 📈 **Covariance matrices** for MMSE reconstructor optimization
 - ⚙️ **YAML/PRO configuration** with automatic parameter parsing
 - 💾 **SPECULA-compatible** FITS format for data exchange
 - 🎯 **Smart caching** to minimize redundant computations
+- 🚀 **GPU acceleration** via CuPy for high-performance computation
 
 ## Quick Start
 
