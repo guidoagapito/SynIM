@@ -65,31 +65,6 @@ Quick Example
        output_dir='output/pm'
    )
 
-Installation
-------------
-
-Install via pip:
-
-.. code-block:: bash
-
-   pip install synim
-
-With GPU support:
-
-.. code-block:: bash
-
-   pip install synim[gpu]
-
-From source:
-
-.. code-block:: bash
-
-   git clone https://github.com/ArcetriAdaptiveOptics/SynIM.git
-   cd SynIM
-   pip install -e .
-
-See :doc:`installation` for detailed instructions.
-
 User Guide
 ----------
 
