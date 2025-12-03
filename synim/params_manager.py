@@ -57,6 +57,12 @@ class ParamsManager:
                 self.params['main']['root_dir'] = root_dir
                 if verbose:
                     print(f"Root directory set to: {self.params['main']['root_dir']}")
+                    
+        # initialize im_dir, pm_dir, rec_dir, cov_dir
+        self.im_dir = self.params['main']['root_dir'] + '/synim/'
+        self.pm_dir = self.params['main']['root_dir'] + '/synpm/'
+        self.rec_dir = self.params['main']['root_dir'] + '/synrec/'
+        self.cov_dir = self.params['main']['root_dir'] + '/covariance/'
 
         # Initialize the CalibManager
         self.main_params = self.params['main']
@@ -530,7 +536,8 @@ class ParamsManager:
         return im
 
     def compute_interaction_matrices(self, output_im_dir, output_rec_dir,
-                                wfs_type=None, overwrite=False, verbose=None, display=False):
+                                wfs_type=None, overwrite=False, verbose=None,
+                                display=False):
         """
         Compute and save interaction matrices for all combinations of WFSs and DMs/Layers.
         Uses multi-WFS optimization when possible.
@@ -629,6 +636,12 @@ class ParamsManager:
                         print(f"  File already exists: {im_filename}")
                     saved_matrices[f"{wfs_name}_{comp_name}"] = im_path
                     continue
+                else:
+                    if verbose_flag:
+                        if os.path.exists(im_path):
+                            print(f"  Overwriting existing file: {im_filename}")
+                        else:
+                            print(f"  Will compute and save: {im_filename}")
 
                 # Get WFS parameters
                 wfs_params = self.get_wfs_params(source_type, wfs_idx)
@@ -682,7 +695,7 @@ class ParamsManager:
                     wfs_name = wfs_info['name']
                     im = im_dict[wfs_name]
 
-                    # *** MODIFIED: Convert to CPU for transpose and saving ***
+                    # *** Convert to CPU for transpose and saving ***
                     im = cpuArray(im)
 
                     # Transpose to be coherent with SPECULA convention
@@ -727,16 +740,21 @@ class ParamsManager:
 
 
     def assemble_interaction_matrices(self, wfs_type='ngs', output_im_dir=None,
-                                    component_type='dm', save=False):
+                                    component_type='dm', save=False,
+                                    apply_filter=True):
         """
         Assemble interaction matrices for a specific type of WFS into
         a single full interaction matrix.
+
+        NOTE: This method applies filtering AFTER loading from disk,
+        ensuring consistent treatment of both computed and pre-existing matrices.
 
         Args:
             wfs_type (str): The type of WFS to assemble matrices for ('ngs', 'lgs', 'ref')
             output_im_dir (str, optional): Directory where IM files are stored
             component_type (str): Type of component to assemble ('dm' or 'layer')
             save (bool): Whether to save the assembled matrix to disk
+            apply_filter (bool): Whether to apply filtmat_tag filtering if present
             
         Returns:
             tuple: (im_full, n_slopes_per_wfs, mode_indices, component_indices) -
@@ -839,8 +857,23 @@ class ParamsManager:
             print(f"{component_type.upper()} indices for {wfs_type}: {component_indices}")
             print(f"{component_type.upper()} start modes: {component_start_modes}")
 
+        # *** DETERMINE DTYPE FROM FIRST IM ***
+        # Load first IM to get dtype
+        first_wfs_idx = int(wfs_list[0]['index'])
+        first_comp_idx = component_indices[0]
+        first_im_filename = generate_im_filename(
+            self.params_file,
+            wfs_type=wfs_type,
+            wfs_index=first_wfs_idx,
+            dm_index=first_comp_idx if component_type == 'dm' else None,
+            layer_index=first_comp_idx if component_type == 'layer' else None
+        )
+        first_im_path = os.path.join(output_im_dir, first_im_filename)
+        first_intmat_obj = Intmat.restore(first_im_path)
+        im_dtype = first_intmat_obj.intmat.dtype
+
         # Create the full interaction matrix
-        im_full = np.zeros((n_tot_modes, n_tot_slopes), dtype=im.dtype)
+        im_full = np.zeros((n_tot_modes, n_tot_slopes), dtype=im_dtype)
 
         # Load and assemble the interaction matrices
         for ii in range(n_wfs):
@@ -866,6 +899,15 @@ class ParamsManager:
 
                 if self.verbose:
                     print(f"    IM shape: {intmat_obj.intmat.shape}")
+
+                # *** APPLY FILTER HERE (after loading) ***
+                if apply_filter:
+                    im = self._apply_slopes_filter(
+                        im,
+                        wfs_type,
+                        ii+1,  # WFS index (1-based)
+                        verbose=self.verbose
+                    )
 
                 # Fill the appropriate section of the full interaction matrix
                 if ii == 0:
@@ -895,12 +937,113 @@ class ParamsManager:
 
         # Save the full interaction matrix if requested
         if save:
-            output_filename = f"im_full_{wfs_type}_{component_type}.npy"
+            filter_suffix = "_filtered" if apply_filter else ""
+            output_filename = f"im_full_{wfs_type}_{component_type}{filter_suffix}.npy"
             np.save(os.path.join(output_im_dir, output_filename), cpuArray(im_full))
             if self.verbose:
                 print(f"Saved full interaction matrix to {output_filename}")
 
         return im_full, n_slopes_per_wfs, mode_indices, component_indices
+
+
+    def _apply_slopes_filter(self, im, wfs_type, wfs_index, verbose=False):
+        """
+        Apply slopes filtering to interaction matrix if filtmat_tag is present.
+        
+        Implements the offline TT filtering as in IDL:
+        1. Load filtmat with shape (n_slopes, n_modes, 2)
+        2. filtIntmat = filtmat[:,:,0]
+        3. filtRecmat = filtmat[:,:,1].T
+        4. m = im @ filtRecmat
+        5. im0 = m @ filtIntmat
+        6. im_filtered = im - im0
+        
+        Args:
+            im (np.ndarray): Interaction matrix (n_modes, n_slopes)
+            wfs_type (str): WFS type ('lgs', 'ngs', 'ref')
+            wfs_index (int): WFS index (1-based)
+            verbose (bool): Whether to print information
+            
+        Returns:
+            np.ndarray: Filtered interaction matrix
+        """
+        # Determine slopec key
+        if wfs_type == 'lgs':
+            slopec_key = f'slopec{wfs_index}'
+        elif wfs_type == 'ngs':
+            slopec_key = f'slopec_ngs{wfs_index}'
+        elif wfs_type == 'ref':
+            slopec_key = f'slopec_ref{wfs_index}'
+        else:
+            return im  # No filtering
+
+        # Check if filtmat_tag exists
+        if slopec_key not in self.params:
+            return im
+
+        slopec_params = self.params[slopec_key]
+
+        if 'filtmat_tag' not in slopec_params:
+            return im
+
+        # Check if filtName is present (inline filtering, already applied)
+        if 'filtName' in slopec_params:
+            if verbose:
+                print(f"  Filter already applied inline (filtName present)")
+            return im
+
+        filtmat_tag = slopec_params['filtmat_tag']
+
+        if verbose:
+            print(f"  Applying offline slopes filter: {filtmat_tag}")
+
+        # Load filter matrix from CalibManager
+        try:
+            filtmat_path = os.path.join(self.cm.root_dir, 'filtmat', f'{filtmat_tag}.fits')
+
+            if not os.path.exists(filtmat_path):
+                if verbose:
+                    print(f"    Warning: Filter file not found: {filtmat_path}")
+                return im
+
+            with fits.open(filtmat_path) as hdul:
+                filtmat = hdul[0].data  # Shape: (n_slopes, n_modes, 2)
+
+            if verbose:
+                print(f"    Loaded filtmat shape: {filtmat.shape}")
+
+            # Extract filter components
+            # IDL convention: filtmat[*,*,0] is intmat, filtmat[*,*,1] is recmat
+            filtIntmat = filtmat[:, :, 0]  # (n_slopes, n_modes)
+            filtRecmat = filtmat[:, :, 1].T  # (n_modes, n_slopes)
+
+            if verbose:
+                print(f"    filtIntmat shape: {filtIntmat.shape}")
+                print(f"    filtRecmat shape: {filtRecmat.shape}")
+                print(f"    IM shape before filtering: {im.shape}")
+
+            # Apply filtering: im_filtered = im - (im @ filtRecmat) @ filtIntmat
+            # im has shape (n_dm_modes, n_slopes)
+            # filtRecmat has shape (n_filter_modes, n_slopes)
+            # filtIntmat has shape (n_slopes, n_filter_modes)
+
+            m = im @ filtRecmat.T  # (n_dm_modes, n_filter_modes)
+            im0 = m @ filtIntmat.T  # (n_dm_modes, n_slopes)
+            im_filtered = im - im0
+
+            if verbose:
+                print(f"    IM shape after filtering: {im_filtered.shape}")
+                rms_before = np.sqrt(np.mean(im**2))
+                rms_after = np.sqrt(np.mean(im_filtered**2))
+                print(f"    RMS before: {rms_before:.4e}, after: {rms_after:.4e}")
+                print(f"    Filtered power: {100*(1-rms_after/rms_before):.2f}%")
+
+            return im_filtered
+
+        except Exception as e:
+            if verbose:
+                print(f"    Warning: Could not apply filter: {e}")
+            return im
 
 
     def _load_base_inv_array(self, verbose):
@@ -1391,6 +1534,262 @@ class ParamsManager:
             print("=== Computation Complete ===\n")
 
         return p_opt, pm_full_dm, pm_full_layer
+
+
+    def compute_tomographic_reconstructor(self, r0, L0, reg_factor=1e-8,
+                                        wfs_type='lgs', component_type='layer',
+                                        weights=None, noise_variance=None,
+                                        C_noise=None, output_dir=None,
+                                        save=False, overwrite=False,
+                                        verbose=None):
+        """
+        Compute full tomographic reconstructor from interaction matrices and covariances.
+        
+        This method integrates:
+        1. Interaction matrix assembly (computed on-the-fly, not saved)
+        2. Covariance matrix computation/loading (cached to disk)
+        3. MMSE reconstructor calculation
+        
+        Args:
+            r0 (float): Fried parameter in meters
+            L0 (float): Outer scale in meters
+            reg_factor (float): Regularization factor for pseudoinverse
+            wfs_type (str): Type of WFS ('lgs', 'ngs', 'ref')
+            component_type (str): Type of component ('dm' or 'layer')
+            weights (list, optional): Weights for each component in covariance
+            noise_variance (float or array, optional): Noise variance per WFS
+            C_noise (np.ndarray, optional): Full noise covariance matrix
+            output_dir (str, optional): Directory for saving results
+            save (bool): Whether to save the reconstructor
+            overwrite (bool): Whether to overwrite existing files
+            verbose (bool, optional): Override the class's verbose setting
+            
+        Returns:
+            dict: Dictionary with:
+                - 'reconstructor': MMSE reconstructor matrix
+                - 'im_full': Full interaction matrix
+                - 'C_atm_full': Full atmospheric covariance matrix
+                - 'C_noise': Noise covariance matrix
+                - 'mode_indices': Mode indices per component
+                - 'component_indices': Component indices
+                - 'n_slopes_per_wfs': Number of slopes per WFS
+                - 'rec_filename': Filename if saved
+        """
+        verbose_flag = self.verbose if verbose is None else verbose
+
+        if verbose_flag:
+            print(f"\n{'='*70}")
+            print(f"COMPUTING TOMOGRAPHIC RECONSTRUCTOR")
+            print(f"{'='*70}")
+            print(f"  WFS type: {wfs_type}")
+            print(f"  Component type: {component_type}")
+            print(f"  r0: {r0} m, L0: {L0} m")
+            print(f"  Regularization: {reg_factor}")
+            print(f"{'='*70}\n")
+
+        # ==================== STEP 1: Compute IMs on-the-fly ====================
+        if verbose_flag:
+            print(f"STEP 1: Computing Interaction Matrices (on-the-fly)")
+            print(f"-" * 70)
+
+        # Compute IMs without saving permanently
+        _ = self.compute_interaction_matrices(
+            output_im_dir=self.im_dir,
+            output_rec_dir=self.rec_dir,
+            wfs_type=wfs_type,
+            overwrite=overwrite,
+            verbose=verbose_flag,
+            display=False
+        )
+
+        # Assemble full IM
+        im_full, n_slopes_per_wfs, mode_indices, component_indices = \
+            self.assemble_interaction_matrices(
+                wfs_type=wfs_type,
+                output_im_dir=self.im_dir,
+                component_type=component_type,
+                save=False  # Don't save assembled IM
+            )
+
+        # Temp dir is automatically cleaned up here
+
+        if verbose_flag:
+            print(f"  ✓ IM assembled: {im_full.shape}")
+            print(f"  Components: {component_indices}")
+            print(f"  Modes: {[len(mi) for mi in mode_indices]}")
+            print()
+
+        # ==================== STEP 2: Compute/Load Covariances ====================
+        if verbose_flag:
+            print(f"STEP 2: Computing/Loading Covariance Matrices")
+            print(f"-" * 70)
+
+        cov_result = self.compute_covariance_matrices(
+            r0=r0,
+            L0=L0,
+            component_type=component_type,
+            output_dir=self.cov_dir,
+            overwrite=overwrite,
+            full_modes=True,
+            verbose=verbose_flag
+        )
+
+        # Assemble covariance for selected modes
+        C_atm_full = self.assemble_covariance_matrix(
+            C_atm_blocks=cov_result['C_atm_blocks'],
+            component_indices=cov_result['component_indices'],
+            mode_indices=mode_indices,
+            weights=weights,
+            verbose=verbose_flag
+        )
+
+        if verbose_flag:
+            print(f"  ✓ Covariance assembled: {C_atm_full.shape}")
+            print()
+
+        # ==================== STEP 3: Build Noise Covariance ====================
+        if verbose_flag:
+            print(f"STEP 3: Building Noise Covariance Matrix")
+            print(f"-" * 70)
+
+        if C_noise is None:
+            # Count WFSs
+            out = self.count_mcao_stars()
+            if wfs_type == 'lgs':
+                n_wfs = out['n_lgs']
+            elif wfs_type == 'ngs':
+                n_wfs = out['n_ngs']
+            else:
+                n_wfs = out['n_ref']
+
+            # Compute noise variance if not provided
+            if noise_variance is None:
+                # Use default from params or compute from magnitude
+                params = self.params
+                sa_side_in_m = (params['main']['pixel_pupil'] *
+                            params['main']['pixel_pitch'] / 
+                            params[f'sh_{wfs_type}1']['subap_on_diameter'])
+                sensor_fov = (params[f'sh_{wfs_type}1']['sensor_pxscale'] *
+                            params[f'sh_{wfs_type}1']['subap_npx'])
+
+                rad2arcsec = 3600. * 180. / np.pi
+                sigma2inNm2 = 2e4  # Default noise in nm^2
+                sigma2inArcsec2 = sigma2inNm2 / (1./rad2arcsec * sa_side_in_m / 4. * 1e9)**2.
+                sigma2inSlope = sigma2inArcsec2 * 1./(sensor_fov/2.)**2.
+                noise_variance = [sigma2inSlope] * n_wfs
+
+                if verbose_flag:
+                    print(f"  Using default noise variance: {noise_variance[0]:.2e}")
+
+            # Build diagonal noise covariance
+            n_slopes_total = im_full.shape[1]
+            C_noise = np.zeros((n_slopes_total, n_slopes_total))
+
+            n_slopes_list = []
+            for i in range(n_wfs):
+                wfs_params = self.get_wfs_params(wfs_type, i+1)
+                if wfs_params['idx_valid_sa'] is not None:
+                    n_slopes_this_wfs = len(wfs_params['idx_valid_sa']) * 2
+                    n_slopes_list.append(n_slopes_this_wfs)
+
+            for i in range(n_wfs):
+                start_idx = sum(n_slopes_list[:i])
+                end_idx = sum(n_slopes_list[:i+1])
+
+                if isinstance(noise_variance, (list, np.ndarray)):
+                    var = noise_variance[i]
+                else:
+                    var = noise_variance
+
+                C_noise[start_idx:end_idx, start_idx:end_idx] = var * np.eye(n_slopes_list[i])
+
+            if verbose_flag:
+                print(f"  ✓ Noise covariance built: {C_noise.shape}")
+        else:
+            if verbose_flag:
+                print(f"  Using provided C_noise: {C_noise.shape}")
+
+        print()
+
+        # ==================== STEP 4: Compute MMSE Reconstructor ====================
+        if verbose_flag:
+            print(f"STEP 4: Computing MMSE Reconstructor")
+            print(f"-" * 70)
+
+        reconstructor = compute_mmse_reconstructor(
+            im_full.T,  # Transpose for SPECULA convention
+            C_atm_full,
+            noise_variance=None,  # Already in C_noise
+            C_noise=C_noise,
+            cinverse=False,
+            verbose=verbose_flag
+        )
+
+        if verbose_flag:
+            print(f"  ✓ Reconstructor computed: {reconstructor.shape}")
+            print()
+
+        # ==================== STEP 5: Save if requested ====================
+        rec_filename = None
+        rec_path = None
+
+        if save:
+            if output_dir is None:
+                raise ValueError("output_dir must be specified when save=True")
+
+            os.makedirs(output_dir, exist_ok=True)
+
+            if verbose_flag:
+                print(f"STEP 5: Saving Reconstructor")
+                print(f"-" * 70)
+
+            # Generate filename
+            config_name = (os.path.basename(self.params_file).split('.')[0]
+                        if isinstance(self.params_file, str) else "config")
+
+            rec_filename = (f"rec_{config_name}_{wfs_type}_{component_type}_"
+                        f"r0{r0:.3f}_L0{L0:.1f}_reg{reg_factor:.0e}.fits")
+            rec_path = os.path.join(output_dir, rec_filename)
+
+            # Save as Recmat (SPECULA format)
+            recmat_obj = Recmat(
+                recmat=reconstructor,
+                norm_factor=1.0,
+                target_device_idx=self.target_device_idx if hasattr(self, 'target_device_idx') else None,
+                precision=self.precision if hasattr(self, 'precision') else None
+            )
+            recmat_obj.save(rec_path, overwrite=True)
+
+            if verbose_flag:
+                print(f"  ✓ Saved: {rec_filename}")
+                print()
+
+        # ==================== Summary ====================
+        if verbose_flag:
+            print(f"{'='*70}")
+            print(f"TOMOGRAPHIC RECONSTRUCTOR COMPLETE")
+            print(f"{'='*70}")
+            print(f"  Reconstructor shape: {reconstructor.shape}")
+            print(f"  (n_modes, n_slopes) = ({reconstructor.shape[0]}, {reconstructor.shape[1]})")
+            if save:
+                print(f"  Saved to: {rec_filename}")
+            print(f"{'='*70}\n")
+
+        return {
+            'reconstructor': reconstructor,
+            'im_full': im_full,
+            'C_atm_full': C_atm_full,
+            'C_noise': C_noise,
+            'mode_indices': mode_indices,
+            'component_indices': component_indices,
+            'n_slopes_per_wfs': n_slopes_per_wfs,
+            'n_wfs': n_wfs if 'n_wfs' in locals() else None,
+            'rec_filename': rec_filename,
+            'rec_path': rec_path,
+            'r0': r0,
+            'L0': L0,
+            'reg_factor': reg_factor
+        }
 
 
     def compute_tomographic_projection_matrix(self, reg_factor=1e-8,
