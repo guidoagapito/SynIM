@@ -31,31 +31,7 @@ def compute_derivatives_with_extrapolation(data,mask=None):
         edge_pixels = to_xp(xp, edge_pixels, dtype=xp.int32)
         reference_indices = to_xp(xp, reference_indices, dtype=xp.int32)
         coefficients = to_xp(xp, coefficients, dtype=float_dtype)
-        for i in range(data.shape[2]):
-            # Apply extrapolation
-            temp = data[:,:,i].copy()
-            data[:,:,i] = apply_extrapolation(
-                data[:,:,i], edge_pixels, reference_indices, coefficients,
-                debug=True, problem_indices=None
-            )
-            debug_extrapolation = False
-            if i == 0 and debug_extrapolation:
-                # *** MODIFIED: Convert to CPU for plotting ***
-                temp_cpu = cpuArray(temp)
-                data_cpu = cpuArray(data[:,:,i])
-                plt.figure(figsize=(8, 6))
-                plt.imshow(temp_cpu, cmap='seismic', interpolation='nearest')
-                plt.colorbar()
-                plt.title(f'Original data slice {i}')
-                plt.figure(figsize=(8, 6))
-                plt.imshow(data[:,:,i], cmap='seismic', interpolation='nearest')
-                plt.colorbar()
-                plt.title(f'Extrapolated data slice {i}')
-                plt.figure(figsize=(8, 6))
-                plt.imshow(data[:,:,i] - temp, cmap='seismic', interpolation='nearest')
-                plt.colorbar()
-                plt.title(f'Difference after extrapolation for slice {i}')
-                plt.show()
+        data = apply_extrapolation(data, edge_pixels, reference_indices, coefficients)
 
     # Compute x derivative
     dx = xp.gradient(data, axis=(1), edge_order=1)
@@ -551,22 +527,9 @@ def interaction_matrices_multi_wfs(pup_diam_m, pup_mask,
     - dm_mask: numpy 2D array, DM mask (n x n)
     - dm_height: float, DM conjugation altitude
     - dm_rotation: float, DM rotation in degrees
-    - wfs_configs: list of dict, each containing WFS parameters:
-        {
-            'nsubaps': int,
-            'rotation': float (default 0.0),
-            'translation': tuple (default (0.0, 0.0)),
-            'magnification': tuple or float (default (1.0, 1.0)),
-            'fov_arcsec': float,
-            'idx_valid_sa': array or None,
-            'gs_pol_coo': tuple (radius_arcsec, angle_deg) - REQUIRED if gs_pol_coo=None
-            'gs_height': float - REQUIRED if gs_height=None
-            'name': str (optional)
-        }
-    - gs_pol_coo: tuple or None (DEPRECATED - use wfs_config['gs_pol_coo'] instead)
-        If provided, uses this for all WFS (backward compatibility)
-    - gs_height: float or None (DEPRECATED - use wfs_config['gs_height'] instead)
-        If provided, uses this for all WFS (backward compatibility)
+    - wfs_configs: list of dict, each containing WFS parameters
+    - gs_pol_coo: tuple or None (DEPRECATED)
+    - gs_height: float or None (DEPRECATED)
     - verbose: bool, optional
     - specula_convention: bool, optional
     
@@ -591,11 +554,9 @@ def interaction_matrices_multi_wfs(pup_diam_m, pup_mask,
     wfs_gs_info = []
     for i, wfs_config in enumerate(wfs_configs):
         if use_global_gs:
-            # Backward compatibility: use global values
             wfs_gs_pol_coo = gs_pol_coo
             wfs_gs_height = gs_height
         else:
-            # New method: get from wfs_config
             if 'gs_pol_coo' not in wfs_config:
                 raise ValueError(f"WFS {i}: 'gs_pol_coo' must be"
                                  f" specified in wfs_config when gs_pol_coo=None")
@@ -611,46 +572,77 @@ def interaction_matrices_multi_wfs(pup_diam_m, pup_mask,
     # Check if all WFS see DM from the same direction
     all_gs_same = all(gs_info == wfs_gs_info[0] for gs_info in wfs_gs_info)
 
-    # Detect transformations
-    has_dm_transform_list = []
+    # Detect WFS transformations
     wfs_transforms = []
-
-    for gs_pol_coo_wfs, gs_height_wfs in wfs_gs_info:
-        has_dm = has_transformations(dm_rotation, (0, 0), (1, 1)) or \
-                 gs_pol_coo_wfs != (0, 0) or gs_height_wfs != 0
-        has_dm_transform_list.append(has_dm)
+    has_wfs_transform_list = []
 
     for config in wfs_configs:
         wfs_rot = config.get('rotation', 0.0)
         wfs_trans = config.get('translation', (0.0, 0.0))
         wfs_mag = config.get('magnification', (1.0, 1.0))
         wfs_transforms.append((wfs_rot, wfs_trans, wfs_mag))
+        has_wfs_transform_list.append(
+            has_transformations(wfs_rot, wfs_trans, wfs_mag)
+        )
 
     # Check if all WFS transforms are identical
     all_wfs_same = all(t == wfs_transforms[0] for t in wfs_transforms)
 
-    # Decide workflow:
-    # SEPARATED: if all WFS see DM from same direction AND have same WFS transforms
-    # COMBINED: otherwise (each WFS computed independently)
-    use_separated = all_gs_same and all_wfs_same
+    # Check if ANY WFS has transformations
+    any_wfs_transform = any(has_wfs_transform_list)
+
+    # Detect DM transformations (relative to first GS position)
+    gs_pol_coo_ref, gs_height_ref = wfs_gs_info[0]
+    has_dm_transform = has_transformations(dm_rotation, (0, 0), (1, 1)) or \
+                       gs_pol_coo_ref != (0, 0) or gs_height_ref != 0 or dm_height != 0
+
+    # *** FIXED: Improved workflow decision logic ***
+    # SEPARATED workflow can be used when:
+    # 1. All WFS see DM from same direction AND have same transforms
+    # 2. AND we can compute derivatives once and reuse them
+    #    This is possible when:
+    #    - ONLY DM transforms (no WFS transforms)
+    #    - OR ONLY WFS transforms (no DM transforms)
+    #    - NOT BOTH (that would require COMBINED)
+
+    # XOR logic: exactly one of them has transforms, not both
+    can_separate_transforms = (has_dm_transform and not any_wfs_transform) or \
+                             (not has_dm_transform and any_wfs_transform)
+
+    use_separated = all_gs_same and all_wfs_same and can_separate_transforms
 
     if verbose:
         print(f"All WFS see DM from same direction: {all_gs_same}")
         print(f"All WFS have same transforms: {all_wfs_same}")
-        print(f"Using {'SEPARATED' if use_separated else 'COMBINED'} workflow")
+        print(f"DM transformations present: {has_dm_transform}")
+        print(f"WFS transformations present: {any_wfs_transform}")
+        print(f"Can separate transforms (XOR): {can_separate_transforms}")
+
+        if not all_gs_same:
+            print(f"  → Different GS positions require per-WFS computation")
+        if not all_wfs_same:
+            print(f"  → Different WFS transforms require per-WFS computation")
+        if not can_separate_transforms:
+            print(f"  → Both DM and WFS transforms present")
+
+        print(f"Using {'SEPARATED' if use_separated else 'COMBINED (per-WFS)'} workflow")
         print(f"{'='*60}\n")
 
     im_dict = {}
     derivatives_info = {
         'workflow': 'separated' if use_separated else 'combined',
         'all_gs_same': all_gs_same,
-        'all_wfs_same': all_wfs_same
+        'all_wfs_same': all_wfs_same,
+        'has_dm_transform': has_dm_transform,
+        'any_wfs_transform': any_wfs_transform,
+        'can_separate': can_separate_transforms
     }
 
     if use_separated:
-        # SEPARATED WORKFLOW: Compute DM transformations once
+        # SEPARATED WORKFLOW: Compute transformations once, then reuse
         if verbose:
-            print("[Step 1/2] Computing DM transformations and derivatives...")
+            print("[SEPARATED WORKFLOW]")
+            print("  Step 1/2: Computing DM transformations ONCE...")
 
         # Use first WFS's gs_pol_coo and gs_height (they're all the same)
         gs_pol_coo_ref, gs_height_ref = wfs_gs_info[0]
@@ -660,13 +652,17 @@ def interaction_matrices_multi_wfs(pup_diam_m, pup_mask,
                 pup_diam_m, pup_mask, dm_array, dm_mask,
                 dm_height, dm_rotation,
                 gs_pol_coo_ref, gs_height_ref,
-                verbose=verbose, specula_convention=specula_convention
+                verbose=verbose,
+                specula_convention=specula_convention
             )
 
         if verbose:
             print(f"  ✓ DM transformed: {trans_dm_array.shape}")
             print(f"  ✓ Derivatives computed: {derivatives_x.shape}")
-            print(f"\n[Step 2/2] Computing slopes for each WFS...")
+            if any_wfs_transform:
+                print(f"\n[SEPARATED] Step 2/2: Applying WFS transformations to each WFS...")
+            else:
+                print(f"\n[SEPARATED] Step 2/2: Computing slopes for each WFS...")
 
         # Store derivatives for potential reuse
         derivatives_info['derivatives_x'] = derivatives_x
@@ -685,7 +681,7 @@ def interaction_matrices_multi_wfs(pup_diam_m, pup_mask,
             idx_valid_sa = wfs_config.get('idx_valid_sa', None)
 
             if verbose:
-                print(f"\n  Processing {wfs_name}:")
+                print(f"\n  [{i+1}/{len(wfs_configs)}] {wfs_name}:")
                 print(f"    Subapertures: {wfs_nsubaps}x{wfs_nsubaps}")
                 print(f"    FOV: {wfs_fov_arcsec}''")
 
@@ -693,7 +689,8 @@ def interaction_matrices_multi_wfs(pup_diam_m, pup_mask,
                 derivatives_x, derivatives_y, pup_mask_conv, trans_dm_mask,
                 wfs_nsubaps, wfs_rotation, wfs_translation, wfs_magnification,
                 wfs_fov_arcsec, pup_diam_m, idx_valid_sa=idx_valid_sa,
-                verbose=verbose, specula_convention=specula_convention
+                verbose=False,  # Suppress inner verbose
+                specula_convention=specula_convention
             )
 
             im_dict[wfs_name] = im
@@ -702,9 +699,15 @@ def interaction_matrices_multi_wfs(pup_diam_m, pup_mask,
                 print(f"    ✓ IM shape: {im.shape}")
 
     else:
-        # COMBINED WORKFLOW: Compute each WFS independently
+        # COMBINED WORKFLOW: Each WFS computed independently
+        # But within each WFS, use SEPARATED if XOR condition is met
         if verbose:
-            print("Computing each WFS independently with combined DM+WFS transformations...")
+            print("[COMBINED WORKFLOW - Per-WFS Computation]")
+            if not all_gs_same:
+                print("  Reason: Different guide star positions")
+            if not all_wfs_same:
+                print("  Reason: Different WFS transformations")
+            print()
 
         for i, wfs_config in enumerate(wfs_configs):
             wfs_name = wfs_config.get('name', f'wfs_{i}')
@@ -718,22 +721,59 @@ def interaction_matrices_multi_wfs(pup_diam_m, pup_mask,
             # Get WFS-specific gs_pol_coo and gs_height
             gs_pol_coo_wfs, gs_height_wfs = wfs_gs_info[i]
 
-            if verbose:
-                print(f"\n  [{i+1}/{len(wfs_configs)}] Processing {wfs_name}:")
-                print(f"    Subapertures: {wfs_nsubaps}x{wfs_nsubaps}")
-                print(f"    FOV: {wfs_fov_arcsec}''")
-                print(f"    GS position: {gs_pol_coo_wfs}")
-                print(f"    GS height: {gs_height_wfs} m")
+            # *** For this WFS, determine if we can use SEPARATED workflow ***
+            has_dm_transform_wfs = has_transformations(dm_rotation, (0, 0), (1, 1)) or \
+                                   gs_pol_coo_wfs != (0, 0) or gs_height_wfs != 0 or dm_height != 0
+            has_wfs_transform_wfs = has_transformations(wfs_rotation, wfs_translation, wfs_magnification)
 
-            # Use interaction_matrix which already handles workflow selection
-            im = interaction_matrix(
-                pup_diam_m, pup_mask, dm_array, dm_mask,
-                dm_height, dm_rotation,
-                wfs_nsubaps, wfs_rotation, wfs_translation, wfs_magnification,
-                wfs_fov_arcsec, gs_pol_coo_wfs, gs_height_wfs,
-                idx_valid_sa=idx_valid_sa,
-                verbose=verbose, display=False, specula_convention=specula_convention
-            )
+            # XOR: only one type of transform
+            use_separated_this_wfs = (has_dm_transform_wfs and not has_wfs_transform_wfs) or \
+                                    (not has_dm_transform_wfs and has_wfs_transform_wfs)
+
+            if verbose:
+                print(f"  [{i+1}/{len(wfs_configs)}] {wfs_name}:")
+                print(f"    Subapertures: {wfs_nsubaps}x{wfs_nsubaps}, FOV: {wfs_fov_arcsec}''")
+                print(f"    GS: {gs_pol_coo_wfs}, height: {gs_height_wfs} m")
+                print(f"    DM transforms: {has_dm_transform_wfs}, WFS transforms: {has_wfs_transform_wfs}")
+                print(f"    → Using {'SEPARATED' if use_separated_this_wfs else 'COMBINED'} for this WFS")
+
+            # Call the appropriate workflow function for THIS WFS
+            if use_separated_this_wfs:
+                # SEPARATED: Two interpolation steps
+                trans_dm_array, trans_dm_mask, pup_mask_conv, derivatives_x, derivatives_y = \
+                    apply_dm_transformations_separated(
+                        pup_diam_m, pup_mask, dm_array, dm_mask,
+                        dm_height, dm_rotation,
+                        gs_pol_coo_wfs, gs_height_wfs,
+                        verbose=False,
+                        specula_convention=specula_convention
+                    )
+
+                im = apply_wfs_transformations_separated(
+                    derivatives_x, derivatives_y, pup_mask_conv, trans_dm_mask,
+                    wfs_nsubaps, wfs_rotation, wfs_translation, wfs_magnification,
+                    wfs_fov_arcsec, pup_diam_m, idx_valid_sa=idx_valid_sa,
+                    verbose=False,
+                    specula_convention=specula_convention
+                )
+            else:
+                # COMBINED: Single interpolation step
+                trans_dm_array, trans_dm_mask, trans_pup_mask, derivatives_x, derivatives_y = \
+                    apply_dm_transformations_combined(
+                        pup_diam_m, pup_mask, dm_array, dm_mask,
+                        dm_height, dm_rotation,
+                        wfs_rotation, wfs_translation, wfs_magnification,
+                        gs_pol_coo_wfs, gs_height_wfs,
+                        verbose=False,
+                        specula_convention=specula_convention
+                    )
+
+                im = apply_wfs_transformations_combined(
+                    derivatives_x, derivatives_y, trans_pup_mask, trans_dm_mask,
+                    wfs_nsubaps, wfs_fov_arcsec, pup_diam_m, idx_valid_sa=idx_valid_sa,
+                    verbose=False,
+                    specula_convention=specula_convention
+                )
 
             im_dict[wfs_name] = im
 
@@ -743,7 +783,7 @@ def interaction_matrices_multi_wfs(pup_diam_m, pup_mask,
     if verbose:
         print(f"\n{'='*60}")
         print(f"Completed {len(im_dict)} interaction matrices")
-        print(f"Workflow: {derivatives_info['workflow'].upper()}")
+        print(f"Overall workflow: {derivatives_info['workflow'].upper()}")
         print(f"{'='*60}\n")
 
     return im_dict, derivatives_info
