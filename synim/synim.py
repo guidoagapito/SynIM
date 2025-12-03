@@ -31,7 +31,7 @@ def compute_derivatives_with_extrapolation(data,mask=None):
         edge_pixels = to_xp(xp, edge_pixels, dtype=xp.int32)
         reference_indices = to_xp(xp, reference_indices, dtype=xp.int32)
         coefficients = to_xp(xp, coefficients, dtype=float_dtype)
-        data = apply_extrapolation(data, edge_pixels, reference_indices, coefficients)
+        data = apply_extrapolation(data, edge_pixels, reference_indices, coefficients, in_place=True)
 
     # Compute x derivative
     dx = xp.gradient(data, axis=(1), edge_order=1)

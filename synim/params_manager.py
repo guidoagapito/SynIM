@@ -188,12 +188,17 @@ class ParamsManager:
         Args:
             component_idx (int): Index of the DM or layer to load
             is_layer (bool): Whether to load a layer instead of a DM
+            cut_start_mode (bool): Whether to remove modes before start_mode
 
         Returns:
             dict: DM or layer parameters
         """
         component_type = "layer" if is_layer else "dm"
-        cache_key = f"{component_type}_{component_idx}"
+        # Base cache key without cut
+        cache_key_base = f"{component_type}_{component_idx}"
+        # If cut_start_mode=False, use base key
+        # If cut_start_mode=True, use separate key for cut version
+        cache_key = f"{cache_key_base}_cut" if cut_start_mode else cache_key_base
 
         if cache_key in self.dm_cache:
             return self.dm_cache[cache_key]
@@ -213,8 +218,12 @@ class ParamsManager:
             self.cm, component_params, self.pixel_pupil, verbose=self.verbose
         )
 
+        # *** Apply cut BEFORE converting to xp ***
         if cut_start_mode and 'start_mode' in component_params:
-            dm_array = dm_array[:, :, component_params['start_mode']:]
+            start_mode = component_params['start_mode']
+            dm_array = dm_array[:, :, start_mode:]
+            if self.verbose:
+                print(f"  Cut modes before {start_mode}, remaining: {dm_array.shape[2]}")
 
         # *** MODIFIED: Convert to xp with float_dtype ***
         dm_array = to_xp(xp, dm_array, dtype=float_dtype)
@@ -1283,13 +1292,11 @@ class ParamsManager:
                     print(f"\n  Processing {source_info['name']}:")
 
                 # Transpose ONCE using ORIGINAL pupil mask
-                base_inv_array_transposed = synpm.transpose_base_array_for_specula(
                     to_xp(xp, base_inv_array, dtype=float_dtype),
                     to_xp(xp, self.pup_mask, dtype=float_dtype),
                     verbose=verbose_flag
                 )
 
-                pm = synpm.projection_matrix(
                     pup_diam_m=self.pup_diam_m,
                     pup_mask=to_xp(xp, self.pup_mask, dtype=float_dtype),
                     dm_array=to_xp(xp, component_params['dm_array'], dtype=float_dtype),
