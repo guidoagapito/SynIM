@@ -900,6 +900,9 @@ class ParamsManager:
                 if self.verbose:
                     print(f"    IM shape: {intmat_obj.intmat.shape}")
 
+                # Use intmat_obj.intmat as base
+                im = intmat_obj.intmat
+
                 # *** APPLY FILTER HERE (after loading) ***
                 if apply_filter:
                     im = self._apply_slopes_filter(
@@ -916,20 +919,26 @@ class ParamsManager:
                     idx_start = sum(n_slopes_list[:ii])
 
                 # Check if we have enough modes in the loaded IM
-                n_modes_available = intmat_obj.intmat.shape[0]
-                n_modes_requested = len(mode_idx)
+                n_modes_available = im.shape[0]
 
-                if n_modes_available < n_modes_requested:
+                # Filter actual_mode_idx to valid indices only
+                actual_mode_idx = [mi for mi in mode_idx if mi < n_modes_available]
+                if len(actual_mode_idx) == 0:
                     if self.verbose:
-                        print(f"    Warning: IM has only {n_modes_available} modes, "
-                            f"requested {n_modes_requested}. Using available modes.")
-                    # Use only available modes
-                    actual_mode_idx = mode_idx[:n_modes_available]
-                else:
-                    actual_mode_idx = mode_idx
+                        print(f"    Warning: No valid mode indices for WFS {ii+1}, Component {comp_ind} "
+                            f"(requested: {mode_idx}, available: {n_modes_available}) -- skipping.")
+                    continue  # Skip this block
 
-                im_full[actual_mode_idx, idx_start:idx_start+n_slopes_list[ii]] = \
-                    intmat_obj.intmat[actual_mode_idx, :]
+                try:
+                    im_full[actual_mode_idx, idx_start:idx_start+n_slopes_list[ii]] = \
+                        im[actual_mode_idx, :]
+                except Exception as e:
+                    print(f"Error assembling IM for WFS {ii+1}, Component {comp_ind}: {e}")
+                    print(f"IM shape: {im.shape}, mode_idx (min/max):"
+                          f" {min(actual_mode_idx)}/{max(actual_mode_idx)}")
+                    print(f"Filling im_full[{min(actual_mode_idx)}:{max(actual_mode_idx)+1},"
+                         f" {idx_start}:{idx_start+n_slopes_list[ii]}]")
+                    raise ValueError("Failed to assemble interaction matrix.")
 
         # Display summary
         if self.verbose:
@@ -951,11 +960,11 @@ class ParamsManager:
         Apply slopes filtering to interaction matrix if filtmat_tag is present.
         
         Implements the offline TT filtering as in IDL:
-        1. Load filtmat with shape (n_slopes, n_modes, 2)
-        2. filtIntmat = filtmat[:,:,0]
-        3. filtRecmat = filtmat[:,:,1].T
-        4. m = im @ filtRecmat
-        5. im0 = m @ filtIntmat
+        1. Load filtmat with shape (n_modes, n_slopes, 2)
+        2. filt_int_mat = filtmat[:,:,0].T
+        3. filt_rec_mat = filtmat[:,:,1]
+        4. m = im @ filt_rec_mat
+        5. im0 = m @ filt_int_mat
         6. im_filtered = im - im0
         
         Args:
@@ -999,7 +1008,12 @@ class ParamsManager:
 
         # Load filter matrix from CalibManager
         try:
-            filtmat_path = os.path.join(self.cm.root_dir, 'filtmat', f'{filtmat_tag}.fits')
+            # if filtmat directory exists, use it, otherwise use default data directory
+            filtmat_dir = os.path.join(self.cm.root_dir, 'filtmat')
+            if os.path.exists(filtmat_dir):
+                filtmat_path = os.path.join(filtmat_dir, f'{filtmat_tag}.fits')
+            else:
+                filtmat_path = os.path.join(self.cm.root_dir, 'data', f'{filtmat_tag}.fits')
 
             if not os.path.exists(filtmat_path):
                 if verbose:
@@ -1014,21 +1028,21 @@ class ParamsManager:
 
             # Extract filter components
             # IDL convention: filtmat[*,*,0] is intmat, filtmat[*,*,1] is recmat
-            filtIntmat = filtmat[:, :, 0]  # (n_slopes, n_modes)
-            filtRecmat = filtmat[:, :, 1].T  # (n_modes, n_slopes)
+            filt_int_mat = filtmat[:, :, 0]  # (n_modes, n_slopes)
+            filt_rec_mat = filtmat[:, :, 1]  # (n_modes, n_slopes)
 
             if verbose:
-                print(f"    filtIntmat shape: {filtIntmat.shape}")
-                print(f"    filtRecmat shape: {filtRecmat.shape}")
+                print(f"    filt_int_mat shape: {filt_int_mat.shape}")
+                print(f"    filt_rec_mat shape: {filt_rec_mat.shape}")
                 print(f"    IM shape before filtering: {im.shape}")
 
-            # Apply filtering: im_filtered = im - (im @ filtRecmat) @ filtIntmat
+            # Apply filtering: im_filtered = im - (im @ filt_rec_mat) @ filt_int_mat
             # im has shape (n_dm_modes, n_slopes)
-            # filtRecmat has shape (n_filter_modes, n_slopes)
-            # filtIntmat has shape (n_slopes, n_filter_modes)
+            # filt_rec_mat has shape (n_filter_modes, n_slopes)
+            # filt_int_mat has shape (n_slopes, n_filter_modes)
 
-            m = im @ filtRecmat.T  # (n_dm_modes, n_filter_modes)
-            im0 = m @ filtIntmat.T  # (n_dm_modes, n_slopes)
+            m = im @ filt_rec_mat.T  # (n_dm_modes, n_filter_modes)
+            im0 = m @ filt_int_mat  # (n_dm_modes, n_slopes)
             im_filtered = im - im0
 
             if verbose:
@@ -1640,7 +1654,8 @@ class ParamsManager:
             component_indices=cov_result['component_indices'],
             mode_indices=mode_indices,
             weights=weights,
-            verbose=verbose_flag
+            verbose=verbose_flag,
+            return_inverse=True
         )
 
         if verbose_flag:
@@ -1666,11 +1681,15 @@ class ParamsManager:
             if noise_variance is None:
                 # Use default from params or compute from magnitude
                 params = self.params
+                wfs_params = params[f'sh_{wfs_type}1']
                 sa_side_in_m = (params['main']['pixel_pupil'] *
-                            params['main']['pixel_pitch'] / 
-                            params[f'sh_{wfs_type}1']['subap_on_diameter'])
-                sensor_fov = (params[f'sh_{wfs_type}1']['sensor_pxscale'] *
-                            params[f'sh_{wfs_type}1']['subap_npx'])
+                            params['main']['pixel_pitch'] /
+                            wfs_params['subap_on_diameter'])
+                subap_npx = wfs_params.get('subap_npx', wfs_params.get('sensor_npx'))
+                if subap_npx is None:
+                    raise KeyError(f"Neither 'subap_npx' nor 'sensor_npx' found"
+                                   f" in params['sh_{wfs_type}1']")
+                sensor_fov = (wfs_params['sensor_pxscale'] * subap_npx)
 
                 rad2arcsec = 3600. * 180. / np.pi
                 sigma2inNm2 = 2e4  # Default noise in nm^2
@@ -1701,7 +1720,7 @@ class ParamsManager:
                 else:
                     var = noise_variance
 
-                C_noise[start_idx:end_idx, start_idx:end_idx] = var * np.eye(n_slopes_list[i])
+                C_noise[start_idx:end_idx, start_idx:end_idx] = 1 / var * np.eye(n_slopes_list[i])
 
             if verbose_flag:
                 print(f"  ✓ Noise covariance built: {C_noise.shape}")
@@ -1721,7 +1740,7 @@ class ParamsManager:
             C_atm_full,
             noise_variance=None,  # Already in C_noise
             C_noise=C_noise,
-            cinverse=False,
+            cinverse=True,
             verbose=verbose_flag
         )
 
@@ -2277,7 +2296,7 @@ class ParamsManager:
     def assemble_covariance_matrix(self, C_atm_blocks, component_indices,
                                     mode_indices=None, weights=None,
                                     wfs_type=None, component_type='layer',
-                                    verbose=None):
+                                    verbose=None, return_inverse=False):
         """
         Assemble the full covariance matrix from individual blocks,
         extracting only the modes specified in mode_indices.
@@ -2291,6 +2310,7 @@ class ParamsManager:
             wfs_type (str, optional): WFS type for modal_combination lookup
             component_type (str): Type of component ('dm' or 'layer')
             verbose (bool, optional): Override the class's verbose setting
+            return_inverse (bool, optional): Whether to return the inverse of the covariance matrix
             
         Returns:
             np.ndarray: Full covariance matrix with selected modes
@@ -2358,23 +2378,36 @@ class ParamsManager:
             if len(modes) == 0:
                 continue
 
-            n_modes = len(modes)
-
             # Extract the sub-block for selected modes
             # C_atm_block has shape (n_total_modes, n_total_modes)
             # We want to extract modes[i] × modes[j]
-            idx_modes = np.ix_(modes, modes)
-            C_atm_sub = C_atm_block[idx_modes]
+            valid_modes = [m for m in modes if m < C_atm_block.shape[0]]
+            if len(valid_modes) == 0:
+                if verbose_flag:
+                    print(f"  Warning: No valid modes for component {i+1} (requested: {modes}, available: {C_atm_block.shape[0]}) -- skipping.")
+                continue
+
+            idx_modes = np.ix_(valid_modes, valid_modes)
+            try:
+                C_atm_sub = C_atm_block[idx_modes]
+            except IndexError:
+                print(f"Error extracting modes for component {i+1}:")
+                print(f"  Available modes: {C_atm_block.shape[0]}")
+                print(f"  Requested modes: {valid_modes}")
+                raise
 
             # Place in full matrix
-            idx_full = slice(current_idx, current_idx + n_modes)
-            C_atm_full[idx_full, idx_full] = C_atm_sub * weight * conversion_factor
+            idx_full = slice(current_idx, current_idx + len(valid_modes))
+            if return_inverse:
+                C_atm_full[idx_full, idx_full] = np.linalg.pinv(C_atm_sub * weight * conversion_factor)
+            else:
+                C_atm_full[idx_full, idx_full] = C_atm_sub * weight * conversion_factor
 
             if verbose_flag:
-                print(f"  Component {i+1}: modes {modes[0]}-{modes[-1]} → "
-                    f"full matrix [{current_idx}:{current_idx + n_modes}]")
+                print(f"  Component {i+1}: modes {valid_modes[0]}-{valid_modes[-1]} → "
+                    f"full matrix [{current_idx}:{current_idx + len(valid_modes)}]")
 
-            current_idx += n_modes
+            current_idx += len(valid_modes)
 
         if verbose_flag:
             print(f"\n  ✓ Full covariance matrix assembled: {C_atm_full.shape}")
