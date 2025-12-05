@@ -3,7 +3,10 @@ SynIM Documentation
 
 **Synthetic Interaction Matrix generator for Adaptive Optics systems**
 
-SynIM is a Python package for computing synthetic interaction matrices, projection matrices, and covariance matrices for adaptive optics (AO) systems. It supports both Single Conjugate AO (SCAO) and Multi-Conjugate AO (MCAO) configurations with optional GPU acceleration.
+SynIM is a Python package for computing synthetic interaction matrices, projection matrices, and covariance matrices for adaptive optics (AO) systems.
+It supports both Single Conjugate AO (SCAO), Laser Tomography AO (LTAO), Ground Layer AO (GLAO) and Multi-Conjugate AO (MCAO) configurations with Shack-Hartmann sensors.
+It also supports GPU acceleration.
+Some of its functionalities are provided by [SPECULA](https://github.com/ArcetriAdaptiveOptics/SPECULA).
 
 .. image:: https://img.shields.io/badge/License-MIT-yellow.svg
    :target: https://opensource.org/licenses/MIT
@@ -12,7 +15,6 @@ SynIM is a Python package for computing synthetic interaction matrices, projecti
 Key Features
 ------------
 
-- 🚀 **GPU acceleration** via CuPy for high-performance computation
 - 🔧 **Interaction matrices** for DM-WFS combinations (SCAO/MCAO)  
 - 📊 **Projection matrices** for DM-Layer tomography (MCAO/LTAO)
 - 📈 **Covariance matrices** for MMSE reconstructor optimization
@@ -20,6 +22,7 @@ Key Features
 - 💾 **SPECULA-compatible** FITS format for data exchange
 - 🎯 **Smart caching** to minimize redundant computations
 - 🔀 **Multi-WFS optimization** for faster batch computation
+- 🚀 **GPU acceleration** via CuPy for high-performance computation
 
 
 User Guide
