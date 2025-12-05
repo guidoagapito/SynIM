@@ -126,7 +126,7 @@ Configuration Files
 ===================
 
 SynIM supports both YAML and PRO (IDL-style) configuration files for defining AO system parameters.
-IDL-style parameter files are supported for compatibility with [PASSATA](https://arxiv.org/abs/1607.07624).
+IDL-style parameter files are supported for compatibility with `PASSATA <https://arxiv.org/abs/1607.07624>`_.
 
 Loading Configurations
 ----------------------
@@ -206,7 +206,7 @@ SynIM follows SPECULA's directory structure for seamless integration. The ``Para
    ├── config/
    │   ├── params_scao.yml
    │   ├── params_mcao.yml
-   │   └── params_ltao.ym
+   │   └── params_ltao.yml
    │
    └── calib/                   # Calibration data (root_dir)
        ├── synim/               # Interaction matrices (.fits)
@@ -226,8 +226,8 @@ SynIM follows SPECULA's directory structure for seamless integration. The ``Para
        │   └── cov_noise.fits
        │
        ├── ifunc/               # Influence functions (SPECULA format)
-       |   ├── dm0_ifunc.fits
-       |   └── dm1_ifunc.fits
+       │   ├── dm0_ifunc.fits
+       │   └── dm1_ifunc.fits
        ├── im/          # Interaction matrices (SPECULA format)
        └── rec/         # Reconstructors and Projection matrices (SPECULA format)
 
