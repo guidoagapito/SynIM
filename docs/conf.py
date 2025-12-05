@@ -46,8 +46,8 @@ extensions = ['sphinx.ext.autodoc',
               ]
 
 source_suffix = {
-    '.rst': None,
-    '.md': None,
+    '.rst': 'restructuredtext',
+    '.md': 'markdown',
 }
 
 intersphinx_mapping = {

@@ -7,7 +7,7 @@
 
 ## Overview
 
-SynIM is a Python package for computing synthetic interaction matrices and projection matrices for adaptive optics (AO) systems. It supports both Single Conjugate AO (SCAO), Laser Tomography AO (LTAO), Graound Layer AO (GLAO) and Multi-Conjugate AO (MCAO) configurations with Shack-Hartmann sensors.
+SynIM is a Python package for computing synthetic interaction matrices and projection matrices for adaptive optics (AO) systems. It supports both Single Conjugate AO (SCAO), Laser Tomography AO (LTAO), Ground Layer AO (GLAO) and Multi-Conjugate AO (MCAO) configurations with Shack-Hartmann sensors.
 It also supports GPU acceleration. Some of its functionalities are provided by [SPECULA](https://github.com/ArcetriAdaptiveOptics/SPECULA).
 
 ## Key Features
@@ -38,7 +38,7 @@ To contribute to SynIM, follow these steps:
 2. Create a branch: `git checkout -b <branch_name>`
 3. Make your changes and **add tests for the new functionality.**
 4. Commit your changes: `git commit -m '<commit_message>'`
-5. Push to the b
+5. Push to the branch: `git push`
 6. Create the pull request.
 
 We require tests for all new features to ensure the stability of the project.

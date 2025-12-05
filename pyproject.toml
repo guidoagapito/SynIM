@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "synim"
-dynamic = ["version"]
+dynamic = ["version", "dependencies"]
 description = "Synthetic interaction matrix generator for adaptive optics systems"
 authors = [
     { name="Guido Agapito", email="guido.agapito@inaf.it" }
@@ -38,4 +38,12 @@ Repository = "https://github.com/ArcetriAdaptiveOptics/SynIM"
 Issues = "https://github.com/ArcetriAdaptiveOptics/SynIM/issues"
 
 [tool.setuptools_scm]
+# Version is determined from git tags. Tag format: vMAJOR.MINOR.PATCH (e.g., v1.2.3)
+# If git metadata is unavailable, fallback_version will be used.
 write_to = "synim/_version.py"
+fallback_version = "0.1.0"
+
+[tool.setuptools.packages.find]
+where = ["."]
+include = ["synim*"]
+exclude = ["test*", "docs*"]

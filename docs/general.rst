@@ -1,413 +1,3 @@
-Configuration Files
-===================
-
-SynIM supports both YAML and PRO (IDL-style) configuration files for defining AO system parameters.
-
-Configuration Formats
----------------------
-
-YAML Format (Recommended)
-~~~~~~~~~~~~~~~~~~~~~~~~~~
-
-YAML files provide a clear, hierarchical structure:
-
-.. code-block:: yaml
-
-   # System parameters
-   telescope:
-     diameter: 8.0              # Telescope diameter [m]
-     central_obstruction: 0.14  # Central obstruction ratio
-   
-   # Deformable mirrors
-   dms:
-     - tag: 'DM0'
-       type: 'zonal'
-       n_actuators: 41
-       coupling: 0.2
-       alt: 0.0                 # Conjugation altitude [m]
-   
-   # Wavefront sensors  
-   wfss:
-     - tag: 'WFS_LGS'
-       type: 'SH'               # Shack-Hartmann
-       n_subap: 40
-       binning: 1
-       sources:
-         - type: 'LGS'
-           altitude: 90000.0    # LGS altitude [m]
-           zenith: 0.0
-           azimuth: 0.0
-           magnitude: 10.0
-
-PRO Format (Legacy)
-~~~~~~~~~~~~~~~~~~~
-
-IDL-style parameter files are also supported:
-
-.. code-block:: idl
-
-   ; System parameters
-   tel_diam = 8.0
-   tel_cobs = 0.14
-   
-   ; Deformable mirror
-   dm_tag = ['DM0']
-   dm_type = ['zonal']
-   dm_nacts = [41]
-   dm_alt = [0.0]
-   
-   ; Wavefront sensor
-   wfs_tag = ['WFS_LGS']
-   wfs_type = ['SH']
-   wfs_nsubap = [40]
-
-Parameter Categories
---------------------
-
-System Parameters
-~~~~~~~~~~~~~~~~~
-
-Global telescope and pupil configuration:
-
-.. list-table::
-   :header-rows: 1
-   :widths: 20 50 15 15
-
-   * - Parameter
-     - Description
-     - Unit
-     - Required
-   * - ``telescope.diameter``
-     - Telescope diameter
-     - meters
-     - Yes
-   * - ``telescope.central_obstruction``
-     - Central obstruction ratio
-     - fraction
-     - No
-   * - ``pupil.resolution``
-     - Pupil sampling
-     - pixels
-     - Yes
-   * - ``wavelength``
-     - Reference wavelength
-     - nm
-     - Yes
-
-Deformable Mirror Parameters
-~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
-
-Configuration for each DM:
-
-.. list-table::
-   :header-rows: 1
-   :widths: 20 50 15 15
-
-   * - Parameter
-     - Description
-     - Unit
-     - Required
-   * - ``dms[].tag``
-     - Unique identifier
-     - string
-     - Yes
-   * - ``dms[].type``
-     - DM type (zonal/modal)
-     - string
-     - Yes
-   * - ``dms[].n_actuators``
-     - Number of actuators
-     - int
-     - Yes
-   * - ``dms[].coupling``
-     - Actuator coupling
-     - fraction
-     - No
-   * - ``dms[].alt``
-     - Conjugation altitude
-     - meters
-     - Yes
-
-Wavefront Sensor Parameters
-~~~~~~~~~~~~~~~~~~~~~~~~~~~~
-
-Configuration for each WFS:
-
-.. list-table::
-   :header-rows: 1
-   :widths: 20 50 15 15
-
-   * - Parameter
-     - Description
-     - Unit
-     - Required
-   * - ``wfss[].tag``
-     - Unique identifier
-     - string
-     - Yes
-   * - ``wfss[].type``
-     - Sensor type (SH/Pyramid)
-     - string
-     - Yes
-   * - ``wfss[].n_subap``
-     - Subapertures on diameter
-     - int
-     - Yes
-   * - ``wfss[].pixel_scale``
-     - Pixel scale
-     - arcsec/pix
-     - Yes
-   * - ``wfss[].binning``
-     - Detector binning
-     - int
-     - No
-
-Source Parameters
-~~~~~~~~~~~~~~~~~
-
-Guide star configuration:
-
-.. list-table::
-   :header-rows: 1
-   :widths: 20 50 15 15
-
-   * - Parameter
-     - Description
-     - Unit
-     - Required
-   * - ``sources[].type``
-     - Source type (NGS/LGS)
-     - string
-     - Yes
-   * - ``sources[].altitude``
-     - Source altitude
-     - meters
-     - LGS only
-   * - ``sources[].zenith``
-     - Zenith angle
-     - degrees
-     - Yes
-   * - ``sources[].azimuth``
-     - Azimuth angle
-     - degrees
-     - Yes
-   * - ``sources[].magnitude``
-     - Source magnitude
-     - mag
-     - Yes
-
-Layer Parameters (MCAO)
-~~~~~~~~~~~~~~~~~~~~~~~~
-
-Atmospheric layer configuration:
-
-.. list-table::
-   :header-rows: 1
-   :widths: 20 50 15 15
-
-   * - Parameter
-     - Description
-     - Unit
-     - Required
-   * - ``layers[].altitude``
-     - Layer height
-     - meters
-     - Yes
-   * - ``layers[].cn2_fraction``
-     - Turbulence fraction
-     - fraction
-     - Yes
-   * - ``layers[].wind_speed``
-     - Wind speed
-     - m/s
-     - No
-   * - ``layers[].wind_direction``
-     - Wind direction
-     - degrees
-     - No
-
-Complete Examples
------------------
-
-SCAO Configuration
-~~~~~~~~~~~~~~~~~~
-
-Simple single-conjugate AO system:
-
-.. code-block:: yaml
-
-   # params_scao.yml
-   telescope:
-     diameter: 8.0
-     central_obstruction: 0.14
-   
-   pupil:
-     resolution: 240
-   
-   wavelength: 500.0  # nm
-   
-   dms:
-     - tag: 'DM0'
-       type: 'zonal'
-       n_actuators: 41
-       alt: 0.0
-   
-   wfss:
-     - tag: 'WFS_NGS'
-       type: 'SH'
-       n_subap: 40
-       pixel_scale: 0.5
-       sources:
-         - type: 'NGS'
-           zenith: 0.0
-           azimuth: 0.0
-           magnitude: 8.0
-
-MCAO Configuration
-~~~~~~~~~~~~~~~~~~
-
-Multi-conjugate AO with multiple WFS and DMs:
-
-.. code-block:: yaml
-
-   # params_mcao.yml
-   telescope:
-     diameter: 8.0
-     central_obstruction: 0.14
-   
-   pupil:
-     resolution: 480
-   
-   wavelength: 589.0  # LGS wavelength
-   
-   # Multiple DMs at different altitudes
-   dms:
-     - tag: 'DM0'
-       type: 'zonal'
-       n_actuators: 41
-       alt: 0.0         # Ground layer
-     - tag: 'DM4'
-       type: 'zonal'
-       n_actuators: 21
-       alt: 12500.0     # High altitude
-   
-   # Multiple WFS with LGS constellation
-   wfss:
-     - tag: 'WFS_LGS1'
-       type: 'SH'
-       n_subap: 40
-       sources:
-         - type: 'LGS'
-           altitude: 90000.0
-           zenith: 30.0    # Off-axis
-           azimuth: 0.0
-           magnitude: 10.0
-     
-     - tag: 'WFS_LGS2'
-       type: 'SH'
-       n_subap: 40
-       sources:
-         - type: 'LGS'
-           altitude: 90000.0
-           zenith: 30.0
-           azimuth: 90.0
-           magnitude: 10.0
-     
-     - tag: 'WFS_NGS'
-       type: 'SH'
-       n_subap: 8
-       sources:
-         - type: 'NGS'
-           zenith: 0.0
-           azimuth: 0.0
-           magnitude: 12.0   # TT star
-   
-   # Atmospheric layers for tomography
-   layers:
-     - altitude: 0.0
-       cn2_fraction: 0.59
-     - altitude: 500.0
-       cn2_fraction: 0.02
-     - altitude: 1000.0
-       cn2_fraction: 0.04
-     - altitude: 2000.0
-       cn2_fraction: 0.06
-     - altitude: 4000.0
-       cn2_fraction: 0.01
-     - altitude: 8000.0
-       cn2_fraction: 0.05
-     - altitude: 16000.0
-       cn2_fraction: 0.23
-
-Loading Configurations
-----------------------
-
-Using ParamsManager
-~~~~~~~~~~~~~~~~~~~
-
-The recommended way to load configurations:
-
-.. code-block:: python
-
-   from synim.params_manager import ParamsManager
-   
-   # Load YAML file
-   pm = ParamsManager('params_mcao.yml', verbose=True)
-   
-   # Access configuration
-   print(f"Telescope diameter: {pm.params['telescope']['diameter']} m")
-   print(f"Number of DMs: {len(pm.dm_list)}")
-   print(f"Number of WFS: {len(pm.wfs_list)}")
-
-Direct Parsing
-~~~~~~~~~~~~~~
-
-For custom workflows:
-
-.. code-block:: python
-
-   from synim.params_utils import parse_params_file
-   
-   # Parse any supported format
-   params = parse_params_file('config.yml')
-   
-   # Or PRO file
-   params = parse_params_file('config.pro')
-
-Validation
-----------
-
-SynIM automatically validates configurations:
-
-.. code-block:: python
-
-   from synim.params_utils import validate_opt_sources
-   
-   pm = ParamsManager('params.yml')
-   
-   # Validate optical sources for tomography
-   validate_opt_sources(pm.params, verbose=True)
-   # Output: Validating optical source configurations...
-   #         ✓ All optical sources properly configured
-
-Common validation checks:
-
-- Required parameters present
-- Valid ranges for physical quantities
-- Consistent array dimensions
-- Valid source types and positions
-- DM-layer altitude compatibility
-
-Best Practices
---------------
-
-1. **Use YAML format** for new configurations (better readability)
-2. **Comment your parameters** to document design choices
-3. **Organize by subsystem** (telescope, DMs, WFSs, etc.)
-4. **Include metadata** (date, author, system name)
-5. **Version control** your configurations
-6. **Validate early** before running expensive computations
-
 Overview
 --------
 
@@ -533,52 +123,10 @@ GPU support is implemented through a flexible backend system:
    - ``precision=1``: Single precision (float32, ~2× faster on GPU)
 
 Configuration Files
--------------------
+===================
 
-SynIM supports two configuration file formats for maximum flexibility.
-
-YAML Format (Recommended)
-~~~~~~~~~~~~~~~~~~~~~~~~~~
-
-YAML files provide a clear, hierarchical structure:
-
-.. code-block:: yaml
-
-   # System parameters
-   telescope:
-     diameter: 8.0              # Telescope diameter [m]
-     central_obstruction: 0.14  # Central obstruction ratio
-   
-   pupil:
-     resolution: 240            # Pupil sampling [pixels]
-   
-   wavelength: 589.0            # Reference wavelength [nm]
-   
-   # Deformable mirrors
-   dms:
-     - tag: 'DM0'
-       type: 'zonal'
-       n_actuators: 41
-       coupling: 0.2
-       alt: 0.0                 # Conjugation altitude [m]
-   
-   # Wavefront sensors  
-   wfss:
-     - tag: 'WFS_LGS'
-       type: 'SH'               # Shack-Hartmann
-       n_subap: 40
-       binning: 1
-       sources:
-         - type: 'LGS'
-           altitude: 90000.0    # LGS altitude [m]
-           zenith: 0.0          # [degrees]
-           azimuth: 0.0         # [degrees]
-           magnitude: 10.0
-
-PRO Format (Legacy)
-~~~~~~~~~~~~~~~~~~~
-
-IDL-style parameter files are also supported for compatibility with [PASSATA](https://arxiv.org/abs/1607.07624).
+SynIM supports both YAML and PRO (IDL-style) configuration files for defining AO system parameters.
+IDL-style parameter files are supported for compatibility with [PASSATA](https://arxiv.org/abs/1607.07624).
 
 Loading Configurations
 ----------------------
@@ -586,7 +134,7 @@ Loading Configurations
 Using ParamsManager
 ~~~~~~~~~~~~~~~~~~~
 
-The recommended way to load and use configurations:
+The recommended way to load configurations:
 
 .. code-block:: python
 
@@ -599,11 +147,6 @@ The recommended way to load and use configurations:
    print(f"Telescope diameter: {pm.params['telescope']['diameter']} m")
    print(f"Number of DMs: {len(pm.dm_list)}")
    print(f"Number of WFS: {len(pm.wfs_list)}")
-   
-   # Access specific components
-   dm0 = pm.dm_list[0]
-   print(f"DM0 tag: {dm0['tag']}")
-   print(f"DM0 altitude: {dm0['alt']} m")
 
 Direct Parsing
 ~~~~~~~~~~~~~~
@@ -619,19 +162,15 @@ For custom workflows:
    
    # Or PRO file
    params = parse_params_file('config.pro')
-   
-   # Access parameters
-   tel_diam = params['telescope']['diameter']
 
 Validation
 ----------
 
-SynIM automatically validates configurations during loading:
+SynIM automatically validates configurations:
 
 .. code-block:: python
 
    from synim.params_utils import validate_opt_sources
-   from synim.params_manager import ParamsManager
    
    pm = ParamsManager('params.yml')
    
@@ -640,23 +179,26 @@ SynIM automatically validates configurations during loading:
    # Output: Validating optical source configurations...
    #         ✓ All optical sources properly configured
 
-Common validation checks include:
+Common validation checks:
 
-- Required parameters are present
-- Values are within valid physical ranges
-- Array dimensions are consistent
-- Source types and positions are valid
-- DM-layer altitude compatibility for MCAO
+- Required parameters present
+- Valid ranges for physical quantities
+- Consistent array dimensions
+- Valid source types and positions
+- DM-layer altitude compatibility
 
 File Organization
 -----------------
 
-SynIM structure follows the one of SPECULA for easy integration:
+SynIM follows SPECULA's directory structure for seamless integration. The ``ParamsManager`` automatically creates and manages these directories based on the ``root_dir`` parameter in your configuration:
 
-        self.im_dir = self.params['main']['root_dir'] + '/synim/'
-        self.pm_dir = self.params['main']['root_dir'] + '/synpm/'
-        self.rec_dir = self.params['main']['root_dir'] + '/synrec/'
-        self.cov_dir = self.params['main']['root_dir'] + '/covariance/'
+.. code-block:: python
+
+   # In ParamsManager initialization:
+   self.im_dir = root_dir + '/synim/'       # Interaction matrices
+   self.pm_dir = root_dir + '/synpm/'       # Projection matrices  
+   self.rec_dir = root_dir + '/synrec/'     # Reconstructors
+   self.cov_dir = root_dir + '/covariance/' # Covariance matrices
 
 .. code-block:: text
 
@@ -664,15 +206,72 @@ SynIM structure follows the one of SPECULA for easy integration:
    ├── config/
    │   ├── params_scao.yml
    │   ├── params_mcao.yml
-   │   └── params_ltao.yml
-   └── calib/
+   │   └── params_ltao.ym
+   │
+   └── calib/                   # Calibration data (root_dir)
+       ├── synim/               # Interaction matrices (.fits)
+       │   ├── intmat_wfs1_dm0.fits
+       │   └── intmat_wfs2_dm0.fits
+       │
+       ├── synpm/               # Projection matrices (.fits)
+       │   ├── projmat_dm0_layer0.fits
+       │   └── projmat_dm1_layer1.fits
+       │
+       ├── synrec/              # Reconstructors (.fits)
+       │   ├── rec_mmse.fits
+       │   └── rec_lsq.fits
+       │
+       ├── covariance/          # Covariance matrices (.fits)
+       │   ├── cov_atm.fits
+       │   └── cov_noise.fits
+       │
+       ├── ifunc/               # Influence functions (SPECULA format)
+       |   ├── dm0_ifunc.fits
+       |   └── dm1_ifunc.fits
        ├── im/          # Interaction matrices (SPECULA format)
-       ├── rec/         # Reconstructors and Projection matrices (SPECULA format)
-       └── ifunc/       # Influence functions and Covariance matrices (SPECULA format)
-       ├── synim/       # Interaction matrices
-       ├── synpm/       # Projection matrices
-       ├── synrec/      # Reconstructors
-       ├── covariance/  # Covariance matrices
+       └── rec/         # Reconstructors and Projection matrices (SPECULA format)
+
+
+**Note:** When using SynIM with SPECULA, both tools can share the same ``root_dir`` and ``ifunc/`` directory. SPECULA uses additional directories (``im/``, ``rec/``) which can coexist alongside SynIM's directories.
+
+Filename Conventions
+~~~~~~~~~~~~~~~~~~~~
+
+SynIM automatically generates descriptive filenames based on component tags and parameters:
+
+**Interaction Matrices:**
+   ``intmat_{wfs_tag}_{dm_tag}.fits``
+   
+   Example: ``intmat_WFS_LGS1_DM0.fits``
+
+**Projection Matrices:**
+   ``projmat_{dm_tag}_layer{layer_idx}.fits``
+   
+   Example: ``projmat_DM0_layer0.fits``
+
+**Reconstructors:**
+   ``rec_{type}_{wfs_tags}_{dm_tags}.fits``
+   
+   Example: ``rec_mmse_WFS1-WFS2_DM0-DM1.fits``
+
+**Covariance Matrices:**
+   ``cov_atm_{layer_config}.fits`` or ``cov_noise_{wfs_config}.fits``
+
+Custom Directories
+~~~~~~~~~~~~~~~~~~
+
+You can override the default directory structure:
+
+.. code-block:: python
+
+   pm = ParamsManager('params.yml')
+   
+   # Override specific directories
+   pm.im_dir = '/custom/path/interaction_matrices/'
+   pm.rec_dir = '/custom/path/reconstructors/'
+   
+   # Compute with custom paths
+   pm.compute_all_interaction_matrices()
 
 See Also
 --------

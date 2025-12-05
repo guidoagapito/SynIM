@@ -1,4 +1,3 @@
-import os
 from pathlib import Path
 
 def generate_module_doc(module_name, title=None):

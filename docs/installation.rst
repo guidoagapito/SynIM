@@ -100,7 +100,7 @@ Test your installation:
    try:
        synim.init(device_idx=0, precision=1)
        print("✓ GPU backend initialized")
-   except:
+   except Exception:
        print("⚠ GPU not available (CPU only)")
    
    # Test basic functionality
