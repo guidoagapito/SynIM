@@ -21,49 +21,6 @@ Key Features
 - 🎯 **Smart caching** to minimize redundant computations
 - 🔀 **Multi-WFS optimization** for faster batch computation
 
-Quick Example
--------------
-
-.. code-block:: python
-
-   import synim
-   from synim.params_manager import ParamsManager
-
-   # Initialize GPU (optional)
-   synim.init(device_idx=0, precision=1)
-
-   # Load configuration
-   pm = ParamsManager('params_mcao.yml', verbose=True)
-
-   # Compute interaction matrix
-   im = pm.compute_interaction_matrix(
-       wfs_type='lgs', 
-       wfs_index=0,
-       dm_index=0
-   )
-
-   # Compute all interaction matrices (batch processing)
-   saved_files = pm.compute_interaction_matrices(
-       output_im_dir='output/im',
-       overwrite=False
-   )
-
-   # Assemble full MCAO interaction matrix
-   im_full, n_slopes, modes, dms = pm.assemble_interaction_matrices(
-       wfs_type='lgs',
-       output_im_dir='output/im'
-   )
-
-   # Compute projection matrices for tomography
-   pm_files = pm.compute_projection_matrices(
-       output_dir='output/pm'
-   )
-
-   # Compute tomographic projection matrix
-   p_opt, pm_full, info = pm.compute_tomographic_projection_matrix(
-       reg_factor=1e-8,
-       output_dir='output/pm'
-   )
 
 User Guide
 ----------
@@ -73,8 +30,6 @@ User Guide
 
    installation
    general
-   quickstart
-   user_guide/index
 
 API Reference
 -------------
@@ -89,22 +44,6 @@ Examples
 
 Complete examples are available in the `examples/ <https://github.com/ArcetriAdaptiveOptics/SynIM/tree/main/examples>`_ directory:
 
-.. list-table::
-   :header-rows: 1
-   :widths: 40 60
-
-   * - Example Script
-     - Description
-   * - ``run_synim_from_yaml_ngs.py``
-     - NGS interaction matrices (SCAO)
-   * - ``run_synim_from_yaml_lgs.py``
-     - LGS interaction matrices (SCAO)
-   * - ``run_synim_from_yaml_proj.py``
-     - Projection matrices (MCAO)
-   * - ``run_synim_covariance_matrices.py``
-     - Atmospheric covariance matrices
-   * - ``compare_recmats.py``
-     - Compare different reconstructor types
 
 Support
 -------

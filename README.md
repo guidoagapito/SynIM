@@ -7,7 +7,8 @@
 
 ## Overview
 
-SynIM is a Python package for computing synthetic interaction matrices and projection matrices for adaptive optics (AO) systems. It supports both Single Conjugate AO (SCAO) and Multi-Conjugate AO (MCAO) configurations with GPU acceleration.
+SynIM is a Python package for computing synthetic interaction matrices and projection matrices for adaptive optics (AO) systems. It supports both Single Conjugate AO (SCAO), Laser Tomography AO (LTAO), Graound Layer AO (GLAO) and Multi-Conjugate AO (MCAO) configurations with Shack-Hartmann sensors.
+It also supports GPU acceleration. Some of its functionalities are provided by [SPECULA](https://github.com/ArcetriAdaptiveOptics/SPECULA).
 
 ## Key Features
 
@@ -19,53 +20,9 @@ SynIM is a Python package for computing synthetic interaction matrices and proje
 - 🎯 **Smart caching** to minimize redundant computations
 - 🚀 **GPU acceleration** via CuPy for high-performance computation
 
-## Quick Start
-
-### Installation
-
-```bash
-pip install synim
-```
-
-### Basic Usage
-
-```python
-import synim
-from synim.params_manager import ParamsManager
-
-# Initialize GPU (optional)
-synim.init(device_idx=0, precision=1)
-
-# Load configuration and compute interaction matrix
-pm = ParamsManager('config.yml')
-im = pm.compute_interaction_matrix(wfs_type='lgs')
-```
-
 ## Documentation
 
 Full documentation available at: **[synim.readthedocs.io](https://synim.readthedocs.io)**
-
-## Examples
-
-See the [`examples/`](examples/) directory for complete working examples:
-
-- `run_synim_from_yaml_ngs.py` - NGS interaction matrices
-- `run_synim_from_yaml_lgs.py` - LGS interaction matrices  
-- `run_synim_from_yaml_proj.py` - Projection matrices for MCAO
-- `run_synim_covariance_matrices.py` - Atmospheric covariance
-
-## GPU Performance
-
-SynIM provides significant speedups on GPU for large problems:
-
-```python
-import synim
-
-# Use GPU with single precision for best performance
-synim.init(device_idx=0, precision=1)
-
-# Automatic fallback to CPU if GPU memory exceeded
-```
 
 ## Requirements
 
@@ -74,9 +31,17 @@ synim.init(device_idx=0, precision=1)
 - [specula](https://github.com/ArcetriAdaptiveOptics/SPECULA) - AO simulation framework
 - [cupy](https://cupy.dev/) - GPU acceleration (optional, requires CUDA)
 
-## Contributing
+## Contributing to SynIM
+To contribute to SynIM, follow these steps:
 
-Contributions welcome! Please open an issue or submit a pull request.
+1. Fork this repository.
+2. Create a branch: `git checkout -b <branch_name>`
+3. Make your changes and **add tests for the new functionality.**
+4. Commit your changes: `git commit -m '<commit_message>'`
+5. Push to the b
+6. Create the pull request.
+
+We require tests for all new features to ensure the stability of the project.
 
 ## Citation
 
@@ -101,4 +66,4 @@ MIT License - see [LICENSE](LICENSE) file for details.
 
 ## Acknowledgments
 
-Built for the [SPECULA](https://github.com/ArcetriAdaptiveOptics/SPECULA) adaptive optics simulation framework.
+It was built as part of the [MORFEO project](https://elt.eso.org/instrument/MORFEO/).
