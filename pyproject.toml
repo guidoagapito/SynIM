@@ -1,19 +1,49 @@
 [build-system]
-requires = ["setuptools", "wheel"]
+requires = ["setuptools>=45", "wheel", "setuptools_scm[toml]>=6.2"]
 build-backend = "setuptools.build_meta"
 
 [project]
 name = "synim"
-version = "0.1.0"
+dynamic = ["version", "dependencies"]
 description = "Synthetic interaction matrix generator for adaptive optics systems"
 authors = [
-    { name="Guido Agapito" }
+    { name="Guido Agapito", email="guido.agapito@inaf.it" }
 ]
 readme = "README.md"
 requires-python = ">=3.8"
-dependencies = [
-    "numpy",
-    "scipy",
-    "matplotlib",
-    "specula"
+license = {text = "MIT"}
+classifiers = [
+    "Development Status :: 4 - Beta",
+    "Intended Audience :: Science/Research",
+    "License :: OSI Approved :: MIT License",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.8",
+    "Programming Language :: Python :: 3.9",
+    "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3.11",
+    "Topic :: Scientific/Engineering :: Astronomy",
 ]
+
+[tool.setuptools.dynamic]
+dependencies = { file = "requirements.txt" }
+
+[project.optional-dependencies]
+gpu = ["cupy"]
+dev = ["pytest", "pytest-cov"]
+
+[project.urls]
+Homepage = "https://github.com/ArcetriAdaptiveOptics/SynIM"
+Documentation = "https://synim.readthedocs.io"
+Repository = "https://github.com/ArcetriAdaptiveOptics/SynIM"
+Issues = "https://github.com/ArcetriAdaptiveOptics/SynIM/issues"
+
+[tool.setuptools_scm]
+# Version is determined from git tags. Tag format: vMAJOR.MINOR.PATCH (e.g., v1.2.3)
+# If git metadata is unavailable, fallback_version will be used.
+write_to = "synim/_version.py"
+fallback_version = "0.1.0"
+
+[tool.setuptools.packages.find]
+where = ["."]
+include = ["synim*"]
+exclude = ["test*", "docs*"]

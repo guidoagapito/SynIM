@@ -1,3 +1,22 @@
-*.pyc
+# Setuptools SCM generated version file
+synim/_version.py
+
+# Python cache
+synim/__pycache__/
+__pycache__/
 *DS_Store
+*.pyc
+*.pyo
+
+# Build artifacts
+*.egg-info/
+dist/
+build/
+
+# Testing
+.pytest_cache/
+.coverage
+htmlcov/
+
+# IDE files
 /synim.egg-info

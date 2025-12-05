@@ -1,0 +1,11 @@
+sphinx>=4.0
+sphinx-rtd-theme
+numpydoc
+myst-parser
+nbsphinx
+numpy
+scipy
+matplotlib
+astropy
+pyyaml
+tomli; python_version < '3.11'
