@@ -5,10 +5,6 @@ import re
 import yaml
 import datetime
 import numpy as np
-import matplotlib.pyplot as plt
-
-# *** MODIFIED: Import xp, cpuArray, to_xp, float_dtype ***
-from synim import xp, cpuArray, to_xp, float_dtype
 
 # Import all utility functions from utils
 from synim.utils import *
@@ -150,6 +146,19 @@ def extract_source_height(config, wfs_key):
 
     return np.inf  # Default to infinity if no height is specified
 
+def get_tag_or_object(params, base_key, look_for_tag=False):
+    """
+    Looks for and returns the value associated with '{base_key}_tag' or '{base_key}_object' in params.
+    Returns None if neither is present.
+    """
+    if f"{base_key}_tag" in params:
+        return params[f"{base_key}_tag"]
+    elif f"{base_key}_object" in params:
+        return params[f"{base_key}_object"]
+    elif f"tag" in params and look_for_tag:
+        return params["tag"]
+    return None
+
 def load_pupilstop(cm, pupilstop_params, pixel_pupil, pixel_pitch, verbose=False):
     """
     Load or create a pupilstop.
@@ -157,15 +166,12 @@ def load_pupilstop(cm, pupilstop_params, pixel_pupil, pixel_pitch, verbose=False
     NOTE: Returns numpy array from disk - caller should convert with to_xp if needed
     """
 
-    if 'tag' in pupilstop_params or 'pupil_mask_tag' in pupilstop_params:
-        if 'pupil_mask_tag' in pupilstop_params:
-            pupilstop_tag = pupilstop_params['pupil_mask_tag']
-            if verbose:
-                print(f"     Loading pupilstop from file, tag: {pupilstop_tag}")
-        else:
-            pupilstop_tag = pupilstop_params['tag']
-            if verbose:
-                print(f"     Loading pupilstop from file, tag: {pupilstop_tag}")
+    pupilstop_tag = get_tag_or_object(pupilstop_params, 'pupil_mask', look_for_tag=True)
+    if pupilstop_tag is None:
+        pupilstop_tag = get_tag_or_object(pupilstop_params, 'pupilstop')
+    if pupilstop_tag is not None:
+        if verbose:
+            print(f"     Loading pupilstop from file, tag: {pupilstop_tag}")
         pupilstop_path = cm.filename('pupilstop', pupilstop_tag)
         pupilstop = Pupilstop.restore(pupilstop_path)
         # *** Returns numpy from FITS file ***
@@ -201,28 +207,19 @@ def load_influence_functions(cm, dm_params, pixel_pupil, verbose=False, is_inver
     Returns:
         tuple: (dm_array, dm_mask) - For DM: 3D array, For inverse basis: 2D array
     """
-    if 'ifunc_object' in dm_params or 'ifunc_tag' in dm_params: 
-        if 'ifunc_tag' in dm_params:
-            ifunc_tag = dm_params['ifunc_tag']
-            if verbose:
-                print(f"     Loading influence function from file, tag: {ifunc_tag}")
-        else:
-            ifunc_tag = dm_params['ifunc_object']
-            if verbose:
-                print(f"     Loading influence function from file, tag: {ifunc_tag}")
+
+    ifunc_tag = get_tag_or_object(dm_params, 'ifunc')
+
+    if ifunc_tag is not None:
+        if verbose:
+            print(f"     Loading influence function from file, tag: {ifunc_tag}")
         ifunc_path = cm.filename('ifunc', ifunc_tag)
         ifunc = IFunc.restore(ifunc_path)
 
-        m2c_tag = None
-        if 'm2c_tag' in dm_params:
-            m2c_tag = dm_params['m2c_tag']
-            if verbose:
-                print(f"     Loading M2C from file, tag: {m2c_tag}")
-        if 'm2c_object' in dm_params:
-            m2c_tag = dm_params['m2c_object']
-            if verbose:
-                print(f"     Loading M2C from file, tag: {m2c_tag}")
+        m2c_tag = get_tag_or_object(dm_params, 'm2c')
         if m2c_tag is not None:
+            if verbose:
+                print(f"     Loading M2C from file, tag: {m2c_tag}")
             m2c_path = cm.filename('m2c', m2c_tag)
             m2c = M2C.restore(m2c_path)
             # multiply the influence function by the M2C
@@ -280,20 +277,22 @@ def load_influence_functions(cm, dm_params, pixel_pupil, verbose=False, is_inver
         # ... existing code for Zernike generation ...
         if verbose:
             print(f"     Loading influence function from type_str: {dm_params['type_str']}")
-        from specula.lib.compute_zern_ifunc import compute_zern_ifunc
+
         nmodes = dm_params.get('nmodes', 100)
         obsratio = dm_params.get('obsratio', 0.0)
         npixels = dm_params.get('npixels', pixel_pupil)
 
-        if 'mask_object' in dm_params:
-            mask_tag = dm_params['mask_object']
+        mask_tag = get_tag_or_object(dm_params, 'mask')
+        if mask_tag is not None:
             mask_path = cm.filename('pupilstop', mask_tag)
-            print(f"     Loading mask from file, tag: {mask_tag}")
+            if verbose:
+                print(f"     Loading mask from file, tag: {mask_tag}")
             pupilstop = Pupilstop.restore(mask_path)
             mask = pupilstop.A
         else:
             mask = None
-            print("     No mask provided. Using default mask.")
+            if verbose:
+                print("     No mask provided. Using default mask.")
 
         z_ifunc, z_mask = compute_zern_ifunc(npixels, nmodes, xp=np, dtype=float,
                                              obsratio=obsratio, diaratio=1.0,
@@ -327,11 +326,8 @@ def find_subapdata(cm, wfs_params, wfs_key, params, verbose=False):
     subap_tag = None
 
     # First check - Try to get subapdata from WFS params
-    if 'subapdata_object' in wfs_params or 'subapdata_tag' in wfs_params:
-        if 'subapdata_tag' in wfs_params:
-            subap_tag = wfs_params['subapdata_tag']
-        else:
-            subap_tag = wfs_params['subapdata_object']
+    subap_tag = get_tag_or_object(wfs_params, 'subapdata')
+    if subap_tag is not None:
         if verbose:
             print("     Loading subapdata from file, tag:", subap_tag)
         subap_path = cm.filename('subapdata', subap_tag)
@@ -363,31 +359,19 @@ def find_subapdata(cm, wfs_params, wfs_key, params, verbose=False):
 
         if slopec_key:
             slopec_params = params[slopec_key]
-            if 'subapdata_tag' in slopec_params:
+            subap_tag = get_tag_or_object(slopec_params, 'subapdata')
+            if subap_tag is not None:
                 if verbose:
-                    print(f"     Loading subapdata from {slopec_key}, tag:",
-                          slopec_params['subapdata_tag'])
-                subap_tag = slopec_params['subapdata_tag']
-                subap_path = cm.filename('subap_data', subap_tag)
-            elif 'subapdata_object' in slopec_params:
-                if verbose:
-                    print(f"     Loading subapdata from {slopec_key}, tag:",
-                          slopec_params['subapdata_object'])
-                subap_tag = slopec_params['subapdata_object']
+                    print(f"     Loading subapdata from {slopec_key}, tag:", subap_tag)
                 subap_path = cm.filename('subapdata', subap_tag)
 
     # Third check - Try generic slopec section
     elif 'slopec' in params:
         slopec_params = params['slopec']
-        if 'subapdata_tag' in slopec_params:
+        subap_tag = get_tag_or_object(slopec_params, 'subapdata')
+        if subap_tag is not None:
             if verbose:
-                print("     Loading subapdata from slopec, tag:", slopec_params['subapdata_tag'])
-            subap_tag = slopec_params['subapdata_tag']
-            subap_path = cm.filename('sub_aperture_data', subap_tag)
-        elif 'subapdata_object' in slopec_params:
-            if verbose:
-                print("     Loading subapdata from slopec, tag:", slopec_params['subapdata_object'])
-            subap_tag = slopec_params['subapdata_object']
+                print("     Loading subapdata from slopec, tag:", subap_tag)
             subap_path = cm.filename('subapdata', subap_tag)
 
     if subap_path is None:
@@ -465,8 +449,8 @@ def build_source_filename_part(source_config, zenith_angle=None):
     parts = []
 
     # Polar coordinates
-    if 'polar_coordinate' in source_config:
-        pol_coords = source_config['polar_coordinate']
+    if 'polar_coordinate' in source_config or 'polar_coordinates' in source_config:
+        pol_coords = source_config.get('polar_coordinate', source_config.get('polar_coordinates'))
         if isinstance(pol_coords, (list, tuple)) and len(pol_coords) >= 2:
             # Format: pdXXaYY where XX is angle in arcsec, YY is azimuth in degrees
             angle_arcsec = pol_coords[0]
@@ -475,6 +459,10 @@ def build_source_filename_part(source_config, zenith_angle=None):
 
     # Height
     height = source_config.get('height', float('inf'))
+    if zenith_angle is not None:
+        zenith_rad = np.deg2rad(zenith_angle)
+        airmass = 1.0 / np.cos(zenith_rad)
+        height *= airmass
     if height != float('inf'):
         parts.append(f"h{height:.0f}")
 
@@ -543,6 +531,16 @@ def build_wfs_filename_part(wfs_config, wfs_type=None):
         npx = wfs_config['subap_npx']
         parts.append(f"np{npx}")
 
+    # Shifts
+    if 'xShiftPhInPixel' in wfs_config or 'yShiftPhInPixel' in wfs_config:
+        x_shift = wfs_config.get('xShiftPhInPixel', 0)
+        y_shift = wfs_config.get('yShiftPhInPixel', 0)
+        parts.append(f"shiftX{x_shift}Y{y_shift}")
+
+    # Rotation
+    if 'rotAnglePhInDeg' in wfs_config:
+        parts.append(f"rot{wfs_config['rotAnglePhInDeg']}")
+
     return "_".join(parts) if parts else "wfs"
 
 
@@ -565,11 +563,13 @@ def build_component_filename_part(component_config, component_type='dm', include
         prefix = 'layH' if component_type == 'layer' else 'dmH'
         parts.append(f"{prefix}{component_config.get('height', 0.0):.1f}")
 
-    if 'ifunc_tag' in component_config:
-        parts.append(f"ifunc_{component_config['ifunc_tag']}")
+    ifunc_tag = get_tag_or_object(component_config, 'ifunc')
+    if ifunc_tag is not None:
+        parts.append(f"ifunc_{ifunc_tag}")
 
-    if 'm2c_tag' in component_config:
-        parts.append(f"m2c_{component_config['m2c_tag']}")
+    m2c_tag = get_tag_or_object(component_config, 'm2c')
+    if m2c_tag is not None:
+        parts.append(f"m2c_{m2c_tag}")
 
     return "_".join(parts) if parts else component_type
 
@@ -1067,8 +1067,10 @@ def extract_source_info(config, wfs_name):
                 source = config[source_name]
                 source_info['type'] = 'lgs' if 'lgs' in source_name else 'ngs'
                 source_info['name'] = source_name
-                if 'polar_coordinates' in source:
-                    source_info['pol_coords'] = source['polar_coordinates']
+                if 'polar_coordinate' in source_config or 'polar_coordinates' in source:
+                    source_info['pol_coords'] = source.get(
+                        'polar_coordinate', source.get('polar_coordinates')
+                    )
                 if 'height' in source:
                     source_info['height'] = source['height']
                 if 'wavelengthInNm' in source:
@@ -1078,10 +1080,10 @@ def extract_source_info(config, wfs_name):
     if not source_info and 'on_axis_source' in config:
         source_info['type'] = 'ngs'
         source_info['name'] = 'on_axis_source'
-        if config['on_axis_source'].get('polar_coordinates'):
-            source_info['pol_coords'] = config['on_axis_source']['polar_coordinates']
-        elif config['on_axis_source'].get('polar_coordinate'):
-            source_info['pol_coords'] = config['on_axis_source']['polar_coordinate']
+        if config['on_axis_source'].source.get('polar_coordinate', source.get('polar_coordinates')):
+            source_info['pol_coords'] = config['on_axis_source'].get(
+                'polar_coordinate', config['on_axis_source'].get('polar_coordinates')
+            )
         else:
             source_info['pol_coords'] = [0, 0]
         source_info['wavelength'] = config['on_axis_source'].get('wavelengthInNm', 750)
@@ -1144,23 +1146,25 @@ def validate_opt_sources(params, verbose=False):
             print("Warning: No optical sources (source_optX) found in configuration")
         return True
 
-    required_fields = ['polar_coordinate']
-    optional_fields = ['height', 'weight']
-
     for opt in opt_list:
         opt_name = opt['name']
         opt_config = opt['config']
 
         # Check required fields
-        for field in required_fields:
-            if field not in opt_config:
-                raise ValueError(f"{opt_name} missing required field: {field}")
+        if 'polar_coordinate' not in opt_config:
+            if 'polar_coordinates' in opt_config:
+                    raise ValueError(f"{opt_name} missing required field:"
+                                     f" polar_coordinate or polar_coordinates")
+            else:
+                pc_string = "polar_coordinates"
+        else:
+            pc_string = "polar_coordinate"
 
         # Validate polar_coordinate format
-        pol_coo = opt_config['polar_coordinate']
+        pol_coo = opt_config[pc_string]
         if not isinstance(pol_coo, (list, tuple)) or len(pol_coo) != 2:
             raise ValueError(
-                f"{opt_name}.polar_coordinate must be [distance, angle], "
+                f"{opt_name}.{pc_string} must be [distance, angle], "
                 f"got {pol_coo}"
             )
 
@@ -1178,7 +1182,7 @@ def validate_opt_sources(params, verbose=False):
     if verbose:
         print(f"✓ Validated {len(opt_list)} optical sources")
         for opt in opt_list:
-            pol_coo = opt['config']['polar_coordinate']
+            pol_coo = opt['config'][pc_string]
             height = opt['config']['height']
             weight = opt['config']['weight']
             h_str = f"{height:.0f}m" if not np.isinf(height) else "∞ (NGS)"
@@ -1433,11 +1437,13 @@ def generate_pm_filename(config_file, opt_index=None,
             parts.append(f"mn{component_nmodes}")
 
     # Add ifunc/m2c tags
-    if 'ifunc_tag' in component_config:
-        parts.append(f"ifunc_{component_config['ifunc_tag']}")
+    ifunc_tag = get_tag_or_object(component_config, 'ifunc')
+    if ifunc_tag is not None:
+        parts.append(f"ifunc_{ifunc_tag}")
 
-    if 'm2c_tag' in component_config:
-        parts.append(f"m2c_{component_config['m2c_tag']}")
+    m2c_tag = get_tag_or_object(component_config, 'm2c')
+    if m2c_tag is not None:
+        parts.append(f"m2c_{m2c_tag}")
 
     # Add timestamp if requested
     if timestamp:
@@ -1479,7 +1485,7 @@ def generate_pm_filenames(config_file, timestamp=False):
     # Generate filenames for all optical source and DM combinations
     for source in opt_sources:
         source_config = source['config']
-        source_coords = source_config.get('polar_coordinates', [0.0, 0.0])
+        source_coords = source_config.get('polar_coordinate', source_config.get('polar_coordinates', [0.0, 0.0]))
         source_height = source_config.get('height', float('inf'))
 
         for dm in dm_list:
