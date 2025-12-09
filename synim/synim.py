@@ -494,7 +494,6 @@ def interaction_matrix(pup_diam_m, pup_mask, dm_array, dm_mask, dm_height, dm_ro
         )
 
     if display:
-        # *** MODIFIED: Convert to CPU for plotting ***
         idx_plot = [2, 5]
         trans_dm_array_cpu = cpuArray(trans_dm_array)
         fig, axs = plt.subplots(2, 2)
@@ -779,6 +778,19 @@ def interaction_matrices_multi_wfs(pup_diam_m, pup_mask,
 
             if verbose:
                 print(f"    ✓ IM shape: {im.shape}")
+
+    display = False  # Disable display for multi-WFS case
+    if display:
+        idx_plot = [0, 5]
+        trans_dm_array_cpu = cpuArray(trans_dm_array)
+        fig, axs = plt.subplots(2, 2)
+        im3 = axs[0, 0].imshow(trans_dm_array_cpu[:, :, idx_plot[0]], cmap='seismic')
+        axs[0, 1].imshow(trans_dm_array_cpu[:, :, idx_plot[0]], cmap='seismic')
+        axs[1, 0].imshow(trans_dm_array_cpu[:, :, idx_plot[1]], cmap='seismic')
+        axs[1, 1].imshow(trans_dm_array_cpu[:, :, idx_plot[1]], cmap='seismic')
+        fig.suptitle(f'DM shapes (modes {idx_plot[0]} and {idx_plot[1]})')
+        fig.colorbar(im3, ax=axs.ravel().tolist(), fraction=0.02)
+        plt.show()
 
     if verbose:
         print(f"\n{'='*60}")
