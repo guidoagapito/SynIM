@@ -707,9 +707,6 @@ class ParamsManager:
                     # *** Convert to CPU for transpose and saving ***
                     im = cpuArray(im)
 
-                    # Transpose to be coherent with SPECULA convention
-                    im = im.transpose()
-
                     if verbose_flag:
                         print(f"  Saving {wfs_name}: {wfs_info['filename']}")
                         print(f"    IM shape: {im.shape}")
@@ -882,7 +879,7 @@ class ParamsManager:
         im_dtype = first_intmat_obj.intmat.dtype
 
         # Create the full interaction matrix
-        im_full = np.zeros((n_tot_modes, n_tot_slopes), dtype=im_dtype)
+        im_full = np.zeros((n_tot_slopes, n_tot_modes), dtype=im_dtype)
 
         # Load and assemble the interaction matrices
         for ii in range(n_wfs):
@@ -928,7 +925,7 @@ class ParamsManager:
                     idx_start = sum(n_slopes_list[:ii])
 
                 # Check if we have enough modes in the loaded IM
-                n_modes_available = im.shape[0]
+                n_modes_available = im.shape[1]
 
                 # Filter actual_mode_idx to valid indices only
                 actual_mode_idx = [mi for mi in mode_idx if mi < n_modes_available]
@@ -939,8 +936,8 @@ class ParamsManager:
                     continue  # Skip this block
 
                 try:
-                    im_full[actual_mode_idx, idx_start:idx_start+n_slopes_list[ii]] = \
-                        im[actual_mode_idx, :]
+                    im_full[idx_start:idx_start+n_slopes_list[ii], actual_mode_idx] = \
+                        im[:, actual_mode_idx]
                 except Exception as e:
                     print(f"Error assembling IM for WFS {ii+1}, Component {comp_ind}: {e}")
                     print(f"IM shape: {im.shape}, mode_idx (min/max):"
@@ -977,7 +974,7 @@ class ParamsManager:
         6. im_filtered = im - im0
         
         Args:
-            im (np.ndarray): Interaction matrix (n_modes, n_slopes)
+            im (np.ndarray): Interaction matrix (n_slopes, n_modes)
             wfs_type (str): WFS type ('lgs', 'ngs', 'ref')
             wfs_index (int): WFS index (1-based)
             verbose (bool): Whether to print information
@@ -993,16 +990,30 @@ class ParamsManager:
         elif wfs_type == 'ref':
             slopec_key = f'slopec_ref{wfs_index}'
         else:
+            if verbose:
+                print(f"  Unknown WFS type: {wfs_type}, cannot apply filter.")
             return im  # No filtering
 
         # Check if filtmat_tag exists
         if slopec_key not in self.params:
-            return im
+            slopec_key = f'slopec_lgs{wfs_index}'  # Fallback key
+            if slopec_key not in self.params:
+                if verbose:
+                    print(f"  No slopec parameters for key: {slopec_key}")
+                return im
 
         slopec_params = self.params[slopec_key]
 
         if 'filtmat_tag' not in slopec_params:
-            return im
+            if 'filtmat_data' not in slopec_params:
+                if verbose:
+                    print(f"  No filtmat_tag or filtmat_data in slopec parameters for key:"
+                          f" {slopec_key}")
+                return im
+            else:
+                filtmat_key = 'filtmat_data'
+        else:
+            filtmat_key = 'filtmat_tag'
 
         # Check if filtName is present (inline filtering, already applied)
         if 'filtName' in slopec_params:
@@ -1010,63 +1021,57 @@ class ParamsManager:
                 print(f"  Filter already applied inline (filtName present)")
             return im
 
-        filtmat_tag = slopec_params['filtmat_tag']
+        filtmat_tag = slopec_params[filtmat_key]
 
         if verbose:
             print(f"  Applying offline slopes filter: {filtmat_tag}")
 
         # Load filter matrix from CalibManager
-        try:
-            # if filtmat directory exists, use it, otherwise use default data directory
-            filtmat_dir = os.path.join(self.cm.root_dir, 'filtmat')
-            if os.path.exists(filtmat_dir):
-                filtmat_path = os.path.join(filtmat_dir, f'{filtmat_tag}.fits')
-            else:
-                filtmat_path = os.path.join(self.cm.root_dir, 'data', f'{filtmat_tag}.fits')
+        # if filtmat directory exists, use it, otherwise use default data directory
+        filtmat_dir = os.path.join(self.cm.root_dir, 'filtmat')
+        if os.path.exists(filtmat_dir):
+            filtmat_path = os.path.join(filtmat_dir, f'{filtmat_tag}.fits')
+        else:
+            filtmat_path = os.path.join(self.cm.root_dir, 'data', f'{filtmat_tag}.fits')
 
-            if not os.path.exists(filtmat_path):
-                if verbose:
-                    print(f"    Warning: Filter file not found: {filtmat_path}")
-                return im
-
-            with fits.open(filtmat_path) as hdul:
-                filtmat = hdul[0].data  # Shape: (n_slopes, n_modes, 2)
-
+        if not os.path.exists(filtmat_path):
             if verbose:
-                print(f"    Loaded filtmat shape: {filtmat.shape}")
-
-            # Extract filter components
-            # IDL convention: filtmat[*,*,0] is intmat, filtmat[*,*,1] is recmat
-            filt_int_mat = filtmat[:, :, 0]  # (n_modes, n_slopes)
-            filt_rec_mat = filtmat[:, :, 1]  # (n_modes, n_slopes)
-
-            if verbose:
-                print(f"    filt_int_mat shape: {filt_int_mat.shape}")
-                print(f"    filt_rec_mat shape: {filt_rec_mat.shape}")
-                print(f"    IM shape before filtering: {im.shape}")
-
-            # Apply filtering: im_filtered = im - (im @ filt_rec_mat) @ filt_int_mat
-            # im has shape (n_dm_modes, n_slopes)
-            # filt_rec_mat has shape (n_filter_modes, n_slopes)
-            # filt_int_mat has shape (n_slopes, n_filter_modes)
-
-            m = im @ filt_rec_mat.T  # (n_dm_modes, n_filter_modes)
-            im0 = m @ filt_int_mat  # (n_dm_modes, n_slopes)
-            im_filtered = im - im0
-
-            if verbose:
-                print(f"    IM shape after filtering: {im_filtered.shape}")
-                rms_before = np.sqrt(np.mean(im**2))
-                rms_after = np.sqrt(np.mean(im_filtered**2))
-                print(f"    RMS before: {rms_before:.4e}, after: {rms_after:.4e}")
-                print(f"    Filtered power: {100*(1-rms_after/rms_before):.2f}%")
-
-            return im_filtered
-
-        except Exception as e:
-            if verbose:
-                print(f"    Warning: Could not apply filter: {e}")
+                print(f"    Warning: Filter file not found: {filtmat_path}")
             return im
+
+        with fits.open(filtmat_path) as hdul:
+            filtmat = hdul[0].data  # Shape: (2, n_slopes, n_modes)
+
+        if verbose:
+            print(f"    Loaded filtmat shape: {filtmat.shape}")
+
+        # Extract filter components
+        # IDL convention: filtmat[*,*,0] is intmat, filtmat[*,*,1] is recmat
+        filt_int_mat = filtmat[0, :, :]  # (n_slopes, n_modes)
+        filt_rec_mat = filtmat[1, :, :].T  # (n_modes, n_slopes)
+
+        if verbose:
+            print(f"    filt_int_mat shape: {filt_int_mat.shape}")
+            print(f"    filt_rec_mat shape: {filt_rec_mat.shape}")
+            print(f"    IM shape before filtering: {im.shape}")
+
+        # Apply filtering: im_filtered = im - filt_int_mat @ (filt_rec_mat @ im)
+        # im has shape (_slopes, n_dm_modes)
+        # filt_rec_mat has shape (n_filter_modes, n_slopes)
+        # filt_int_mat has shape (n_slopes, n_filter_modes)
+
+        m = filt_rec_mat @ im  # (n_filter_modes, n_dm_modes)
+        im0 = filt_int_mat @ m   # (n_slopes, n_dm_modes)
+        im_filtered = im - im0
+
+        if verbose:
+            print(f"    IM shape after filtering: {im_filtered.shape}")
+            rms_before = np.sqrt(np.mean(im**2))
+            rms_after = np.sqrt(np.mean(im_filtered**2))
+            print(f"    RMS before: {rms_before:.4e}, after: {rms_after:.4e}")
+            print(f"    Filtered power: {100*(1-rms_after/rms_before):.2f}%")
+
+        return im_filtered
 
 
     def _load_base_inv_array(self, verbose):
@@ -1710,7 +1715,7 @@ class ParamsManager:
                     print(f"  Using default noise variance: {noise_variance[0]:.2e}")
 
             # Build diagonal noise covariance
-            n_slopes_total = im_full.shape[1]
+            n_slopes_total = im_full.shape[0]
             C_noise = np.zeros((n_slopes_total, n_slopes_total))
 
             n_slopes_list = []
@@ -1745,7 +1750,7 @@ class ParamsManager:
             print(f"-" * 70)
 
         reconstructor = compute_mmse_reconstructor(
-            im_full.T,  # Transpose for SPECULA convention
+            im_full,  # Transpose for SPECULA convention
             C_atm_full,
             noise_variance=None,  # Already in C_noise
             C_noise=C_noise,
@@ -2170,36 +2175,7 @@ class ParamsManager:
                 print(f"  Computing for: {n_modes} modes")
 
             # ========== GENERATE FILENAME (EXACTLY LIKE IDL) ==========
-            # IDL pattern from scao_calib__define.pro line ~620:
-            # fileNameCov = root_dir+'/ifunc/'+ifunc_tag (or m2c_tag)
-            #             + diam + 'diam_' + r0 + 'r0_' + L0 + 'L0.fits'
-
-            # Get ifunc_tag or m2c_tag from component params
-            if comp_key in self.params:
-                comp_cfg = self.params[comp_key]
-                if 'm2c_tag' in comp_cfg:
-                    base_tag = comp_cfg['m2c_tag']
-                elif 'ifunc_tag' in comp_cfg:
-                    base_tag = comp_cfg['ifunc_tag']
-                else:
-                    # Fallback: use component type and index
-                    base_tag = f"{component_type}{comp_idx}"
-            else:
-                base_tag = f"{component_type}{comp_idx}"
-
-            # Format numbers exactly like IDL (strtrim + format)
-            # IDL: strtrim(string(diam,format='(f12.1)'),2)
-            diam_str = f"{self.pup_diam_m:.1f}".strip()
-            # IDL: strtrim(string(r0,format='(f12.3)'),2)
-            r0_str = f"{r0:.3f}".strip()
-            # IDL: strtrim(string(L0,format='(f12.1)'),2)
-            L0_str = f"{L0:.1f}".strip()
-
-            # Assemble filename exactly like IDL
-            cov_filename = (f"{base_tag}{diam_str}diam_"
-                        f"{r0_str}r0_"
-                        f"{L0_str}L0.fits")
-
+            cov_filename, base_tag = generate_cov_filename(self.params[comp_key], self.pup_diam_m, r0, L0)
             cov_path = os.path.join(output_dir, cov_filename)
             cov_files.append(cov_path)
 
