@@ -1667,7 +1667,7 @@ def compute_mmse_reconstructor(interaction_matrix, C_atm,
         H_inv = np.linalg.inv(H)
     except np.linalg.LinAlgError:
         if verbose:
-            print("Warning: H inversion failed, using pseudo-inverse")
+            print("Warning: Using pseudo-inverse")
         H_inv = np.linalg.pinv(H)
 
     # Compute W = H^(-1) A' Cz^(-1)
