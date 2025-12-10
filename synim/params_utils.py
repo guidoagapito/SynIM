@@ -1554,7 +1554,8 @@ def generate_cov_filename(component_config, pup_diam_m, r0, L0):
 
 def compute_mmse_reconstructor(interaction_matrix, C_atm,
                               noise_variance=None, C_noise=None,
-                              cinverse=False, verbose=False):
+                              cinverse=False, use_inverse=False,
+                              verbose=False):
     """
     Compute the Minimum Mean Square Error (MMSE) reconstructor.
     
@@ -1566,6 +1567,7 @@ def compute_mmse_reconstructor(interaction_matrix, C_atm,
         C_noise (numpy.ndarray, optional): Covariance matrix of measurement noise (Cz).
                                          If None, it's built from noise_variance.
         cinverse (bool, optional): If True, C_atm and C_noise are already inverted.
+        use_inverse (bool, optional): If True, use standard inverse; otherwise, use pseudo-inverse.
         verbose (bool, optional): Whether to print detailed information during computation.
         
     Returns:
@@ -1637,9 +1639,9 @@ def compute_mmse_reconstructor(interaction_matrix, C_atm,
         else:
             if verbose:
                 print("Inverting C_atm matrix")
-            try:
+            if use_inverse:
                 C_atm_inv = np.linalg.inv(C_atm)
-            except np.linalg.LinAlgError:
+            else:
                 if verbose:
                     print("Warning: C_atm inversion failed, using pseudo-inverse")
                 C_atm_inv = np.linalg.pinv(C_atm)
