@@ -25,13 +25,22 @@ def compute_derivatives_with_extrapolation(data,mask=None):
     """
 
     if mask is not None:
+        # mask must be binary, set to 0 value below 0.999999 and 1 above
+        # the threshold is to avoid numerical issues due to interpolations
+        if mask.max() < 0.999999:
+            raise ValueError(f'Mask max value is {mask.max()}, expected binary mask with values 0 and 1.')
+        mask = xp.where(mask >= 0.999999, 1, 0)
+        # set to 0 values outside the mask
+        data = apply_mask(data, mask, fill_value=0)
         # Calculate indices and coefficients for extrapolation
         edge_pixels, reference_indices, coefficients = calculate_extrapolation_indices_coeffs(
             cpuArray(mask), debug=False, debug_pixels=None)
         edge_pixels = to_xp(xp, edge_pixels, dtype=xp.int32)
         reference_indices = to_xp(xp, reference_indices, dtype=xp.int32)
         coefficients = to_xp(xp, coefficients, dtype=float_dtype)
-        data = apply_extrapolation(data, edge_pixels, reference_indices, coefficients, in_place=True)
+        data = apply_extrapolation(
+            data, edge_pixels, reference_indices, coefficients, in_place=True
+        )
 
     # Compute x derivative
     dx = xp.gradient(data, axis=(1), edge_order=1)
@@ -646,7 +655,7 @@ def interaction_matrices_multi_wfs(pup_diam_m, pup_mask,
         # Use first WFS's gs_pol_coo and gs_height (they're all the same)
         gs_pol_coo_ref, gs_height_ref = wfs_gs_info[0]
 
-        trans_dm_array, trans_dm_mask, pup_mask_conv, derivatives_x, derivatives_y = \
+        trans_dm_array, trans_dm_mask, trans_pup_mask, derivatives_x, derivatives_y = \
             apply_dm_transformations_separated(
                 pup_diam_m, pup_mask, dm_array, dm_mask,
                 dm_height, dm_rotation,
@@ -685,7 +694,7 @@ def interaction_matrices_multi_wfs(pup_diam_m, pup_mask,
                 print(f"    FOV: {wfs_fov_arcsec}''")
 
             im = apply_wfs_transformations_separated(
-                derivatives_x, derivatives_y, pup_mask_conv, trans_dm_mask,
+                derivatives_x, derivatives_y, trans_pup_mask, trans_dm_mask,
                 wfs_nsubaps, wfs_rotation, wfs_translation, wfs_magnification,
                 wfs_fov_arcsec, pup_diam_m, idx_valid_sa=idx_valid_sa,
                 verbose=False,  # Suppress inner verbose
@@ -739,7 +748,7 @@ def interaction_matrices_multi_wfs(pup_diam_m, pup_mask,
             # Call the appropriate workflow function for THIS WFS
             if use_separated_this_wfs:
                 # SEPARATED: Two interpolation steps
-                trans_dm_array, trans_dm_mask, pup_mask_conv, derivatives_x, derivatives_y = \
+                trans_dm_array, trans_dm_mask, trans_pup_mask, derivatives_x, derivatives_y = \
                     apply_dm_transformations_separated(
                         pup_diam_m, pup_mask, dm_array, dm_mask,
                         dm_height, dm_rotation,
@@ -749,7 +758,7 @@ def interaction_matrices_multi_wfs(pup_diam_m, pup_mask,
                     )
 
                 im = apply_wfs_transformations_separated(
-                    derivatives_x, derivatives_y, pup_mask_conv, trans_dm_mask,
+                    derivatives_x, derivatives_y, trans_pup_mask, trans_dm_mask,
                     wfs_nsubaps, wfs_rotation, wfs_translation, wfs_magnification,
                     wfs_fov_arcsec, pup_diam_m, idx_valid_sa=idx_valid_sa,
                     verbose=False,
@@ -781,15 +790,18 @@ def interaction_matrices_multi_wfs(pup_diam_m, pup_mask,
 
     display = False  # Disable display for multi-WFS case
     if display:
-        idx_plot = [0, 5]
+        idx_plot = [0, 2, 5]
         trans_dm_array_cpu = cpuArray(trans_dm_array)
-        fig, axs = plt.subplots(2, 2)
-        im3 = axs[0, 0].imshow(trans_dm_array_cpu[:, :, idx_plot[0]], cmap='seismic')
-        axs[0, 1].imshow(trans_dm_array_cpu[:, :, idx_plot[0]], cmap='seismic')
-        axs[1, 0].imshow(trans_dm_array_cpu[:, :, idx_plot[1]], cmap='seismic')
-        axs[1, 1].imshow(trans_dm_array_cpu[:, :, idx_plot[1]], cmap='seismic')
-        fig.suptitle(f'DM shapes (modes {idx_plot[0]} and {idx_plot[1]})')
-        fig.colorbar(im3, ax=axs.ravel().tolist(), fraction=0.02)
+        derivatives_x_cpu = cpuArray(apply_mask(derivatives_x, trans_pup_mask, fill_value=xp.nan))
+        derivatives_y_cpu = cpuArray(apply_mask(derivatives_y, trans_pup_mask, fill_value=xp.nan))
+        for idx in idx_plot:
+            # 3 plots: DM shape, derivative x, derivative y
+            fig, axs = plt.subplots(1, 3, figsize=(15, 5))
+            im3 = axs[0].imshow(trans_dm_array_cpu[:, :, idx], cmap='seismic')
+            axs[1].imshow(derivatives_x_cpu[:, :, idx], cmap='seismic')
+            axs[2].imshow(derivatives_y_cpu[:, :, idx], cmap='seismic')
+            fig.suptitle(f'DM shapes (modes {idx_plot[0]} and {idx_plot[1]})')
+            fig.colorbar(im3, ax=axs.ravel().tolist(), fraction=0.02)
         plt.show()
 
     if verbose:
