@@ -1527,6 +1527,31 @@ def generate_pm_filenames(config_file, timestamp=False):
     return filenames
 
 
+def generate_cov_filename(component_config, pup_diam_m, r0, L0):
+    """
+    Generate a unique filename for a covariance matrix, handling _tag/_object.
+    Args:
+        component_config (dict): DM or layer config
+        component_type (str): 'dm' or 'layer'
+        pup_diam_m (float): pupil diameter in meters
+        r0 (float): Fried parameter
+        L0 (float): Outer scale
+    Returns:
+        str: filename
+    """
+    # Prefer m2c_tag, then ifunc_tag, then fallback
+    base_tag = get_tag_or_object(component_config, 'm2c')
+    if base_tag is None:
+        base_tag = get_tag_or_object(component_config, 'ifunc')
+
+    diam_str = f"{pup_diam_m:.1f}".strip()
+    r0_str = f"{r0:.3f}".strip()
+    L0_str = f"{L0:.1f}".strip()
+
+    filename = f"covariance_{base_tag}_{diam_str}diam_{r0_str}r0_{L0_str}L0.fits"
+    return filename, base_tag
+
+
 def compute_mmse_reconstructor(interaction_matrix, C_atm,
                               noise_variance=None, C_noise=None,
                               cinverse=False, verbose=False):
@@ -1683,5 +1708,6 @@ __all__ = [
     'generate_im_filename',
     'generate_pm_filename',
     'generate_pm_filenames',
+    'generate_cov_filename',
     'compute_mmse_reconstructor',
 ]
