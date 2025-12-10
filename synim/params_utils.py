@@ -1643,7 +1643,7 @@ def compute_mmse_reconstructor(interaction_matrix, C_atm,
                 C_atm_inv = np.linalg.inv(C_atm)
             else:
                 if verbose:
-                    print("Warning: C_atm inversion failed, using pseudo-inverse")
+                    print("Warning: Using pseudo-inverse")
                 C_atm_inv = np.linalg.pinv(C_atm)
     else:
         # Matrices are already inverted
@@ -1663,9 +1663,9 @@ def compute_mmse_reconstructor(interaction_matrix, C_atm,
     # Compute H^(-1)
     if verbose:
         print("Inverting H")
-    try:
+    if use_inverse:
         H_inv = np.linalg.inv(H)
-    except np.linalg.LinAlgError:
+    else:
         if verbose:
             print("Warning: Using pseudo-inverse")
         H_inv = np.linalg.pinv(H)
