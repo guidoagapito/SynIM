@@ -1592,6 +1592,89 @@ def generate_cov_filename(component_config, pup_diam_m, r0, L0):
     return filename, base_tag
 
 
+def compute_layer_weights_from_turbulence(params, component_indices, component_type='layer', verbose=False):
+    """
+    Compute layer weights from atmospheric turbulence profile.
+    
+    Associates each layer/DM with the nearest turbulence height and assigns
+    the corresponding CN² contribution as weight.
+    
+    Args:
+        params (dict): Configuration dictionary with 'atmo' section
+        component_indices (list): List of component indices to compute weights for
+        component_type (str): Type of component ('layer' or 'dm')
+        verbose (bool): Whether to print detailed information
+        
+    Returns:
+        numpy.ndarray: Normalized weights for each component (sum to 1)
+        
+    Raises:
+        ValueError: If 'atmo' section or required fields are missing
+    """
+    if 'atmo' not in params:
+        raise ValueError("'atmo' section not found in configuration. Cannot compute layer weights.")
+
+    atmo = params['atmo']
+
+    # Get turbulence profile
+    if 'heights' not in atmo or 'cn2' not in atmo:
+        raise ValueError("'atmo.heights' and 'atmo.cn2' must be specified for automatic weight computation")
+
+    turb_heights = np.array(atmo['heights'])
+    turb_cn2 = np.array(atmo['cn2'])
+
+    if len(turb_heights) != len(turb_cn2):
+        raise ValueError(f"Mismatch: {len(turb_heights)} heights vs {len(turb_cn2)} CN² values")
+
+    # Normalize CN² to sum to 1
+    turb_cn2_norm = turb_cn2 / np.sum(turb_cn2)
+
+    if verbose:
+        print(f"\n{'='*60}")
+        print(f"Computing Layer Weights from Atmospheric Profile")
+        print(f"{'='*60}")
+        print(f"  Turbulence heights: {turb_heights}")
+        print(f"  CN² values: {turb_cn2}")
+        print(f"  Normalized CN²: {turb_cn2_norm}")
+
+    # Get layer heights
+    layer_heights = []
+    for comp_idx in component_indices:
+        comp_key = f'{component_type}{comp_idx}'
+        if comp_key not in params:
+            raise ValueError(f"Component {comp_key} not found in configuration")
+
+        layer_height = params[comp_key].get('height', 0.0)
+        layer_heights.append(layer_height)
+
+    layer_heights = np.array(layer_heights)
+
+    if verbose:
+        print(f"\n  Layer heights: {layer_heights}")
+
+    # Associate each layer with nearest turbulence height
+    weights = np.zeros(len(layer_heights))
+
+    for i, layer_h in enumerate(layer_heights):
+        # Find nearest turbulence height
+        idx_nearest = np.argmin(np.abs(turb_heights - layer_h))
+        weights[i] = turb_cn2_norm[idx_nearest]
+
+        if verbose:
+            print(f"  Layer {component_indices[i]} (h={layer_h:.0f}m) → "
+                  f"turb height {turb_heights[idx_nearest]:.0f}m, "
+                  f"weight={weights[i]:.4f}")
+
+    # Normalize weights to sum to 1
+    weights = weights / np.sum(weights)
+
+    if verbose:
+        print(f"\n  Final normalized weights: {weights}")
+        print(f"{'='*60}\n")
+
+    return weights
+
+
 def compute_mmse_reconstructor(interaction_matrix, C_atm,
                               noise_variance=None, C_noise=None,
                               cinverse=False, use_inverse=False,
