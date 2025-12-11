@@ -1104,11 +1104,22 @@ def extract_opt_list(params):
             - 'index': Source index (1-based, as integer)
             - 'config': Configuration dictionary for this source
     """
+    # Try YAML format first
+    proj_params = extract_projection_params(params)
+    if proj_params is not None:
+        # Convert projection format to opt_list format
+        opt_list = []
+        for i, src in enumerate(proj_params['opt_sources']):
+            opt_list.append({
+                'name': f'opt{i+1}',
+                'index': i+1,
+                'config': src  # Already has 'polar_coordinates' and 'weight'
+            })
+        return opt_list
+
+    # Fallback: IDL- style source_optX format
     opt_list = []
-
-    # Pattern to match source_optX keys
     pattern = re.compile(r'^source_opt(\d+)$')
-
     for key in params.keys():
         match = pattern.match(key)
         if match:
@@ -1121,7 +1132,6 @@ def extract_opt_list(params):
 
     # Sort by index
     opt_list.sort(key=lambda x: x['index'])
-
     return opt_list
 
 
@@ -1151,14 +1161,13 @@ def validate_opt_sources(params, verbose=False):
         opt_config = opt['config']
 
         # Check required fields
-        if 'polar_coordinate' not in opt_config:
-            if 'polar_coordinates' in opt_config:
-                    raise ValueError(f"{opt_name} missing required field:"
-                                     f" polar_coordinate or polar_coordinates")
-            else:
-                pc_string = "polar_coordinates"
+        if 'polar_coordinate' in opt_config:
+            pc_string = 'polar_coordinate'
+        elif 'polar_coordinates' in opt_config:
+            pc_string = 'polar_coordinates'
         else:
-            pc_string = "polar_coordinate"
+            raise ValueError(f"{opt_name} missing required field:"
+                             f" polar_coordinate or polar_coordinates")
 
         # Validate polar_coordinate format
         pol_coo = opt_config[pc_string]
@@ -1308,8 +1317,39 @@ def extract_source_config(params, wfs_key):
 
     # Default configuration
     return {
-        'polar_coordinate': [0.0, 0.0],
+        'polar_coordinates': [0.0, 0.0],
         'height': float('inf') if 'ngs' in wfs_key or 'ref' in wfs_key else 90000.0
+    }
+
+
+def extract_projection_params(params):
+    proj_params = params.get('projection', {})
+    if not proj_params:
+        return None
+
+    reg_factor = proj_params.get('reg_factor', 1e-6)
+    ifunc_inv_tag = proj_params['ifunc_inverse_tag']
+
+    opt_sources = proj_params['opt_sources']
+    polar_coordinates = opt_sources['polar_coordinates']  # list of [r, theta]
+    weights = opt_sources['weights']
+
+    if len(polar_coordinates) != len(weights):
+        raise ValueError(f"Mismatch: {len(polar_coordinates)} coordinates vs"
+                         f" {len(weights)} weights")
+
+    # Build the projection parameters dictionary
+    source_list = []
+    for (r, theta), weight in zip(polar_coordinates, weights):
+        source_list.append({
+            'polar_coordinates': [r, theta],
+            'weight': weight
+        })
+
+    return {
+        'reg_factor': reg_factor,
+        'ifunc_inverse_tag': ifunc_inv_tag,
+        'opt_sources': source_list
     }
 
 
@@ -1696,9 +1736,10 @@ __all__ = [
     'extract_layer_list',
     'extract_opt_list',
     'validate_opt_sources',
-    'load_pupilstop',  # *** ADD THIS ***
-    'load_influence_functions',  # *** ADD THIS TOO ***
-    'find_subapdata',  # *** AND THIS ***
+    'load_pupilstop',
+    'load_influence_functions',
+    'find_subapdata',
+    'extract_projection_params',
     'extract_source_coordinates',
     'extract_source_info',
     'determine_source_type',
