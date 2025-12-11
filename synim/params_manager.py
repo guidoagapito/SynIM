@@ -861,8 +861,13 @@ class ParamsManager:
             if wfs_params['idx_valid_sa'] is not None:
                 # Each valid subaperture produces X and Y slopes
                 n_slopes_this_wfs = len(wfs_params['idx_valid_sa']) * 2
-                n_slopes_list.append(n_slopes_this_wfs)
-                n_tot_slopes += n_slopes_this_wfs
+            else:
+                print(f"Warning: idx_valid_sa is None for WFS {wfs['name']},"
+                      f" setting n_slopes to 0")
+                n_slopes_this_wfs = 0
+            n_slopes_list.append(n_slopes_this_wfs)
+            n_tot_slopes += n_slopes_this_wfs
+
         n_slopes_per_wfs = n_tot_slopes // n_wfs
 
         if self.verbose:
@@ -882,7 +887,7 @@ class ParamsManager:
 
         # Check if modal_combination exists for this WFS type and component type
         modal_key = f'modes_{wfs_type}_{component_type}'
-        has_modal_combination = ('modal_combination' in self.params and 
+        has_modal_combination = ('modal_combination' in self.params and
                                 modal_key in self.params['modal_combination'])
 
         if has_modal_combination:
@@ -899,10 +904,13 @@ class ParamsManager:
                     else:
                         comp_start_mode = 0
 
+                    n_modes_effective = n_modes - comp_start_mode
                     component_start_modes.append(comp_start_mode)
                     component_indices.append(i + 1)
-                    mode_indices.append(list(range(comp_start_mode, comp_start_mode + n_modes)))
-                    total_modes += n_modes
+                    mode_indices.append(
+                        list(range(comp_start_mode, comp_start_mode + n_modes_effective))
+                    )
+                    total_modes += n_modes_effective
         else:
             # Default: use all components with all modes
             if self.verbose:
@@ -923,10 +931,14 @@ class ParamsManager:
                 else:
                     comp_start_mode = 0
 
+                n_modes_effective = n_modes - comp_start_mode
+
                 component_start_modes.append(comp_start_mode)
                 component_indices.append(comp_idx)
-                mode_indices.append(list(range(comp_start_mode, comp_start_mode + n_modes)))
-                total_modes += n_modes
+                mode_indices.append(
+                    list(range(comp_start_mode, comp_start_mode + n_modes_effective))
+                )
+                total_modes += n_modes_effective
 
         n_tot_modes = total_modes  # Total number of modes
 
@@ -957,7 +969,8 @@ class ParamsManager:
         for ii in range(n_wfs):
             for jj, comp_ind in enumerate(component_indices):
                 # Get the appropriate mode indices for this component
-                mode_idx = mode_indices[jj]
+                mode_idx = mode_indices[jj] # absolute mode indices
+                comp_start_mode = component_start_modes[jj]  # start_mode offset
 
                 # Generate and load the interaction matrix file
                 im_filename = generate_im_filename(
@@ -990,34 +1003,43 @@ class ParamsManager:
                         verbose=self.verbose
                     )
 
+                # Convert absolute mode indices to relative
+                n_modes_available = im.shape[1]
+
+                # mode_idx contains absolute indices [start_mode, start_mode+1, ...]
+                # IM contains all modes [0, 1, 2, ...]
+                # We need to extract [start_mode:start_mode+n_eff] from IM
+
+                # Calculate relative mode indices (which start from 0)
+                relative_mode_idx = [mi for mi in mode_idx if mi < n_modes_available]
+
+                if len(relative_mode_idx) == 0:
+                    if self.verbose:
+                        print(f"    Warning: No valid modes for WFS {ii+1}, Component {comp_ind}")
+                    continue
+
+                # Calculate starting column in full IM (absolute indices)
+                # but extract from im using relative indices
+                start_col_in_full = sum(len(mode_indices[k]) for k in range(jj))
+                n_modes_this_comp = len(relative_mode_idx)
+    
                 # Fill the appropriate section of the full interaction matrix
                 if ii == 0:
                     idx_start = 0
                 else:
                     idx_start = sum(n_slopes_list[:ii])
 
-                # Check if we have enough modes in the loaded IM
-                n_modes_available = im.shape[1]
-
-                # Filter actual_mode_idx to valid indices only
-                actual_mode_idx = [mi for mi in mode_idx if mi < n_modes_available]
-                if len(actual_mode_idx) == 0:
-                    if self.verbose:
-                        print(f"    Warning: No valid mode indices for WFS {ii+1},"
-                              f" Component {comp_ind} (requested: {mode_idx}, available:"
-                              f" {n_modes_available}) -- skipping.")
-                    continue  # Skip this block
-
                 try:
-                    im_full[idx_start:idx_start+n_slopes_list[ii], actual_mode_idx] = \
-                        im[:, actual_mode_idx]
+                    im_full[idx_start:idx_start+n_slopes_list[ii],
+                        start_col_in_full:start_col_in_full+n_modes_this_comp] = \
+                        im[:, relative_mode_idx]
                 except Exception as e:
                     print(f"Error assembling IM for WFS {ii+1}, Component {comp_ind}: {e}")
-                    print(f"IM shape: {im.shape}, mode_idx (min/max):"
-                          f" {min(actual_mode_idx)}/{max(actual_mode_idx)}")
-                    print(f"Filling im_full[{min(actual_mode_idx)}:{max(actual_mode_idx)+1},"
-                         f" {idx_start}:{idx_start+n_slopes_list[ii]}]")
-                    raise ValueError("Failed to assemble interaction matrix.")
+                    print(f"  IM shape: {im.shape}")
+                    print(f"  relative_mode_idx: {relative_mode_idx}")
+                    print(f"  Filling im_full[{idx_start}:{idx_start+n_slopes_list[ii]}, "
+                        f"{start_col_in_full}:{start_col_in_full+n_modes_this_comp}]")
+                    raise
 
         # Display summary
         if self.verbose:
@@ -1659,9 +1681,97 @@ class ParamsManager:
         return p_opt, pm_full_dm, pm_full_layer
 
 
+    def save_assembled_interaction_matrix(self, wfs_type='lgs', component_type='dm',
+                                        output_dir=None, overwrite=False,
+                                        apply_filter=True, verbose=None):
+        """
+        Assemble and save the full interaction matrix for a specific WFS type and component type.
+        
+        This is useful for:
+        - Debugging reconstructor computation
+        - Reusing assembled IMs without recomputing
+        - Comparing filtered vs unfiltered IMs
+        
+        Args:
+            wfs_type (str): Type of WFS ('lgs', 'ngs', 'ref')
+            component_type (str): Type of component ('dm' or 'layer')
+            output_dir (str, optional): Directory to save the assembled IM
+            overwrite (bool): Whether to overwrite existing file
+            apply_filter (bool): Whether to apply filtmat_tag filtering
+            verbose (bool, optional): Override the class's verbose setting
+            
+        Returns:
+            str: Path to saved file
+        """
+        verbose_flag = self.verbose if verbose is None else verbose
+
+        if output_dir is None:
+            output_dir = self.im_dir
+
+        os.makedirs(output_dir, exist_ok=True)
+
+        # Generate filename
+        config_name = (os.path.basename(self.params_file).split('.')[0]
+                    if isinstance(self.params_file, str) else "config")
+        filter_suffix = "_filtered" if apply_filter else ""
+        output_filename = f"im_full_{config_name}_{wfs_type}_{component_type}{filter_suffix}.fits"
+        output_path = os.path.join(output_dir, output_filename)
+
+        # Check if file exists
+        if os.path.exists(output_path) and not overwrite:
+            if verbose_flag:
+                print(f"✓ Assembled IM already exists: {output_filename}")
+            return output_path
+
+        if verbose_flag:
+            print(f"\n{'='*60}")
+            print(f"Assembling and Saving Interaction Matrix")
+            print(f"{'='*60}")
+            print(f"  WFS type: {wfs_type}")
+            print(f"  Component type: {component_type}")
+            print(f"  Apply filter: {apply_filter}")
+            print(f"  Output: {output_filename}")
+            print(f"{'='*60}\n")
+
+        # Assemble the IM
+        im_full, n_slopes_per_wfs, mode_indices, component_indices = \
+            self.assemble_interaction_matrices(
+                wfs_type=wfs_type,
+                output_im_dir=self.im_dir,
+                component_type=component_type,
+                save=False,  # Don't save as .npy, we'll save as FITS
+                apply_filter=apply_filter
+            )
+
+        if verbose_flag:
+            print(f"\n  Assembled IM shape: {im_full.shape}")
+            print(f"  Components: {component_indices}")
+            print(f"  Modes per component: {[len(mi) for mi in mode_indices]}")
+
+        # Save as Intmat (SPECULA format)
+        pupdata_tag = f"{config_name}_{wfs_type}_{component_type}"
+
+        intmat_obj = Intmat(
+            intmat=im_full,
+            pupdata_tag=pupdata_tag,
+            norm_factor=1.0,
+            target_device_idx=self.target_device_idx \
+                if hasattr(self, 'target_device_idx') else None,
+            precision=self.precision if hasattr(self, 'precision') else None
+        )
+
+        intmat_obj.save(output_path, overwrite=True)
+
+        if verbose_flag:
+            print(f"\n  ✓ Saved to: {output_filename}")
+            print(f"{'='*60}\n")
+
+        return output_path
+
+
     def compute_tomographic_reconstructor(self, r0, L0,
                                         wfs_type='lgs', component_type='layer',
-                                        weights=None, noise_variance=None,
+                                        noise_variance=None,
                                         C_noise=None, output_dir=None,
                                         save=False, overwrite=False,
                                         verbose=None):
@@ -1678,7 +1788,6 @@ class ParamsManager:
             L0 (float): Outer scale in meters
             wfs_type (str): Type of WFS ('lgs', 'ngs', 'ref')
             component_type (str): Type of component ('dm' or 'layer')
-            weights (list, optional): Weights for each component in covariance
             noise_variance (float or array, optional): Noise variance per WFS
             C_noise (np.ndarray, optional): Full noise covariance matrix
             output_dir (str, optional): Directory for saving results
@@ -1760,7 +1869,6 @@ class ParamsManager:
             C_atm_blocks=cov_result['C_atm_blocks'],
             component_indices=cov_result['component_indices'],
             mode_indices=mode_indices,
-            weights=weights,
             verbose=verbose_flag,
             return_inverse=True
         )
@@ -1816,7 +1924,9 @@ class ParamsManager:
                 wfs_params = self.get_wfs_params(wfs_type, i+1)
                 if wfs_params['idx_valid_sa'] is not None:
                     n_slopes_this_wfs = len(wfs_params['idx_valid_sa']) * 2
-                    n_slopes_list.append(n_slopes_this_wfs)
+                else:
+                    n_slopes_this_wfs = 0
+                n_slopes_list.append(n_slopes_this_wfs)
 
             for i in range(n_wfs):
                 start_idx = sum(n_slopes_list[:i])
@@ -2383,7 +2493,7 @@ class ParamsManager:
 
 
     def assemble_covariance_matrix(self, C_atm_blocks, component_indices,
-                                    mode_indices=None, weights=None,
+                                    mode_indices=None,
                                     wfs_type=None, component_type='layer',
                                     verbose=None, return_inverse=False):
         """
@@ -2395,7 +2505,6 @@ class ParamsManager:
             component_indices (list): List of component indices
             mode_indices (list, optional): List of mode index arrays for each component.
                                         If None, uses modal_combination.
-            weights (list, optional): Weights for each component. If None, uses equal weights.
             wfs_type (str, optional): WFS type for modal_combination lookup
             component_type (str): Type of component ('dm' or 'layer')
             verbose (bool, optional): Override the class's verbose setting
@@ -2437,9 +2546,13 @@ class ParamsManager:
                 print(f"Using modal_combination: {modal_key}")
                 print(f"  Mode counts: {modes_config}")
 
-        # Set default weights
-        if weights is None:
-            weights = [1.0] * len(component_indices)
+        # ==================== COMPUTE WEIGHTS FROM ATMOSPHERIC PROFILE ====================
+        weights = compute_layer_weights_from_turbulence(
+            self.params,
+            component_indices,
+            component_type=component_type,
+            verbose=verbose_flag
+        )
 
         # Calculate total modes
         total_modes = sum(len(mi) for mi in mode_indices)
@@ -2473,7 +2586,8 @@ class ParamsManager:
             valid_modes = [m for m in modes if m < C_atm_block.shape[0]]
             if len(valid_modes) == 0:
                 if verbose_flag:
-                    print(f"  Warning: No valid modes for component {i+1} (requested: {modes}, available: {C_atm_block.shape[0]}) -- skipping.")
+                    print(f"  Warning: No valid modes for component {i+1} (requested:"
+                          f" {modes}, available: {C_atm_block.shape[0]}) -- skipping.")
                 continue
 
             idx_modes = np.ix_(valid_modes, valid_modes)
