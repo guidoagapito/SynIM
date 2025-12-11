@@ -57,7 +57,7 @@ class ParamsManager:
                 self.params['main']['root_dir'] = root_dir
                 if verbose:
                     print(f"Root directory set to: {self.params['main']['root_dir']}")
-                    
+
         # initialize im_dir, pm_dir, rec_dir, cov_dir
         self.im_dir = self.params['main']['root_dir'] + '/synim/'
         self.pm_dir = self.params['main']['root_dir'] + '/synpm/'
@@ -79,6 +79,9 @@ class ParamsManager:
         # Load all WFS and DM configurations
         self.wfs_list = extract_wfs_list(self.params)
         self.dm_list = extract_dm_list(self.params)
+
+        # *** Extract and cache projection/reconstructor params ***
+        self._extract_advanced_params()
 
         if self.verbose:
             print(f"Found {len(self.wfs_list)} WFS(s) and {len(self.dm_list)} DM(s)")
@@ -136,6 +139,75 @@ class ParamsManager:
         print('---> valid pixels: ', int(np.sum(pup_mask > 0.5)))
 
         return pup_mask
+
+
+    def _extract_advanced_params(self):
+        """
+        Extract and cache advanced parameters for projection and reconstruction.
+        
+        This method consolidates all parameter extraction logic in one place,
+        determining the source of parameters based on priority:
+        1. YAML modern format (projection/reconstructor sections)
+        2. IDL legacy format (modalrec1 section)
+        3. Defaults
+        
+        Sets the following attributes:
+        - self.projection_params: dict or None
+        - self.proj_reg_factor: float
+        - self.reconstructor_params: dict or None (for future use)
+        """
+
+        # ==================== PROJECTION PARAMETERS ====================
+        # Priority 1: Try new YAML 'projection' section
+        self.projection_params = extract_projection_params(self.params)
+
+        if self.projection_params is not None:
+            # Use reg_factor from projection section
+            self.proj_reg_factor = float(self.projection_params['reg_factor'])
+
+            if self.verbose:
+                print(f"\n✓ Found 'projection' section:")
+                print(f"  Optical sources: {len(self.projection_params['opt_sources'])}")
+                print(f"  reg_factor: {self.proj_reg_factor}")
+                if 'ifunc_inverse_tag' in self.projection_params:
+                    print(f"  ifunc_inverse_tag: {self.projection_params['ifunc_inverse_tag']}")
+        else:
+            # Priority 2: Try IDL-style 'modalrec1.proj_regFactor'
+            modalrec1 = self.params.get('modalrec1', {})
+            self.proj_reg_factor = float(modalrec1.get('proj_regFactor', None))
+
+            if self.proj_reg_factor is None:
+                # Priority 3: Default
+                self.proj_reg_factor = 1e-8
+
+                if self.verbose:
+                    print(f"\n⚠ No projection parameters found, using defaults:")
+                    print(f"  reg_factor: {self.proj_reg_factor}")
+            else:
+                if self.verbose:
+                    print(f"\n✓ Using IDL-style projection parameters:")
+                    print(f"  reg_factor from modalrec1.proj_regFactor: {self.proj_reg_factor}")
+
+        # ==================== RECONSTRUCTOR PARAMETERS ====================
+        # (Reserved for future expansion - e.g., default r0, L0, etc.)
+        reconstructor_section = self.params.get('reconstructor', {})
+        if reconstructor_section:
+            self.reconstructor_params = {
+                'r0': reconstructor_section.get('r0', None),
+                'L0': reconstructor_section.get('L0', None),
+                'reg_factor': reconstructor_section.get('reg_factor', 1e-8),
+                'wfs_type': reconstructor_section.get('wfs_type', 'lgs'),
+                'component_type': reconstructor_section.get('component_type', 'layer')
+            }
+
+            if self.verbose:
+                print(f"\n✓ Found 'reconstructor' section:")
+                for key, val in self.reconstructor_params.items():
+                    if val is not None:
+                        print(f"  {key}: {val}")
+        else:
+            self.reconstructor_params = None
+
 
     def count_mcao_stars(self):
         """
@@ -931,8 +1003,9 @@ class ParamsManager:
                 actual_mode_idx = [mi for mi in mode_idx if mi < n_modes_available]
                 if len(actual_mode_idx) == 0:
                     if self.verbose:
-                        print(f"    Warning: No valid mode indices for WFS {ii+1}, Component {comp_ind} "
-                            f"(requested: {mode_idx}, available: {n_modes_available}) -- skipping.")
+                        print(f"    Warning: No valid mode indices for WFS {ii+1},"
+                              f" Component {comp_ind} (requested: {mode_idx}, available:"
+                              f" {n_modes_available}) -- skipping.")
                     continue  # Skip this block
 
                 try:
@@ -1078,7 +1151,19 @@ class ParamsManager:
         """Extract base_inv_array loading logic."""
         base_inv_array = None
 
-        # Priority 1: modal_analysis
+        # Priority 1: projection.ifunc_inverse_tag (YAML style)**
+        if self.projection_params is not None and 'ifunc_inverse_tag' in self.projection_params:
+            if verbose:
+                print(f"Loading from projection.ifunc_inverse_tag")
+            ifunc_inv_tag = self.projection_params['ifunc_inverse_tag']
+            dm_inv_params = {'ifunc_tag': ifunc_inv_tag}
+            base_inv_array, _ = load_influence_functions(
+                self.cm, dm_inv_params, self.pixel_pupil,
+                verbose=verbose, is_inverse_basis=True
+            )
+            return to_xp(xp, base_inv_array, dtype=float_dtype)
+
+        # Priority 2: modal_analysis
         if 'modal_analysis' in self.params:
             if verbose:
                 print("Loading from modal_analysis")
@@ -1087,7 +1172,7 @@ class ParamsManager:
                 verbose=verbose, is_inverse_basis=True
             )
 
-        # Priority 2: modalrec1.tag_ifunc4proj
+        # Priority 3: modalrec1.tag_ifunc4proj
         elif 'modalrec1' in self.params and 'tag_ifunc4proj' in self.params['modalrec1']:
             if verbose:
                 print("Loading from modalrec1.tag_ifunc4proj")
@@ -1100,7 +1185,7 @@ class ParamsManager:
                 verbose=verbose, is_inverse_basis=True
             )
 
-        # Priority 3: modalrec.tag_ifunc4proj
+        # Priority 4: modalrec.tag_ifunc4proj
         elif 'modalrec' in self.params and 'tag_ifunc4proj' in self.params['modalrec']:
             if verbose:
                 print("Loading from modalrec.tag_ifunc4proj")
@@ -1116,7 +1201,7 @@ class ParamsManager:
         if base_inv_array is None:
             raise ValueError("No valid base_inv_array found in configuration")
 
-        # *** MODIFIED: Convert to xp with float_dtype ***
+        # *** Convert to xp with float_dtype ***
         base_inv_array = to_xp(xp, base_inv_array, dtype=float_dtype)
 
         return base_inv_array
@@ -1367,6 +1452,14 @@ class ParamsManager:
         dm_list = extract_dm_list(self.params)
         layer_list = extract_layer_list(self.params)
 
+        # check if list are None or empty
+        if opt_sources is None or len(opt_sources) == 0:
+            raise ValueError("No optical sources found in configuration.")
+        if (dm_list is None or len(dm_list) == 0):
+            raise ValueError("No DMs found in configuration.")
+        if (layer_list is None or len(layer_list) == 0):
+            raise ValueError("No layers found in configuration.")
+
         n_opt = len(opt_sources)
         n_dm = len(dm_list)
         n_layer = len(layer_list)
@@ -1548,6 +1641,8 @@ class ParamsManager:
         # Pseudoinverse with regularization
         if self.verbose:
             print(f"\nApplying regularization (reg_factor={reg_factor})")
+            print(f"Shape of tpdm_pdm: {tpdm_pdm.shape}")
+            print(f"Shape of tpdm_pl: {tpdm_pl.shape}")
 
         eps = 1e-14
         tpdm_pdm_inv = np.linalg.pinv(
@@ -1564,7 +1659,7 @@ class ParamsManager:
         return p_opt, pm_full_dm, pm_full_layer
 
 
-    def compute_tomographic_reconstructor(self, r0, L0, reg_factor=1e-8,
+    def compute_tomographic_reconstructor(self, r0, L0,
                                         wfs_type='lgs', component_type='layer',
                                         weights=None, noise_variance=None,
                                         C_noise=None, output_dir=None,
@@ -1581,7 +1676,6 @@ class ParamsManager:
         Args:
             r0 (float): Fried parameter in meters
             L0 (float): Outer scale in meters
-            reg_factor (float): Regularization factor for pseudoinverse
             wfs_type (str): Type of WFS ('lgs', 'ngs', 'ref')
             component_type (str): Type of component ('dm' or 'layer')
             weights (list, optional): Weights for each component in covariance
@@ -1612,7 +1706,6 @@ class ParamsManager:
             print(f"  WFS type: {wfs_type}")
             print(f"  Component type: {component_type}")
             print(f"  r0: {r0} m, L0: {L0} m")
-            print(f"  Regularization: {reg_factor}")
             print(f"{'='*70}\n")
 
         # ==================== STEP 1: Compute IMs on-the-fly ====================
@@ -1781,14 +1874,15 @@ class ParamsManager:
                         if isinstance(self.params_file, str) else "config")
 
             rec_filename = (f"rec_{config_name}_{wfs_type}_{component_type}_"
-                        f"r0{r0:.3f}_L0{L0:.1f}_reg{reg_factor:.0e}.fits")
+                        f"r0{r0:.3f}_L0{L0:.1f}.fits")
             rec_path = os.path.join(output_dir, rec_filename)
 
             # Save as Recmat (SPECULA format)
             recmat_obj = Recmat(
                 recmat=reconstructor,
                 norm_factor=1.0,
-                target_device_idx=self.target_device_idx if hasattr(self, 'target_device_idx') else None,
+                target_device_idx=self.target_device_idx \
+                    if hasattr(self, 'target_device_idx') else None,
                 precision=self.precision if hasattr(self, 'precision') else None
             )
             recmat_obj.save(rec_path, overwrite=True)
@@ -1820,16 +1914,17 @@ class ParamsManager:
             'rec_filename': rec_filename,
             'rec_path': rec_path,
             'r0': r0,
-            'L0': L0,
-            'reg_factor': reg_factor
+            'L0': L0
         }
 
 
-    def compute_tomographic_projection_matrix(self, reg_factor=1e-8,
-                                            output_dir=None, save=False,
+    def compute_tomographic_projection_matrix(self, output_dir=None, save=False,
                                             verbose=None):
         """
         Compute tomographic projection matrix following IDL compute_mcao_popt logic.
+        
+        Uses parameters extracted during initialization (from YAML 'projection' 
+        or IDL 'modalrec1' sections).
         
         Implements the standard MCAO projection:
             p_opt = (P_DM^T @ P_DM + reg_factor*I)^(-1) @ P_DM^T @ P_Layer
@@ -1838,14 +1933,13 @@ class ParamsManager:
         from multiple optical sources.
         
         Args:
-            reg_factor (float): Tikhonov regularization factor (default: 1e-8)
             output_dir (str, optional): Directory where PM files are stored
             save (bool): Whether to save the projection matrix to disk
             verbose (bool, optional): Override the class's verbose setting
         
         Returns:
             tuple: (p_opt, pm_full_dm, pm_full_layer, info)
-                - p_opt: Tomographic projection matrix (n_layer_modes, n_dm_modes)
+                - p_opt: Tomographic projection matrix (n_dm_modes, n_layer_modes)
                 - pm_full_dm: Full DM projection matrix (n_opt, n_dm_modes, n_pupil_modes)
                 - pm_full_layer: Full Layer projection matrix (n_opt, n_layer_modes, n_pupil_modes)
                 - info: dict with computation metadata
@@ -1853,10 +1947,17 @@ class ParamsManager:
 
         verbose_flag = self.verbose if verbose is None else verbose
 
+        # Use cached reg_factor from initialization
+        reg_factor = self.proj_reg_factor
+
         if verbose_flag:
             print(f"\n{'='*60}")
             print(f"Computing Tomographic Projection Matrix")
             print(f"{'='*60}")
+            if self.projection_params is not None:
+                print(f"  Using YAML 'projection' section")
+            else:
+                print(f"  Using IDL-style or default parameters")
             print(f"  Regularization factor: {reg_factor}")
             print(f"{'='*60}\n")
 
@@ -1875,18 +1976,25 @@ class ParamsManager:
             print(f"    pm_full_layer shape: {pm_full_layer.shape}")
             print(f"      (n_opt_sources, n_layer_modes, n_pupil_modes)")
 
-        # ==================== GET OPTICAL SOURCE WEIGHTS ====================
-        opt_sources = extract_opt_list(self.params)
+        # ==================== GET OPTICAL SOURCE WEIGHTS ====================            
+        if self.projection_params is not None:
+            # Use from projection section
+            opt_sources = self.projection_params['opt_sources']
+            weights_array = np.array([src['weight'] for src in opt_sources])
+        else:
+            # Fallback to extract_opt_list (which now handles both formats)
+            opt_sources_list = extract_opt_list(self.params)
+            opt_sources = [{'index': src['index'], **src['config']} for src in opt_sources_list]
+            weights_array = np.array([src.get('weight', 1.0) for src in opt_sources])
+
         n_opt = len(opt_sources)
+        total_weight = np.sum(weights_array)
 
         if n_opt == 0:
             raise ValueError(
                 "No optical sources (source_optX) found in configuration. "
                 "Cannot compute tomographic projection matrix."
             )
-
-        weights_array = np.array([src['config'].get('weight', 1.0) for src in opt_sources])
-        total_weight = np.sum(weights_array)
 
         if verbose_flag:
             print(f"\n  Optical sources: {n_opt}")
@@ -1905,8 +2013,6 @@ class ParamsManager:
         n_pupil_modes = pm_full_dm.shape[2]
 
         # Initialize accumulation matrices
-        # tpdm_pdm = P_DM^T @ P_DM (weighted sum over optical sources)
-        # tpdm_pl = P_DM^T @ P_Layer (weighted sum over optical sources)
         tpdm_pdm = np.zeros((n_dm_modes, n_dm_modes))
         tpdm_pl = np.zeros((n_dm_modes, n_layer_modes))
 
@@ -1921,7 +2027,7 @@ class ParamsManager:
             tpdm_pl += pdm_i @ pl_i.T * w
 
             if verbose_flag:
-                print(f"  Processed opt{opt_sources[i]['index']} (weight={w:.3f})")
+                print(f"  Processed opt{i+1} (weight={w:.3f})")
 
         if verbose_flag:
             print(f"\n  tpdm_pdm shape: {tpdm_pdm.shape} (P_DM^T @ P_DM)")
@@ -1967,31 +2073,30 @@ class ParamsManager:
             print(f"    (n_dm_modes, n_layer_modes) = ({n_dm_modes}, {n_layer_modes})")
 
         # ==================== SAVE MATRICES ====================
+        rec_filename = None
+        rec_path = None
+
         if save and output_dir is not None:
             os.makedirs(output_dir, exist_ok=True)
 
-            # *** SAVE AS RECMAT (SPECULA FORMAT) ***
             if verbose_flag:
                 print(f"\n{'='*60}")
                 print(f"Saving Results")
                 print(f"{'='*60}")
 
             # Create Recmat object for p_opt
-            # Note: Recmat expects shape (n_modes, n_slopes)
-            # p_opt has shape (n_dm_modes, n_layer_modes)
-            # In this context: DM modes are the "output modes" and Layer modes are the "input slopes"
             recmat_obj = Recmat(
                 recmat=p_opt,
-                norm_factor=1.0,  # No normalization applied
-                target_device_idx=self.target_device_idx if hasattr(self, 'target_device_idx') else None,
+                norm_factor=1.0,
+                target_device_idx=self.target_device_idx \
+                    if hasattr(self, 'target_device_idx') else None,
                 precision=self.precision if hasattr(self, 'precision') else None
             )
 
-            # Generate filename following SPECULA convention
+            # Generate filename
             config_name = (os.path.basename(self.params_file).split('.')[0]
                         if isinstance(self.params_file, str) else "config")
 
-            # Filename pattern: rec_<config>_tomographic_r<reg_factor>.fits
             rec_filename = f"rec_{config_name}_tomographic_r{reg_factor:.0e}.fits"
             rec_path = os.path.join(output_dir, rec_filename)
 
@@ -2002,7 +2107,6 @@ class ParamsManager:
                 print(f"  ✓ Saved tomographic reconstruction matrix (SPECULA format):")
                 print(f"    {rec_filename}")
                 print(f"    Shape: {p_opt.shape} (n_dm_modes, n_layer_modes)")
-                print(f"    Norm factor: {recmat_obj.norm_factor}")
 
             # Also save intermediate matrices as numpy arrays for debugging
             np.save(os.path.join(output_dir, "tpdm_pdm.npy"), cpuArray(tpdm_pdm))
@@ -2025,8 +2129,8 @@ class ParamsManager:
             'reg_factor': reg_factor,
             'condition_number': cond_number,
             'rcond': rcond,
-            'rec_filename': rec_filename if save else None,  # *** ADD FILENAME ***
-            'rec_path': rec_path if save else None  # *** ADD PATH ***
+            'rec_filename': rec_filename,
+            'rec_path': rec_path
         }
 
         if verbose_flag:

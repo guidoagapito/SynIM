@@ -208,7 +208,7 @@ def projection_matrix(pup_diam_m, pup_mask,
     # STEP 2: Apply SPECULA convention + Convert to xp with dtype
     # ================================================================
     if specula_convention:
-        # *** MODIFIED: Convert inputs to xp FIRST, then save original mask ***
+        # *** Convert inputs to xp FIRST, then save original mask ***
         dm_array = to_xp(xp, dm_array, dtype=float_dtype)
         dm_mask = to_xp(xp, dm_mask, dtype=float_dtype)
         pup_mask = to_xp(xp, pup_mask, dtype=float_dtype)
@@ -230,7 +230,7 @@ def projection_matrix(pup_diam_m, pup_mask,
                 verbose=False
             )
     else:
-        # *** MODIFIED: Still convert to xp even without SPECULA convention ***
+        # *** Still convert to xp even without SPECULA convention ***
         dm_array = to_xp(xp, dm_array, dtype=float_dtype)
         dm_mask = to_xp(xp, dm_mask, dtype=float_dtype)
         pup_mask = to_xp(xp, pup_mask, dtype=float_dtype)
