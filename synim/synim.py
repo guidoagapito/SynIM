@@ -732,7 +732,9 @@ def interaction_matrices_multi_wfs(pup_diam_m, pup_mask,
             # *** For this WFS, determine if we can use SEPARATED workflow ***
             has_dm_transform_wfs = has_transformations(dm_rotation, (0, 0), (1, 1)) or \
                                    gs_pol_coo_wfs != (0, 0) or gs_height_wfs != 0 or dm_height != 0
-            has_wfs_transform_wfs = has_transformations(wfs_rotation, wfs_translation, wfs_magnification)
+            has_wfs_transform_wfs = has_transformations(
+                wfs_rotation, wfs_translation, wfs_magnification
+            )
 
             # XOR: only one type of transform
             use_separated_this_wfs = (has_dm_transform_wfs and not has_wfs_transform_wfs) or \
@@ -740,10 +742,13 @@ def interaction_matrices_multi_wfs(pup_diam_m, pup_mask,
 
             if verbose:
                 print(f"  [{i+1}/{len(wfs_configs)}] {wfs_name}:")
-                print(f"    Subapertures: {wfs_nsubaps}x{wfs_nsubaps}, FOV: {wfs_fov_arcsec}''")
+                print(f"    Subapertures: {wfs_nsubaps}x{wfs_nsubaps}, FOV:"
+                      f" {wfs_fov_arcsec}''")
                 print(f"    GS: {gs_pol_coo_wfs}, height: {gs_height_wfs} m")
-                print(f"    DM transforms: {has_dm_transform_wfs}, WFS transforms: {has_wfs_transform_wfs}")
-                print(f"    → Using {'SEPARATED' if use_separated_this_wfs else 'COMBINED'} for this WFS")
+                print(f"    DM transforms: {has_dm_transform_wfs}, WFS transforms:"
+                      f" {has_wfs_transform_wfs}")
+                print(f"    → Using {'SEPARATED' if use_separated_this_wfs else 'COMBINED'}"
+                      f" for this WFS")
 
             # Call the appropriate workflow function for THIS WFS
             if use_separated_this_wfs:
@@ -811,3 +816,101 @@ def interaction_matrices_multi_wfs(pup_diam_m, pup_mask,
         print(f"{'='*60}\n")
 
     return im_dict, derivatives_info
+
+def compute_subaperture_illumination(pup_mask, wfs_nsubaps, wfs_rotation=0.0,
+                                    wfs_translation=(0.0, 0.0),
+                                    wfs_magnification=(1.0, 1.0),
+                                    idx_valid_sa=None, verbose=False,
+                                    specula_convention=True):
+    """
+    Compute the relative illumination of valid subapertures.
+    
+    This is useful for weighting the noise covariance matrix based on the 
+    actual flux received by each subaperture (edge subapertures receive less light).
+    
+    Parameters:
+    - pup_mask: numpy 2D array, pupil mask
+    - wfs_nsubaps: int, number of subapertures along diameter
+    - wfs_rotation: float, WFS rotation in degrees
+    - wfs_translation: tuple, WFS translation (x, y) in pixels
+    - wfs_magnification: tuple, WFS magnification (x, y)
+    - idx_valid_sa: array, indices of valid subapertures
+    - verbose: bool, whether to print information
+    - specula_convention: bool, whether to use SPECULA convention
+    
+    Returns:
+    - illumination: 1D array, relative illumination of each valid subaperture (normalized to max=1)
+    """
+
+    # *** Convert to target device ***
+    pup_mask = to_xp(xp, pup_mask, dtype=float_dtype)
+    if idx_valid_sa is not None:
+        idx_valid_sa = to_xp(xp, idx_valid_sa)
+
+    if specula_convention:
+        pup_mask = xp.transpose(pup_mask)
+
+    output_size = pup_mask.shape
+
+    # Apply WFS transformations to pupil mask
+    trans_pup_mask = rotshiftzoom_array(
+        pup_mask,
+        dm_translation=(0, 0),
+        dm_rotation=0,
+        dm_magnification=(1, 1),
+        wfs_translation=wfs_translation,
+        wfs_rotation=wfs_rotation,
+        wfs_magnification=wfs_magnification,
+        output_size=output_size
+    )
+    trans_pup_mask[trans_pup_mask < 0.5] = 0
+
+    if xp.max(trans_pup_mask) <= 0:
+        raise ValueError('Transformed pupil mask is empty.')
+
+    # Rebin to WFS resolution - use 'sum' to get total flux per subaperture
+    pup_mask_sa = rebin(trans_pup_mask, (wfs_nsubaps, wfs_nsubaps), method='sum')
+
+    # Normalize to theoretical maximum (fully illuminated subaperture)
+    max_illumination = xp.max(pup_mask_sa)
+    if max_illumination > 0:
+        pup_mask_sa = pup_mask_sa / max_illumination
+
+    # Flatten to 1D
+    illumination_2d = pup_mask_sa.flatten()
+
+    # Select only valid subapertures
+    if idx_valid_sa is not None:
+        if specula_convention and len(idx_valid_sa.shape) > 1 and idx_valid_sa.shape[1] == 2:
+            # Convert SPECULA format indices
+            sa_2d = xp.zeros((wfs_nsubaps, wfs_nsubaps), dtype=float_dtype)
+            sa_2d[idx_valid_sa[:, 0], idx_valid_sa[:, 1]] = 1
+            sa_2d = xp.transpose(sa_2d)
+            idx_temp = xp.where(sa_2d > 0)
+            idx_valid_sa_new = xp.zeros_like(idx_valid_sa)
+            idx_valid_sa_new[:, 0] = idx_temp[0]
+            idx_valid_sa_new[:, 1] = idx_temp[1]
+        else:
+            idx_valid_sa_new = idx_valid_sa
+
+        if len(idx_valid_sa_new.shape) > 1 and idx_valid_sa_new.shape[1] == 2:
+            width = wfs_nsubaps
+            linear_indices = idx_valid_sa_new[:, 0] * width + idx_valid_sa_new[:, 1]
+            illumination = illumination_2d[linear_indices.astype(xp.int32)]
+        else:
+            illumination = illumination_2d[idx_valid_sa_new.astype(xp.int32)]
+    else:
+        # Use all subapertures
+        illumination = illumination_2d
+
+    # Convert to CPU for return
+    illumination = cpuArray(illumination)
+
+    if verbose:
+        print(f"Subaperture illumination statistics:")
+        print(f"  Min: {np.min(illumination):.3f}")
+        print(f"  Max: {np.max(illumination):.3f}")
+        print(f"  Mean: {np.mean(illumination):.3f}")
+        print(f"  Std: {np.std(illumination):.3f}")
+
+    return illumination

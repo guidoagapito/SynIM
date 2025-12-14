@@ -189,24 +189,48 @@ class ParamsManager:
                     print(f"  reg_factor from modalrec1.proj_regFactor: {self.proj_reg_factor}")
 
         # ==================== RECONSTRUCTOR PARAMETERS ====================
-        # (Reserved for future expansion - e.g., default r0, L0, etc.)
-        reconstructor_section = self.params.get('reconstructor', {})
-        if reconstructor_section:
-            self.reconstructor_params = {
-                'r0': reconstructor_section.get('r0', None),
-                'L0': reconstructor_section.get('L0', None),
-                'reg_factor': reconstructor_section.get('reg_factor', 1e-8),
-                'wfs_type': reconstructor_section.get('wfs_type', 'lgs'),
-                'component_type': reconstructor_section.get('component_type', 'layer')
-            }
+        self.reconstructor_params = {}
+
+        # Try YAML format first (reconstruction section)
+        if 'reconstruction' in self.params:
+            recon_section = self.params['reconstruction']
+            self.sigma2inNm2 = float(recon_section.get('sigma2inNm2', 2e4))
 
             if self.verbose:
-                print(f"\n✓ Found 'reconstructor' section:")
-                for key, val in self.reconstructor_params.items():
-                    if val is not None:
-                        print(f"  {key}: {val}")
+                print(f"  Using YAML 'reconstruction' section")
+                print(f"  sigma2inNm2: {self.sigma2inNm2}")
+
+            self.reconstructor_params = {
+                'r0': recon_section.get('r0', None),
+                'L0': recon_section.get('L0', None),
+                'reg_factor': recon_section.get('reg_factor', 1e-8),
+                'wfs_type': recon_section.get('wfs_type', 'lgs'),
+                'component_type': recon_section.get('component_type', 'layer'),
+                'sigma2inNm2': self.sigma2inNm2
+            }
+
+        # Fallback to IDL-style modalrec1
+        elif 'modalrec1' in self.params:
+            modalrec1 = self.params['modalrec1']
+            self.sigma2inNm2 = float(modalrec1.get('sigma2innm2', 2e4))
+
+            if self.verbose:
+                print(f"  Using IDL 'modalrec1' section")
+                print(f"  sigma2inNm2: {self.sigma2inNm2}")
+
+            self.reconstructor_params = {
+                'sigma2inNm2': self.sigma2inNm2
+            }
+
+        # Default fallback
         else:
-            self.reconstructor_params = None
+            self.sigma2inNm2 = 2e4
+            if self.verbose:
+                print(f"  Using default sigma2inNm2: {self.sigma2inNm2}")
+
+            self.reconstructor_params = {
+                'sigma2inNm2': self.sigma2inNm2
+            }
 
 
     def count_mcao_stars(self):
@@ -1877,70 +1901,115 @@ class ParamsManager:
             print(f"  ✓ Covariance assembled: {C_atm_full.shape}")
             print()
 
-        # ==================== STEP 3: Build Noise Covariance ====================
+# ==================== STEP 3: Build Noise Covariance ====================
+if verbose_flag:
+    print(f"STEP 3: Building Noise Covariance Matrix")
+    print(f"-" * 70)
+
+if C_noise is None:
+    # Count WFSs
+    out = self.count_mcao_stars()
+    if wfs_type == 'lgs':
+        n_wfs = out['n_lgs']
+    elif wfs_type == 'ngs':
+        n_wfs = out['n_ngs']
+    else:
+        n_wfs = out['n_ref']
+
+    # Compute noise variance if not provided
+    if noise_variance is None:
+        # *** MODIFIED: Use sigma2inNm2 from params ***
+        params = self.params
+        wfs_params = params[f'sh_{wfs_type}1']
+        sa_side_in_m = (params['main']['pixel_pupil'] *
+                    params['main']['pixel_pitch'] /
+                    wfs_params['subap_on_diameter'])
+        subap_npx = wfs_params.get('subap_npx', wfs_params.get('sensor_npx'))
+        if subap_npx is None:
+            raise KeyError(f"Neither 'subap_npx' nor 'sensor_npx' found"
+                           f" in params['sh_{wfs_type}1']")
+        sensor_fov = (wfs_params['sensor_pxscale'] * subap_npx)
+
+        rad2arcsec = 3600. * 180. / np.pi
+
+        # *** Use extracted sigma2inNm2 ***
+        sigma2inNm2 = self.sigma2inNm2
+
+        sigma2inArcsec2 = sigma2inNm2 / (1./rad2arcsec * sa_side_in_m / 4. * 1e9)**2.
+        sigma2inSlope = sigma2inArcsec2 * 1./(sensor_fov/2.)**2.
+
+        # *** This is the BASE noise variance (for fully illuminated subaperture) ***
+        base_noise_variance = sigma2inSlope
+
         if verbose_flag:
-            print(f"STEP 3: Building Noise Covariance Matrix")
-            print(f"-" * 70)
+            print(f"  Base noise variance (fully illuminated): {base_noise_variance:.2e}")
+            print(f"  (from sigma2inNm2 = {sigma2inNm2:.2e})")
 
-        if C_noise is None:
-            # Count WFSs
-            out = self.count_mcao_stars()
-            if wfs_type == 'lgs':
-                n_wfs = out['n_lgs']
-            elif wfs_type == 'ngs':
-                n_wfs = out['n_ngs']
+        # *** Compute illumination for each WFS ***
+        n_slopes_total = im_full.shape[0]
+        C_noise = np.zeros((n_slopes_total, n_slopes_total))
+
+        n_slopes_list = []
+        illumination_list = []
+
+        for i in range(n_wfs):
+            wfs_params = self.get_wfs_params(wfs_type, i+1)
+
+            if wfs_params['idx_valid_sa'] is not None:
+                n_slopes_this_wfs = len(wfs_params['idx_valid_sa']) * 2
             else:
-                n_wfs = out['n_ref']
+                n_slopes_this_wfs = 0
 
-            # Compute noise variance if not provided
-            if noise_variance is None:
-                # Use default from params or compute from magnitude
-                params = self.params
-                wfs_params = params[f'sh_{wfs_type}1']
-                sa_side_in_m = (params['main']['pixel_pupil'] *
-                            params['main']['pixel_pitch'] /
-                            wfs_params['subap_on_diameter'])
-                subap_npx = wfs_params.get('subap_npx', wfs_params.get('sensor_npx'))
-                if subap_npx is None:
-                    raise KeyError(f"Neither 'subap_npx' nor 'sensor_npx' found"
-                                   f" in params['sh_{wfs_type}1']")
-                sensor_fov = (wfs_params['sensor_pxscale'] * subap_npx)
+            n_slopes_list.append(n_slopes_this_wfs)
 
-                rad2arcsec = 3600. * 180. / np.pi
-                sigma2inNm2 = 2e4  # Default noise in nm^2
-                sigma2inArcsec2 = sigma2inNm2 / (1./rad2arcsec * sa_side_in_m / 4. * 1e9)**2.
-                sigma2inSlope = sigma2inArcsec2 * 1./(sensor_fov/2.)**2.
-                noise_variance = [sigma2inSlope] * n_wfs
+            # *** Compute subaperture illumination for this WFS ***
+            if n_slopes_this_wfs > 0:
+                illumination = synim.compute_subaperture_illumination(
+                    pup_mask=self.pup_mask,
+                    wfs_nsubaps=wfs_params['wfs_nsubaps'],
+                    wfs_rotation=wfs_params['wfs_rotation'],
+                    wfs_translation=wfs_params['wfs_translation'],
+                    wfs_magnification=wfs_params['wfs_magnification'],
+                    idx_valid_sa=wfs_params['idx_valid_sa'],
+                    verbose=verbose_flag
+                )
 
-                if verbose_flag:
-                    print(f"  Using default noise variance: {noise_variance[0]:.2e}")
+                # *** Noise variance is INVERSELY proportional to illumination ***
+                # (less light = more noise)
+                # Each subaperture has noise variance = base_variance / illumination
+                # We repeat for X and Y slopes
+                sa_noise_variance = base_noise_variance / (illumination + 1e-10)  # Avoid division by zero
+                wfs_noise_variance = np.repeat(sa_noise_variance, 2)  # X and Y slopes
 
-            # Build diagonal noise covariance
-            n_slopes_total = im_full.shape[0]
-            C_noise = np.zeros((n_slopes_total, n_slopes_total))
-
-            n_slopes_list = []
-            for i in range(n_wfs):
-                wfs_params = self.get_wfs_params(wfs_type, i+1)
-                if wfs_params['idx_valid_sa'] is not None:
-                    n_slopes_this_wfs = len(wfs_params['idx_valid_sa']) * 2
-                else:
-                    n_slopes_this_wfs = 0
-                n_slopes_list.append(n_slopes_this_wfs)
-
-            for i in range(n_wfs):
-                start_idx = sum(n_slopes_list[:i])
-                end_idx = sum(n_slopes_list[:i+1])
-
-                if isinstance(noise_variance, (list, np.ndarray)):
-                    var = noise_variance[i]
-                else:
-                    var = noise_variance
-
-                C_noise[start_idx:end_idx, start_idx:end_idx] = 1 / var * np.eye(n_slopes_list[i])
+                illumination_list.append(illumination)
+            else:
+                wfs_noise_variance = np.array([])
+                illumination_list.append(np.array([]))
 
             if verbose_flag:
-                print(f"  ✓ Noise covariance built: {C_noise.shape}")
+                if len(wfs_noise_variance) > 0:
+                    print(f"  WFS {i+1} noise variance:")
+                    print(f"    Min: {np.min(wfs_noise_variance):.2e}")
+                    print(f"    Max: {np.max(wfs_noise_variance):.2e}")
+                    print(f"    Mean: {np.mean(wfs_noise_variance):.2e}")
+
+        # Build diagonal noise covariance with illumination weighting
+        for i in range(n_wfs):
+            start_idx = sum(n_slopes_list[:i])
+            end_idx = sum(n_slopes_list[:i+1])
+
+            if n_slopes_list[i] > 0:
+                # Use illumination-weighted noise variance
+                sa_noise_variance = base_noise_variance / (illumination_list[i] + 1e-10)
+                wfs_noise_variance = np.repeat(sa_noise_variance, 2)
+
+                # C_noise diagonal elements are 1/variance (precision)
+                C_noise[start_idx:end_idx, start_idx:end_idx] = np.diag(1.0 / wfs_noise_variance)
+
+        if verbose_flag:
+            print(f"  ✓ Noise covariance built with illumination weighting: {C_noise.shape}")
+            print(f"  Condition number: {np.linalg.cond(C_noise):.2e}")
+
         else:
             if verbose_flag:
                 print(f"  Using provided C_noise: {C_noise.shape}")
