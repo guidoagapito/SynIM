@@ -908,9 +908,9 @@ def compute_subaperture_illumination(pup_mask, wfs_nsubaps, wfs_rotation=0.0,
 
     if verbose:
         print(f"Subaperture illumination statistics:")
-        print(f"  Min: {np.min(illumination):.3f}")
-        print(f"  Max: {np.max(illumination):.3f}")
-        print(f"  Mean: {np.mean(illumination):.3f}")
-        print(f"  Std: {np.std(illumination):.3f}")
+        print(f"  Min: {xp.min(illumination):.3f}")
+        print(f"  Max: {xp.max(illumination):.3f}")
+        print(f"  Mean: {xp.mean(illumination):.3f}")
+        print(f"  Std: {xp.std(illumination):.3f}")
 
     return illumination
