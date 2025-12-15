@@ -46,7 +46,7 @@ def update_dm_pup(pup_diam_m, pup_mask, dm_array, dm_mask, dm_height, dm_rotatio
     output_size = (pup_diam_pix, pup_diam_pix)
 
     trans_dm_array = rotshiftzoom_array(
-        dm_array, 
+        dm_array,
         dm_translation=dm_translation,
         dm_rotation=dm_rotation,
         dm_magnification=dm_magnification,
@@ -72,11 +72,11 @@ def update_dm_pup(pup_diam_m, pup_mask, dm_array, dm_mask, dm_height, dm_rotatio
         raise ValueError('Error in input data, the rotated dm mask is empty.')
 
     trans_pup_mask = rotshiftzoom_array(
-        pup_mask, 
-        dm_translation=(0, 0), 
-        dm_rotation=0, 
+        pup_mask,
+        dm_translation=(0, 0),
+        dm_rotation=0,
         dm_magnification=(1, 1),
-        wfs_translation=wfs_translation, 
+        wfs_translation=wfs_translation,
         wfs_rotation=wfs_rotation,
         wfs_magnification=wfs_magnification,
         output_size=output_size
@@ -221,11 +221,13 @@ class TestProjection(unittest.TestCase):
             target_device_idx=-1
         )
 
-        # Get inverted basis array (for projection)
-        # In practice, this would be the pseudo-inverse of the basis
-        base_array = self.base_ifunc.ifunc_2d_to_3d(normalize=True)
-        # Simple "inverse": just use the basis itself (orthonormal assumption)
-        self.base_inv_array = base_array
+        # Invert self.base_ifunc and use as base_inv_array
+        base_ifunc_inv = self.base_ifunc.inverse()
+        self.base_inv_array = np.zeros(
+            (self.pixel_pupil, self.pixel_pupil, self.nmodes_base), dtype=self.dm_array.dtype
+        )
+        idx = np.where(self.pup_mask > 0)
+        self.base_inv_array[idx[0], idx[1], :] = base_ifunc_inv.ifunc_inv
 
     def test_compare_former_vs_new_on_axis(self):
         """Compare projection_matrix_former vs projection_matrix for on-axis case"""
@@ -419,5 +421,68 @@ class TestProjection(unittest.TestCase):
                                    err_msg="Former and new methods differ for ground-level DM")
 
 
-if __name__ == '__main__':
-    unittest.main()
+    def test_projection_identity(self):
+        """Test that the projection between two identical bases has a dominant diagonal"""
+        gs_pol_coo = (0.0, 0.0)
+        gs_height = np.inf
+        base_rotation = 0.0
+        base_translation = (0.0, 0.0)
+        base_magnification = (1.0, 1.0)
+
+        pup_mask = make_mask(self.pixel_pupil, obsratio=0.0, diaratio=1.0)
+
+        dm0_ifunc = IFunc(
+            type_str='zern',
+            npixels=self.pixel_pupil,
+            nmodes=10,
+            obsratio=0.0,
+            diaratio=1.0,
+            target_device_idx=-1
+        )
+        dm0_array = dm0_ifunc.ifunc_2d_to_3d(normalize=True)
+        base_ifunc_inv = dm0_ifunc.inverse()
+
+        base_inv_array = np.zeros((self.pixel_pupil, self.pixel_pupil, 10), dtype=dm0_array.dtype)
+        idx = np.where(pup_mask > 0)
+        base_inv_array[idx[0], idx[1], :] = base_ifunc_inv.ifunc_inv
+
+        pm = projection_matrix(
+            self.pup_diam_m, pup_mask,
+            dm0_array, pup_mask,
+            base_inv_array,
+            0.0, self.dm_rotation,
+            base_rotation, base_translation, base_magnification,
+            gs_pol_coo, gs_height,
+            verbose=False, specula_convention=True,
+            specula_convention_inv=True
+        )
+        # Consider only the square part for diagonal dominance
+        n_diag = min(pm.shape[0], pm.shape[1])
+        diag = np.abs(np.array([pm[i, i] for i in range(n_diag)]))
+        off_diag = np.array([np.delete(np.abs(pm[i, :]), i) for i in range(n_diag)])
+        max_off_diag = off_diag.max(axis=1)
+        ratio = diag / (max_off_diag + 1e-12)
+        self.assertTrue(np.all(ratio > 5),
+                        "The diagonal is not sufficiently dominant in the"
+                        " projection matrix between identical bases")
+
+    def test_projection_zero_mask(self):
+        """Test that the projection with a zero mask raises ValueError"""
+        gs_pol_coo = (0.0, 0.0)
+        gs_height = np.inf
+        base_rotation = 0.0
+        base_translation = (0.0, 0.0)
+        base_magnification = (1.0, 1.0)
+        zero_mask = np.zeros_like(self.pup_mask)
+
+        with self.assertRaises(ValueError):
+            projection_matrix(
+                self.pup_diam_m, zero_mask,
+                self.dm_array, self.dm_mask,
+                self.base_inv_array,
+                self.dm_height, self.dm_rotation,
+                base_rotation, base_translation, base_magnification,
+                gs_pol_coo, gs_height,
+                verbose=False, specula_convention=True,
+                specula_convention_inv=True
+            )
