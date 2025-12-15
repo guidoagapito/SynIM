@@ -1461,7 +1461,7 @@ def generate_pm_filename(config_file, opt_index=None,
     if not np.isinf(source_height):
         parts.append(f"h{source_height:.0f}")
 
-    # *** MODIFIED: Component part - always use "dm" prefix, include modes info ***
+    # *** Component part - always use "dm" prefix, include modes info ***
     # Component height
     parts.append(f"dmH{component_height:.1f}")
 

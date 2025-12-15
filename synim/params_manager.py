@@ -4,7 +4,7 @@ import numpy as np
 import matplotlib.pyplot as plt
 from astropy.io import fits
 
-# *** MODIFIED: Import xp, cpuArray, to_xp, float_dtype ***
+# *** Import xp, cpuArray, to_xp, float_dtype ***
 from synim import (
     xp, cpuArray, to_xp, float_dtype, default_target_device_idx, global_precision
 )
@@ -133,7 +133,7 @@ class ParamsManager:
             )
             pup_mask = pupilstop.A
 
-        # *** MODIFIED: Convert to xp with float_dtype ***
+        # *** Convert to xp with float_dtype ***
         pup_mask = to_xp(xp, pup_mask, dtype=float_dtype)
 
         print('---> valid pixels: ', int(np.sum(pup_mask > 0.5)))
@@ -321,7 +321,7 @@ class ParamsManager:
             if self.verbose:
                 print(f"  Cut modes before {start_mode}, remaining: {dm_array.shape[2]}")
 
-        # *** MODIFIED: Convert to xp with float_dtype ***
+        # *** Convert to xp with float_dtype ***
         dm_array = to_xp(xp, dm_array, dtype=float_dtype)
         dm_mask = to_xp(xp, dm_mask, dtype=float_dtype)
 
@@ -473,7 +473,7 @@ class ParamsManager:
             self.cm, wfs_params, wfs_key, self.params, verbose=self.verbose
         )
 
-        # *** MODIFIED: Convert to xp if not None ***
+        # *** Convert to xp if not None ***
         if idx_valid_sa is not None:
             idx_valid_sa = to_xp(xp, idx_valid_sa)
 
@@ -635,7 +635,7 @@ class ParamsManager:
             display=display
         )
 
-        # *** MODIFIED: Convert to CPU for saving ***
+        # *** Convert to CPU for saving ***
         im = cpuArray(im)
 
         return im
@@ -1918,7 +1918,7 @@ class ParamsManager:
 
             # Compute noise variance if not provided
             if noise_variance is None:
-                # *** MODIFIED: Use sigma2inNm2 from params ***
+                # ***  Use sigma2inNm2 from params ***
                 params = self.params
                 wfs_params = params[f'sh_{wfs_type}1']
                 sa_side_in_m = (params['main']['pixel_pupil'] *

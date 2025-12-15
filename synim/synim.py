@@ -92,7 +92,7 @@ def apply_dm_transformations_separated(pup_diam_m, pup_mask, dm_array, dm_mask,
     Returns derivatives that need WFS transformations applied separately.
     """
 
-    # *** MODIFIED: Convert inputs to target device with correct dtype ***
+    # *** Convert inputs to target device with correct dtype ***
     dm_array = to_xp(xp, dm_array, dtype=float_dtype)
     dm_mask = to_xp(xp, dm_mask, dtype=float_dtype)
     pup_mask = to_xp(xp, pup_mask, dtype=float_dtype)
@@ -171,7 +171,7 @@ def apply_dm_transformations_combined(pup_diam_m, pup_mask, dm_array, dm_mask,
     This avoids cumulative interpolation errors when both DM and WFS have rotations.
     """
 
-    # *** MODIFIED: Convert inputs to target device with correct dtype ***
+    # *** Convert inputs to target device with correct dtype ***
     dm_array = to_xp(xp, dm_array, dtype=float_dtype)
     dm_mask = to_xp(xp, dm_mask, dtype=float_dtype)
     pup_mask = to_xp(xp, pup_mask, dtype=float_dtype)
@@ -394,12 +394,12 @@ def _compute_slopes_from_derivatives(derivatives_x, derivatives_y, pup_mask, dm_
     # Select valid subapertures
     if idx_valid_sa is not None:
         if specula_convention and len(idx_valid_sa.shape) > 1 and idx_valid_sa.shape[1] == 2:
-            # *** MODIFIED: sa_2d should use float_dtype (it's a mask with 0/1 values) ***
+            # *** sa_2d should use float_dtype (it's a mask with 0/1 values) ***
             sa_2d = xp.zeros((wfs_nsubaps, wfs_nsubaps), dtype=float_dtype)
             sa_2d[idx_valid_sa[:, 0], idx_valid_sa[:, 1]] = 1
             sa_2d = xp.transpose(sa_2d)
             idx_temp = xp.where(sa_2d > 0)
-            # *** MODIFIED: But idx_valid_sa_new should keep integer type (indices!) ***
+            # *** But idx_valid_sa_new should keep integer type (indices!) ***
             idx_valid_sa_new = xp.zeros_like(idx_valid_sa)  # Keep original dtype (int)
             idx_valid_sa_new[:, 0] = idx_temp[0]
             idx_valid_sa_new[:, 1] = idx_temp[1]
@@ -409,11 +409,11 @@ def _compute_slopes_from_derivatives(derivatives_x, derivatives_y, pup_mask, dm_
         if len(idx_valid_sa_new.shape) > 1 and idx_valid_sa_new.shape[1] == 2:
             width = wfs_nsubaps
             linear_indices = idx_valid_sa_new[:, 0] * width + idx_valid_sa_new[:, 1]
-            # *** MODIFIED: Ensure indices are integers ***
+            # *** Ensure indices are integers ***
             wfs_signal_x_2d = wfs_signal_x_2d[linear_indices.astype(xp.int32), :]
             wfs_signal_y_2d = wfs_signal_y_2d[linear_indices.astype(xp.int32), :]
         else:
-            # *** MODIFIED: Ensure indices are integers ***
+            # *** Ensure indices are integers ***
             wfs_signal_x_2d = wfs_signal_x_2d[idx_valid_sa_new.astype(xp.int32), :]
             wfs_signal_y_2d = wfs_signal_y_2d[idx_valid_sa_new.astype(xp.int32), :]
 
@@ -448,7 +448,7 @@ def interaction_matrix(pup_diam_m, pup_mask, dm_array, dm_mask, dm_height, dm_ro
     - Combined workflow: When both DM and WFS have transformations (1 interpolation step)
     """
 
-    # *** MODIFIED: Convert idx_valid_sa if provided ***
+    # *** Convert idx_valid_sa if provided ***
     if idx_valid_sa is not None:
         idx_valid_sa = to_xp(xp, idx_valid_sa)
 
