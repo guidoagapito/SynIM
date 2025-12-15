@@ -1461,7 +1461,7 @@ def generate_pm_filename(config_file, opt_index=None,
     if not np.isinf(source_height):
         parts.append(f"h{source_height:.0f}")
 
-    # *** MODIFIED: Component part - always use "dm" prefix, include modes info ***
+    # *** Component part - always use "dm" prefix, include modes info ***
     # Component height
     parts.append(f"dmH{component_height:.1f}")
 
@@ -1616,12 +1616,19 @@ def compute_layer_weights_from_turbulence(params, component_indices, component_t
 
     atmo = params['atmo']
 
+    cn2_key = 'cn2'
+    if 'Cn2' in atmo:
+        cn2_key = 'Cn2'
+    elif 'CN2' in atmo:
+        cn2_key = 'CN2'
+
     # Get turbulence profile
-    if 'heights' not in atmo or 'cn2' not in atmo:
-        raise ValueError("'atmo.heights' and 'atmo.cn2' must be specified for automatic weight computation")
+    if 'heights' not in atmo or cn2_key not in atmo:
+        raise ValueError("'atmo.heights' and 'atmo.cn2' must be specified"
+                         " for automatic weight computation")
 
     turb_heights = np.array(atmo['heights'])
-    turb_cn2 = np.array(atmo['cn2'])
+    turb_cn2 = np.array(atmo[cn2_key])
 
     if len(turb_heights) != len(turb_cn2):
         raise ValueError(f"Mismatch: {len(turb_heights)} heights vs {len(turb_cn2)} CN² values")
@@ -1835,5 +1842,6 @@ __all__ = [
     'generate_pm_filename',
     'generate_pm_filenames',
     'generate_cov_filename',
+    'compute_layer_weights_from_turbulence',
     'compute_mmse_reconstructor',
 ]
