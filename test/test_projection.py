@@ -210,6 +210,17 @@ class TestProjection(unittest.TestCase):
         self.dm_array = self.dm_ifunc.ifunc_2d_to_3d(normalize=True)
         self.dm_mask = self.dm_ifunc.mask_inf_func
 
+        self.dm0_ifunc = IFunc(
+            type_str='zern',
+            npixels=self.pixel_pupil,
+            nmodes=self.nmodes_dm,
+            obsratio=0.0,
+            diaratio=1.0,
+            target_device_idx=-1
+        )
+        self.dm0_array = self.dm0_ifunc.ifunc_2d_to_3d(normalize=True)
+        self.dm0_mask = self.dm0_ifunc.mask_inf_func
+
         # Create basis (e.g., KL modes or another Zernike set)
         # For testing, we use another set of Zernike modes
         self.base_ifunc = IFunc(
@@ -420,7 +431,6 @@ class TestProjection(unittest.TestCase):
         np.testing.assert_allclose(pm_former, pm_new, rtol=1e-6, atol=1e-8,
                                    err_msg="Former and new methods differ for ground-level DM")
 
-
     def test_projection_identity(self):
         """Test that the projection between two identical bases has a dominant diagonal"""
         gs_pol_coo = (0.0, 0.0)
@@ -429,28 +439,11 @@ class TestProjection(unittest.TestCase):
         base_translation = (0.0, 0.0)
         base_magnification = (1.0, 1.0)
 
-        pup_mask = make_mask(self.pixel_pupil, obsratio=0.0, diaratio=1.0)
-
-        dm0_ifunc = IFunc(
-            type_str='zern',
-            npixels=self.pixel_pupil,
-            nmodes=10,
-            obsratio=0.0,
-            diaratio=1.0,
-            target_device_idx=-1
-        )
-        dm0_array = dm0_ifunc.ifunc_2d_to_3d(normalize=True)
-        base_ifunc_inv = dm0_ifunc.inverse()
-
-        base_inv_array = np.zeros((self.pixel_pupil, self.pixel_pupil, 10), dtype=dm0_array.dtype)
-        idx = np.where(pup_mask > 0)
-        base_inv_array[idx[0], idx[1], :] = base_ifunc_inv.ifunc_inv
-
         pm = projection_matrix(
-            self.pup_diam_m, pup_mask,
-            dm0_array, pup_mask,
-            base_inv_array,
-            0.0, self.dm_rotation,
+            self.pup_diam_m, self.pup_mask,
+            self.dm0_array, self.dm0_mask,
+            self.base_inv_array,
+            0.0, 0.0,
             base_rotation, base_translation, base_magnification,
             gs_pol_coo, gs_height,
             verbose=False, specula_convention=True,
