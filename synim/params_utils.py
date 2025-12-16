@@ -1442,7 +1442,7 @@ def generate_pm_filename(config_file, opt_index=None,
     component_config = selected_component['config']
     component_height = component_config.get('height', 0)
 
-    # *** NEW: Extract nmodes and start_mode ***
+    # *** Extract nmodes and start_mode ***
     component_nmodes = component_config.get('nmodes', None)
     component_start_mode = component_config.get('start_mode', 0)
 
@@ -1465,7 +1465,7 @@ def generate_pm_filename(config_file, opt_index=None,
     # Component height
     parts.append(f"dmH{component_height:.1f}")
 
-    # *** NEW: Add modes information ***
+    # *** Add modes information ***
     if component_nmodes is not None:
         if component_start_mode > 0:
             # Format: mn{nmodes}s{start_mode}
